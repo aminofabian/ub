@@ -41,6 +41,30 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, St
 
     List<StockMovement> findByBatchIdAndMovementType(String batchId, String movementType);
 
+    /**
+     * Batch-less outflows ({@code batch_id IS NULL}) grouped by item/branch — stock that left
+     * without ever reducing a batch. Used by the oversell-deficit backfill to rebuild the on-hand
+     * those movements failed to decrement. Desktop till-sync sales are excluded: their batches live
+     * only on the till, so the cloud ledger never held them. Pass {@code businessId = null} for all.
+     */
+    @Query("""
+            SELECT m.businessId, m.branchId, m.itemId,
+                   COALESCE(SUM(m.quantityDelta), 0),
+                   COALESCE(MAX(m.unitCost), 0)
+              FROM StockMovement m
+             WHERE (:businessId IS NULL OR m.businessId = :businessId)
+               AND m.batchId IS NULL
+               AND m.movementType = :movementType
+               AND m.quantityDelta < 0
+               AND (m.notes IS NULL OR m.notes NOT LIKE 'Till sale (desktop sync)%')
+             GROUP BY m.businessId, m.branchId, m.itemId
+            HAVING COALESCE(SUM(m.quantityDelta), 0) < 0
+            """)
+    List<Object[]> findBatchlessOutflowsByItemBranch(
+            @Param("businessId") String businessId,
+            @Param("movementType") String movementType
+    );
+
     List<StockMovement> findByBatchId(String batchId);
 
     List<StockMovement> findByBusinessIdAndItemIdOrderByCreatedAtDesc(

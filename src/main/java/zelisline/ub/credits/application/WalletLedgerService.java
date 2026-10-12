@@ -109,10 +109,16 @@ public class WalletLedgerService {
         creditsJournalService.postMpesaWalletTopUp(businessId, amt, journalSourceId, "M-Pesa STK wallet credit");
     }
 
+    /**
+     * Reverses the customer subledger effects of a voided sale and returns the accounts-receivable
+     * amount it restored (the part of an overpayment that had paid down an existing tab). The caller
+     * reverses the same leg in the GL: the sale credited AR for it, so the void must debit AR rather
+     * than (incorrectly) the wallet liability.
+     */
     @Transactional
-    public void reverseWalletEffectsForVoidedSale(String businessId, String saleId, String customerId) {
+    public BigDecimal reverseWalletEffectsForVoidedSale(String businessId, String saleId, String customerId) {
         if (blank(customerId)) {
-            return;
+            return BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         }
         CreditAccount acc = lockOrCreateAccount(customerId, businessId);
         List<WalletTransaction> rows = walletTransactionRepository.findBySaleIdOrderByCreatedAtAsc(saleId);
@@ -146,7 +152,7 @@ public class WalletLedgerService {
         restoreAr = restoreAr.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
 
         if (restoreSpend.signum() <= 0 && removeOverpay.signum() <= 0 && restoreAr.signum() <= 0) {
-            return;
+            return restoreAr;
         }
         BigDecimal bal = acc.getWalletBalance().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         BigDecimal next = bal.add(restoreSpend).subtract(removeOverpay);
@@ -169,6 +175,7 @@ public class WalletLedgerService {
             walletTransactionRepository.save(
                     row(businessId, acc.getId(), saleId, WalletTxnTypes.REVERSAL_VOID_OVERPAY_CLAW, removeOverpay));
         }
+        return restoreAr;
     }
 
     @Transactional

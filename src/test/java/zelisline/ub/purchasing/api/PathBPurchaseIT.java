@@ -49,6 +49,7 @@ import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
+import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.repository.RawPurchaseLineRepository;
 import zelisline.ub.purchasing.repository.RawPurchaseSessionRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
@@ -419,6 +420,19 @@ class PathBPurchaseIT {
         var itemAfterDelete = itemRepository.findById(itemId).orElseThrow();
         assertThat(itemAfterDelete.getCurrentStock().setScale(2, RoundingMode.HALF_UP))
                 .isEqualByComparingTo(new BigDecimal("0.00"));
+
+        // Append-only ledger: the receipt is retained (detached) and a compensating reversal booked,
+        // so the two movements net to zero rather than being deleted.
+        assertThat(stockMovementRepository.findAll().stream()
+                .filter(m -> PurchasingConstants.MOVEMENT_RECEIPT.equals(m.getMovementType()))
+                .count()).isEqualTo(1L);
+        assertThat(stockMovementRepository.findAll().stream()
+                .filter(m -> PurchasingConstants.MOVEMENT_PURCHASE_REVERSAL.equals(m.getMovementType()))
+                .count()).isEqualTo(1L);
+        assertThat(stockMovementRepository.findAll().stream()
+                .map(m -> m.getQuantityDelta() == null ? BigDecimal.ZERO : m.getQuantityDelta())
+                .reduce(BigDecimal.ZERO, BigDecimal::add))
+                .isEqualByComparingTo(BigDecimal.ZERO);
 
         mockMvc.perform(get("/api/v1/purchasing/supplies")
                         .header("X-Tenant-Id", TENANT)

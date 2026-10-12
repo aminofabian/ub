@@ -55,6 +55,7 @@ import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 
 @Service
 @RequiredArgsConstructor
@@ -85,6 +86,7 @@ public class SaleVoidService {
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final CashDrawerLedgerService cashDrawerLedgerService;
+    private final BranchResolutionService branchResolutionService;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -95,6 +97,7 @@ public class SaleVoidService {
             String saleId,
             String userId,
             String roleId,
+            String callerBranchId,
             PostVoidSaleRequest req
     ) {
         Sale sale = saleRepository.findByIdAndBusinessId(saleId, businessId)
@@ -109,6 +112,9 @@ public class SaleVoidService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Only completed sales can be voided");
         }
         assertCanVoid(sale, userId, roleId);
+        // Voids move the original branch's drawer/stock: a branch-locked role may only void
+        // sales from its own branch. Owners/admins (unlocked) are unaffected.
+        branchResolutionService.requireBranchForLockedRole(roleId, callerBranchId, sale.getBranchId());
 
         Shift shift = shiftRepository
                 .findByIdAndBusinessIdForUpdate(sale.getShiftId(), businessId)
@@ -152,9 +158,13 @@ public class SaleVoidService {
         if (overpay.signum() > 0 && (sale.getCustomerId() == null || sale.getCustomerId().isBlank())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Sale with wallet overpay missing customer linkage");
         }
-        String voidJeId = postVoidJournal(businessId, saleId, grandTotal, cogs, payments, overpay);
+        // Reverse the customer subledger first so the GL reverses the same overpay split the sale
+        // posted (AR leg vs wallet leg) — the sale credits AR for overpay that pays down a tab.
+        BigDecimal overpayToAr = walletLedgerService.reverseWalletEffectsForVoidedSale(
+                businessId, saleId, sale.getCustomerId());
         creditSaleDebtService.reverseDebtForVoidedSale(businessId, sale, payments);
-        walletLedgerService.reverseWalletEffectsForVoidedSale(businessId, saleId, sale.getCustomerId());
+        String voidJeId = postVoidJournal(
+                businessId, sale.getBranchId(), saleId, grandTotal, cogs, payments, overpayToAr, overpay);
         loyaltyPointsService.reverseLoyaltyForVoidedSale(
                 businessId,
                 saleId,
@@ -317,11 +327,13 @@ public class SaleVoidService {
 
     private String postVoidJournal(
             String businessId,
+            String branchId,
             String saleId,
             BigDecimal grandTotal,
             BigDecimal cogs,
             List<SalePayment> payments,
-            BigDecimal saleOverpaymentToWallet
+            BigDecimal overpayToAr,
+            BigDecimal overpayTotal
     ) {
         Map<String, BigDecimal> tenderCr = new LinkedHashMap<>();
         for (SalePayment p : payments) {
@@ -331,6 +343,7 @@ public class SaleVoidService {
 
         JournalEntry entry = new JournalEntry();
         entry.setBusinessId(businessId);
+        entry.setBranchId(blankToNull(branchId));
         entry.setEntryDate(LocalDate.now(ZoneOffset.UTC));
         entry.setSourceType(SalesConstants.JOURNAL_SOURCE_SALE_VOID);
         entry.setSourceId(saleId);
@@ -341,8 +354,19 @@ public class SaleVoidService {
             entry.credit(ledgerAccountResolver.resolveId(businessId, e.getKey()), amt);
         }
         entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE), grandTotal);
-        if (saleOverpaymentToWallet.signum() > 0) {
-            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.CUSTOMER_WALLET_LIABILITY), saleOverpaymentToWallet);
+        // Reverse the overpay exactly where the sale posted it: AR for the tab-paying portion,
+        // wallet liability for the rest. Debiting it all to wallet left AR credited and the GL
+        // out of step with the subledger.
+        BigDecimal overpayToArScaled = overpayToAr.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal overpayToWallet = overpayTotal.subtract(overpayToArScaled)
+                .setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (overpayToArScaled.signum() > 0) {
+            entry.debit(ledgerAccountResolver.resolveId(
+                    businessId, LedgerAccountCodes.ACCOUNTS_RECEIVABLE_CUSTOMERS), overpayToArScaled);
+        }
+        if (overpayToWallet.signum() > 0) {
+            entry.debit(ledgerAccountResolver.resolveId(
+                    businessId, LedgerAccountCodes.CUSTOMER_WALLET_LIABILITY), overpayToWallet);
         }
         entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.COST_OF_GOODS_SOLD), cogs);
         entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), cogs);

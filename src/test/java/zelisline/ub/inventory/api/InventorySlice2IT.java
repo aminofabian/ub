@@ -45,11 +45,16 @@ import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.inventory.CostMethod;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.BatchAllocationLine;
+import zelisline.ub.inventory.api.dto.StockDriftLine;
+import zelisline.ub.inventory.api.dto.StockDriftResponse;
 import zelisline.ub.inventory.application.InventoryBatchPickerService;
+import zelisline.ub.inventory.application.InventoryDriftService;
+import zelisline.ub.inventory.application.OversellDeficitBackfillService;
 import zelisline.ub.inventory.application.BusinessInventorySettingsReader;
 import zelisline.ub.tenancy.application.BusinessInventorySettingsService;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
 import zelisline.ub.purchasing.domain.InventoryBatch;
+import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.tenancy.domain.Branch;
@@ -106,6 +111,10 @@ class InventorySlice2IT {
     private BusinessInventorySettingsReader businessInventorySettingsReader;
     @Autowired
     private BusinessInventorySettingsService businessInventorySettingsService;
+    @Autowired
+    private OversellDeficitBackfillService oversellDeficitBackfillService;
+    @Autowired
+    private InventoryDriftService inventoryDriftService;
 
     @MockitoBean
     @SuppressWarnings("unused")
@@ -424,12 +433,138 @@ class InventorySlice2IT {
                     owner.getId()
             );
             assertThat(lines).hasSize(1);
-            assertThat(lines.getFirst().batchId()).isEqualTo(depletedBatchId);
             assertThat(lines.getFirst().quantity()).isEqualByComparingTo("1");
         });
 
         Item after = itemRepository.findById(itemId).orElseThrow();
         assertThat(after.getCurrentStock().setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("-1");
+        // The oversold unit is carried on the branch on-hand as a deficit, not silently dropped.
+        assertThat(branchOnHand()).isEqualByComparingTo("-1");
+    }
+
+    @Test
+    void oversellDeficitNetsAgainstLaterReceipt() {
+        Business business = businessRepository.findById(TENANT).orElseThrow();
+        business.setSettings("{\"inventory\":{\"stockLevels\":{\"allowNegativeStock\":true}}}");
+        businessRepository.save(business);
+
+        Item item = itemRepository.findById(itemId).orElseThrow();
+        item.setHasExpiry(false);
+        itemRepository.save(item);
+        inventoryBatchRepository.deleteAll();
+        stockMovementRepository.deleteAll();
+
+        inventoryBatchRepository.save(batch(
+                UUID.randomUUID().toString(), itemId, Instant.parse("2026-02-01T12:00:00Z"), null, "5"));
+        Item stocked = itemRepository.findById(itemId).orElseThrow();
+        stocked.setCurrentStock(new BigDecimal("5"));
+        itemRepository.save(stocked);
+
+        // Sell 8 against 5 on-hand — on-hand must go to -3, not clamp at 0.
+        transactionTemplate.executeWithoutResult(st -> inventoryBatchPickerService.pickAndApplyPhysicalDecrement(
+                TENANT,
+                itemId,
+                branchId,
+                new BigDecimal("8"),
+                InventoryConstants.REF_OPERATION,
+                inventoryBatchPickerService.newPickReferenceId(),
+                InventoryConstants.MOVEMENT_SALE,
+                owner.getId()
+        ));
+        assertThat(branchOnHand()).isEqualByComparingTo("-3");
+
+        // A later receipt of 10 must net the deficit: 10 - 3 = 7.
+        inventoryBatchRepository.save(batch(
+                UUID.randomUUID().toString(), itemId, Instant.parse("2026-02-02T12:00:00Z"), null, "10"));
+        assertThat(branchOnHand()).isEqualByComparingTo("7");
+    }
+
+    @Test
+    void backfillRepairsHistoricalBatchlessOversell() {
+        Item item = itemRepository.findById(itemId).orElseThrow();
+        item.setHasExpiry(false);
+        itemRepository.save(item);
+        inventoryBatchRepository.deleteAll();
+        stockMovementRepository.deleteAll();
+
+        // Real batch of 5 on the shelf.
+        inventoryBatchRepository.save(batch(
+                UUID.randomUUID().toString(), itemId, Instant.parse("2026-02-01T12:00:00Z"), null, "5"));
+
+        // Historical oversell: 3 units left the business with no batch decrement (the old bug).
+        StockMovement historical = new StockMovement();
+        historical.setBusinessId(TENANT);
+        historical.setBranchId(branchId);
+        historical.setItemId(itemId);
+        historical.setBatchId(null);
+        historical.setMovementType(InventoryConstants.MOVEMENT_SALE);
+        historical.setReferenceType("sale");
+        historical.setReferenceId(UUID.randomUUID().toString());
+        historical.setQuantityDelta(new BigDecimal("-3"));
+        historical.setUnitCost(new BigDecimal("2.00"));
+        stockMovementRepository.save(historical);
+
+        // Drift: the batch still reads 5 even though 3 were sold.
+        assertThat(branchOnHand()).isEqualByComparingTo("5");
+
+        OversellDeficitBackfillService.BackfillSummary summary =
+                oversellDeficitBackfillService.run(TENANT);
+        assertThat(summary.created()).isEqualTo(1);
+        assertThat(branchOnHand()).isEqualByComparingTo("2");
+
+        // Idempotent: a second run changes nothing.
+        oversellDeficitBackfillService.run(TENANT);
+        assertThat(branchOnHand()).isEqualByComparingTo("2");
+    }
+
+    @Test
+    void driftReportPreviewsAndConfirmsBackfill() {
+        Item item = itemRepository.findById(itemId).orElseThrow();
+        item.setHasExpiry(false);
+        itemRepository.save(item);
+        inventoryBatchRepository.deleteAll();
+        stockMovementRepository.deleteAll();
+
+        inventoryBatchRepository.save(batch(
+                UUID.randomUUID().toString(), itemId, Instant.parse("2026-02-01T12:00:00Z"), null, "5"));
+        StockMovement historical = new StockMovement();
+        historical.setBusinessId(TENANT);
+        historical.setBranchId(branchId);
+        historical.setItemId(itemId);
+        historical.setBatchId(null);
+        historical.setMovementType(InventoryConstants.MOVEMENT_SALE);
+        historical.setReferenceType("sale");
+        historical.setReferenceId(UUID.randomUUID().toString());
+        historical.setQuantityDelta(new BigDecimal("-3"));
+        historical.setUnitCost(new BigDecimal("2.00"));
+        stockMovementRepository.save(historical);
+
+        StockDriftResponse before = inventoryDriftService.drift(TENANT, branchId, 200);
+        assertThat(before.repairable()).isEqualTo(1);
+        assertThat(before.totalOutstanding()).isEqualByComparingTo("-3");
+        StockDriftLine line = before.lines().getFirst();
+        assertThat(line.batchOnHand()).isEqualByComparingTo("5");
+        assertThat(line.correctedOnHand()).isEqualByComparingTo("2");
+        assertThat(line.alreadyRepaired()).isFalse();
+
+        oversellDeficitBackfillService.run(TENANT);
+
+        StockDriftResponse after = inventoryDriftService.drift(TENANT, branchId, 200);
+        assertThat(after.repairable()).isZero();
+        assertThat(after.alreadyRepaired()).isEqualTo(1);
+        assertThat(after.lines().getFirst().correctedOnHand()).isEqualByComparingTo("2");
+    }
+
+    private BigDecimal branchOnHand() {
+        List<Object[]> rows = inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
+                TENANT,
+                branchId,
+                InventoryConstants.BATCH_STATUS_ACTIVE,
+                List.of(itemId));
+        if (rows.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        return ((BigDecimal) rows.getFirst()[1]).setScale(2, RoundingMode.HALF_UP);
     }
 
     @Test

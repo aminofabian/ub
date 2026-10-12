@@ -32,11 +32,14 @@ import zelisline.ub.inventory.api.dto.PatchItemStockThresholdsRequest;
 import zelisline.ub.inventory.api.dto.PostBatchDecreaseRequest;
 import zelisline.ub.inventory.api.dto.PostOpeningBalanceRequest;
 import zelisline.ub.inventory.api.dto.PostStandaloneWastageRequest;
+import zelisline.ub.inventory.api.dto.PostSupplierReturnRequest;
 import zelisline.ub.inventory.api.dto.PostStockIncreaseRequest;
 import zelisline.ub.inventory.api.dto.PostStockTransferRequest;
 import zelisline.ub.inventory.api.dto.StockTransferCreatedResponse;
 import zelisline.ub.inventory.api.dto.StockTransferSummaryResponse;
+import zelisline.ub.inventory.api.dto.StockDriftResponse;
 import zelisline.ub.inventory.application.InventoryBatchPickerService;
+import zelisline.ub.inventory.application.InventoryDriftService;
 import zelisline.ub.inventory.application.InventoryLedgerService;
 import zelisline.ub.inventory.application.InventoryTransferService;
 import zelisline.ub.inventory.application.InventoryValuationService;
@@ -57,6 +60,7 @@ public class InventoryController {
     private final InventoryBatchPickerService inventoryBatchPickerService;
     private final InventoryTransferService inventoryTransferService;
     private final InventoryValuationService inventoryValuationService;
+    private final InventoryDriftService inventoryDriftService;
     private final ItemStockThresholdsService itemStockThresholdsService;
     private final InventoryRoleAccessService inventoryRoleAccessService;
     private final RequestPermissionService requestPermissionService;
@@ -133,6 +137,21 @@ public class InventoryController {
     ) {
         var user = CurrentTenantUser.requireHuman(request);
         return inventoryLedgerService.recordStandaloneWastage(
+                TenantRequestIds.resolveBusinessId(request),
+                body,
+                user.userId()
+        );
+    }
+
+    @PostMapping("/return-to-supplier")
+    @PreAuthorize("hasPermission(null, 'inventory.write')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public InventoryMutationResponse returnToSupplier(
+            @Valid @RequestBody PostSupplierReturnRequest body,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.requireHuman(request);
+        return inventoryLedgerService.recordSupplierReturn(
                 TenantRequestIds.resolveBusinessId(request),
                 body,
                 user.userId()
@@ -228,6 +247,27 @@ public class InventoryController {
                 user.userId(),
                 user.branchId()
         );
+    }
+
+    /**
+     * Read-only preview of the oversell-deficit drift: item/branches whose branch on-hand still
+     * excludes historical batch-less sale outflows, with the on-hand the backfill would produce.
+     */
+    @GetMapping("/stock-drift")
+    @PreAuthorize("hasPermission(null, 'inventory.read')")
+    public StockDriftResponse stockDrift(
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false, defaultValue = "200") int limit,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String effectiveBranchId = branchId;
+        if (branchResolutionService.isBranchLockedRole(principal.roleId())) {
+            effectiveBranchId = branchResolutionService.resolveBranchForReport(
+                    businessId, principal.roleId(), principal.branchId(), branchId);
+        }
+        return inventoryDriftService.drift(businessId, effectiveBranchId, limit);
     }
 
     @GetMapping("/valuation")

@@ -181,6 +181,7 @@ public class SalesController {
                 saleId,
                 user.userId(),
                 user.roleId(),
+                user.branchId(),
                 payload
         );
     }
@@ -200,7 +201,8 @@ public class SalesController {
                 idempotencyKey,
                 body,
                 user.userId(),
-                user.roleId()
+                user.roleId(),
+                user.branchId()
         );
     }
 

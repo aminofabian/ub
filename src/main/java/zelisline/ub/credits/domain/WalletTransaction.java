@@ -31,7 +31,7 @@ public class WalletTransaction {
     @Column(name = "sale_id", length = 36)
     private String saleId;
 
-    @Column(name = "txn_type", nullable = false, length = 24)
+    @Column(name = "txn_type", nullable = false, length = 40)
     private String txnType;
 
     @Column(name = "amount", nullable = false, precision = 14, scale = 2)

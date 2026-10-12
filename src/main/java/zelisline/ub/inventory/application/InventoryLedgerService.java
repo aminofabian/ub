@@ -40,6 +40,7 @@ import zelisline.ub.inventory.api.dto.PostBatchDecreaseRequest;
 import zelisline.ub.inventory.api.dto.PostBatchIncreaseRequest;
 import zelisline.ub.inventory.api.dto.PostOpeningBalanceRequest;
 import zelisline.ub.inventory.api.dto.PostStandaloneWastageRequest;
+import zelisline.ub.inventory.api.dto.PostSupplierReturnRequest;
 import zelisline.ub.inventory.api.dto.PostStockIncreaseRequest;
 import zelisline.ub.purchasing.PurchasingConstants;
 import zelisline.ub.purchasing.domain.InventoryBatch;
@@ -441,6 +442,163 @@ public class InventoryLedgerService {
                 businessId, req.branchId(), req.itemId(), itemName,
                 "wastage", qty.negate()));
         return new InventoryMutationResponse(jeId, firstMv.getId(), primaryBatch.getId());
+    }
+
+    /**
+     * Outbound return of unused stock to a supplier: depletes the shelf batches (FEFO/FIFO, or a
+     * caller-picked batch), records {@code return_to_supplier} movements, closes exhausted supply
+     * batches, and nets current_stock so returned goods stop counting as on-hand. Inventory-only —
+     * no GL / supplier-credit entry is posted (a deliberate follow-up). Mirrors the wastage
+     * write-off allocation; returns the created movement so the caller can trace it.
+     */
+    @Transactional
+    public InventoryMutationResponse recordSupplierReturn(
+            String businessId,
+            PostSupplierReturnRequest req,
+            String userId
+    ) {
+        requireBranch(businessId, req.branchId());
+        PackageVariantStockResolver.StockPickResolution outbound =
+                packageVariantStockResolver.resolveInbound(businessId, req.itemId(), req.quantity());
+        Item item = packageVariantStockResolver.requireInventoryHolder(businessId, req.itemId());
+        if (!item.getId().equals(outbound.stockItemId())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Stock holder mismatch for supplier return");
+        }
+        String opId = UUID.randomUUID().toString();
+        BigDecimal qty = outbound.stockQuantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        StringBuilder reason = new StringBuilder("SUPPLIER_RETURN");
+        if (req.supplierId() != null && !req.supplierId().isBlank()) {
+            reason.append(" — supplier ").append(req.supplierId());
+        }
+        if (req.notes() != null && !req.notes().isBlank()) {
+            reason.append(" — ").append(req.notes());
+        }
+
+        List<BatchAllocationLine> slices;
+        Map<String, InventoryBatch> lockedById = new LinkedHashMap<>();
+        InventoryBatch primaryBatch;
+        if (req.batchId() != null && !req.batchId().isBlank()) {
+            primaryBatch = lockWriteOffBatch(businessId, req.branchId(), req.batchId(), item);
+            lockedById.put(primaryBatch.getId(), primaryBatch);
+            if (primaryBatch.getQuantityRemaining().compareTo(qty) < 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Return quantity (" + qty + ") exceeds batch remaining ("
+                                + primaryBatch.getQuantityRemaining() + ")"
+                );
+            }
+            slices = List.of(new BatchAllocationLine(
+                    primaryBatch.getId(), qty, primaryBatch.getUnitCost()));
+        } else {
+            List<InventoryBatch> candidates = inventoryBatchRepository
+                    .lockActiveBatchesForPhysicalAdjustment(
+                            businessId,
+                            item.getId(),
+                            req.branchId(),
+                            InventoryConstants.BATCH_STATUS_ACTIVE,
+                            BigDecimal.ZERO
+                    );
+            if (candidates.isEmpty()) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "No on-hand stock to return for this item at this branch. "
+                                + "Receive stock or refresh — the shelf count may be out of date."
+                );
+            }
+            for (InventoryBatch b : candidates) {
+                lockedById.put(b.getId(), b);
+            }
+            List<InventoryBatch> working = new ArrayList<>(candidates);
+            BatchAllocationPlanner.sortBatchesForPick(working, item, CostMethod.FIFO);
+            BigDecimal available = working.stream()
+                    .map(InventoryBatch::getQuantityRemaining)
+                    .filter(q -> q != null && q.signum() > 0)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            if (available.compareTo(qty) < 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Not enough on-hand stock to return ("
+                                + qty + " needed, " + available + " available)."
+                );
+            }
+            slices = BatchAllocationPlanner.allocateInOrder(working, qty);
+            primaryBatch = lockedById.get(slices.getFirst().batchId());
+            if (primaryBatch == null) {
+                primaryBatch = inventoryBatchRepository.findById(slices.getFirst().batchId())
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST, "Allocated batch not found"));
+            }
+        }
+
+        StockMovement firstMv = null;
+        Set<String> supplyBatchIds = new LinkedHashSet<>();
+        for (BatchAllocationLine slice : slices) {
+            InventoryBatch batch = lockedById.get(slice.batchId());
+            if (batch == null) {
+                batch = inventoryBatchRepository.findById(slice.batchId())
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST, "Allocated batch not found"));
+            }
+            batch.setQuantityRemaining(batch.getQuantityRemaining().subtract(slice.quantity()));
+            inventoryBatchRepository.save(batch);
+            if (batch.getSupplyBatchId() != null && !batch.getSupplyBatchId().isBlank()) {
+                supplyBatchIds.add(batch.getSupplyBatchId());
+            }
+            StockMovement mv = persistMovement(
+                    businessId,
+                    req.branchId(),
+                    item.getId(),
+                    batch.getId(),
+                    InventoryConstants.MOVEMENT_RETURN_TO_SUPPLIER,
+                    opId,
+                    slice.quantity().negate(),
+                    batch.getUnitCost(),
+                    reason.toString(),
+                    userId
+            );
+            if (firstMv == null) {
+                firstMv = mv;
+            }
+        }
+        for (String supplyBatchId : supplyBatchIds) {
+            supplyBatchLifecycleService.checkAndTransitionToSoldoutIfNeeded(businessId, supplyBatchId);
+        }
+        applyStockDelta(item, qty.negate(), true);
+
+        String itemName = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(req.itemId(), businessId)
+                .map(zelisline.ub.catalog.domain.Item::getName).orElse(req.itemId());
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.StockAdjustedEvent(
+                businessId, req.branchId(), req.itemId(), itemName,
+                "return_to_supplier", qty.negate()));
+        return new InventoryMutationResponse(null, firstMv.getId(), primaryBatch.getId());
+    }
+
+    /** Locks and validates a caller-picked batch for a physical write-off (wastage / supplier return). */
+    private InventoryBatch lockWriteOffBatch(
+            String businessId,
+            String branchId,
+            String batchId,
+            Item item
+    ) {
+        InventoryBatch b = inventoryBatchRepository
+                .findByIdAndBusinessIdForUpdate(batchId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Batch not found"));
+        if (!InventoryConstants.BATCH_STATUS_ACTIVE.equals(b.getStatus())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Batch is not active");
+        }
+        if (!b.getBranchId().equals(branchId)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Batch does not belong to this branch");
+        }
+        if (!b.getItemId().equals(item.getId())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Batch item does not match");
+        }
+        return b;
     }
 
     /**

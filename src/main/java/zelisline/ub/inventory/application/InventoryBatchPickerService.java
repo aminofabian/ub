@@ -2,6 +2,7 @@ package zelisline.ub.inventory.application;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -306,22 +307,34 @@ public class InventoryBatchPickerService {
                         "No inventory batches for " + itemLabel(catalogItem) + "; receive stock before selling"
                 );
             }
-            resultLines.add(new BatchAllocationLine(
-                    costRef.getId(),
-                    unallocated,
-                    costRef.getUnitCost()
-            ));
+            BigDecimal unitCost = costRef.getUnitCost() == null
+                    ? BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP)
+                    : costRef.getUnitCost();
+            // Carry the shortage on the branch's oversell-deficit batch so branch on-hand
+            // (SUM of active batch remaining) nets the oversell and a later receipt cancels it.
+            // Recording only a batch-less movement here left on-hand permanently inflated by
+            // every unit sold beyond the batches — the "stock reads high after selling" drift.
+            InventoryBatch deficit = findOrCreateOversellDeficitBatch(
+                    businessId, branchId, pick.stockItemId(), unitCost);
+            deficit.setQuantityRemaining(deficit.getQuantityRemaining()
+                    .subtract(unallocated)
+                    .setScale(QTY_SCALE, RoundingMode.HALF_UP));
+            deficit.setUnitCost(unitCost);
+            inventoryBatchRepository.save(deficit);
+
+            resultLines.add(new BatchAllocationLine(deficit.getId(), unallocated, unitCost));
+
             StockMovement oversell = new StockMovement();
             oversell.setBusinessId(businessId);
             oversell.setBranchId(branchId);
             oversell.setItemId(pick.stockItemId());
-            oversell.setBatchId(null);
+            oversell.setBatchId(deficit.getId());
             oversell.setMovementType(movementType);
             oversell.setReferenceType(referenceType);
             oversell.setReferenceId(referenceId);
             oversell.setQuantityDelta(unallocated.negate());
-            oversell.setUnitCost(costRef.getUnitCost());
-            oversell.setNotes("Sale exceeds on-hand stock (negative stock allowed)");
+            oversell.setUnitCost(unitCost);
+            oversell.setNotes("Sale exceeds on-hand stock (shortage carried on the deficit batch)");
             oversell.setCreatedBy(userId);
             stockMovementRepository.save(oversell);
         }
@@ -421,6 +434,41 @@ public class InventoryBatchPickerService {
         );
         // Opening balance updates item.currentStock; reload locked item state.
         entityManager.refresh(item);
+    }
+
+    /**
+     * The single synthetic batch per (item, branch) that carries oversold on-hand as a negative
+     * {@code quantityRemaining}. It stays {@code active} so the branch on-hand sum counts the
+     * deficit, while pick queries skip it (they require remaining &gt; 0), so it is never re-picked.
+     * Later receipts are ordinary positive batches that net it back toward zero.
+     */
+    private InventoryBatch findOrCreateOversellDeficitBatch(
+            String businessId,
+            String branchId,
+            String itemId,
+            BigDecimal unitCost
+    ) {
+        return inventoryBatchRepository
+                .findFirstByBusinessIdAndItemIdAndBranchIdAndSourceType(
+                        businessId, itemId, branchId, InventoryConstants.BATCH_SOURCE_OVERSELL)
+                .orElseGet(() -> {
+                    InventoryBatch b = new InventoryBatch();
+                    b.setBusinessId(businessId);
+                    b.setBranchId(branchId);
+                    b.setItemId(itemId);
+                    b.setSupplyBatchId(null);
+                    b.setSupplierId(null);
+                    b.setBatchNumber("OD-" + itemId.substring(0, Math.min(12, itemId.length()))
+                            + "-" + branchId.substring(0, Math.min(8, branchId.length())));
+                    b.setSourceType(InventoryConstants.BATCH_SOURCE_OVERSELL);
+                    b.setSourceId(businessId);
+                    b.setInitialQuantity(BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP));
+                    b.setQuantityRemaining(BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP));
+                    b.setUnitCost(unitCost);
+                    b.setReceivedAt(Instant.now());
+                    b.setStatus(InventoryConstants.BATCH_STATUS_ACTIVE);
+                    return inventoryBatchRepository.save(b);
+                });
     }
 
     public String newPickReferenceId() {

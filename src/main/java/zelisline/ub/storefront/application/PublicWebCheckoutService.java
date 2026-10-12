@@ -9,6 +9,7 @@ import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -65,6 +66,13 @@ public class PublicWebCheckoutService {
     private final ApplicationEventPublisher eventPublisher;
     private final zelisline.ub.support.application.SupportService supportService;
     private final PickupMtaaniCheckoutService pickupMtaaniCheckoutService;
+
+    /**
+     * How long an unpaid order holds stock before the expiry sweeper releases it, for channels
+     * without their own setting (scope P0-1). WhatsApp uses the shop's own {@code expiryMins}.
+     */
+    @Value("${app.storefront.web-orders.unpaid-expiry-mins:60}")
+    private int unpaidExpiryMins;
 
     public PublicWebCheckoutService(
             PublicWebCartService publicWebCartService,
@@ -140,8 +148,12 @@ public class PublicWebCheckoutService {
         order.setCustomerEmail(email);
         order.setNotes(notes);
         order.setChannel(resolveChannel(req.channel(), notes));
-        if (WebOrderChannels.WHATSAPP.equals(order.getChannel())) {
-            int expiryMins = resolveWhatsAppExpiryMins(elig.ctx().business());
+        // Every unpaid channel holds stock, so every channel gets an expiry window (scope P0-1).
+        // Non-WhatsApp uses the platform default; WhatsApp keeps its per-shop setting.
+        int expiryMins = WebOrderChannels.WHATSAPP.equals(order.getChannel())
+                ? resolveWhatsAppExpiryMins(elig.ctx().business())
+                : unpaidExpiryMins;
+        if (expiryMins > 0) {
             order.setExpiresAt(Instant.now().plus(expiryMins, ChronoUnit.MINUTES));
         }
         webOrderRepository.save(order);

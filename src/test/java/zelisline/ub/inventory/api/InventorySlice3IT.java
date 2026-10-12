@@ -45,9 +45,12 @@ import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.PostStandaloneWastageRequest;
+import zelisline.ub.inventory.api.dto.PostSupplierReturnRequest;
 import zelisline.ub.inventory.api.dto.PostStockTransferRequest;
 import zelisline.ub.inventory.api.dto.StockTransferCreatedResponse;
 import zelisline.ub.inventory.application.InventoryTransferService;
+import zelisline.ub.inventory.application.TransferCancelBackfillService;
+import zelisline.ub.inventory.domain.StockTransfer;
 import zelisline.ub.inventory.domain.SupplyBatch;
 import zelisline.ub.inventory.repository.StockAdjustmentRequestRepository;
 import zelisline.ub.inventory.repository.StockTakeSessionRepository;
@@ -117,6 +120,8 @@ class InventorySlice3IT {
     private StockTransferRepository stockTransferRepository;
     @Autowired
     private InventoryTransferService inventoryTransferService;
+    @Autowired
+    private TransferCancelBackfillService transferCancelBackfillService;
     @Autowired
     private TransactionTemplate transactionTemplate;
 
@@ -413,6 +418,172 @@ class InventorySlice3IT {
         assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock()
                 .setScale(2, RoundingMode.HALF_UP))
                 .isEqualByComparingTo("7");
+    }
+
+    @Test
+    void transferCancel_restoresSourceBatch() throws Exception {
+        String tid = createTransferViaApi(new BigDecimal("4"));
+        mockMvc.perform(post("/api/v1/inventory/transfers/" + tid + "/send")
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNoContent());
+
+        assertThat(inventoryBatchRepository.findById(sourceBatchId).orElseThrow()
+                .getQuantityRemaining().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("6");
+
+        mockMvc.perform(post("/api/v1/inventory/transfers/" + tid + "/cancel")
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNoContent());
+
+        // Source batch restored to its pre-send quantity, transfer cancelled, dest discarded.
+        assertThat(inventoryBatchRepository.findById(sourceBatchId).orElseThrow()
+                .getQuantityRemaining().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("10");
+        assertThat(stockTransferRepository.findById(tid).orElseThrow().getStatus())
+                .isEqualTo(InventoryConstants.TRANSFER_STATUS_CANCELLED);
+        assertThat(inventoryBatchRepository.findActiveBatchesForPreview(
+                        TENANT, itemId, branchBId,
+                        InventoryConstants.BATCH_STATUS_ACTIVE, BigDecimal.ZERO))
+                .isEmpty();
+    }
+
+    @Test
+    void transferCancel_reopensSupplyBatchClosedBySend() throws Exception {
+        String supplyId = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+        SupplyBatch sb = new SupplyBatch();
+        sb.setId(supplyId);
+        sb.setBusinessId(TENANT);
+        sb.setBranchId(branchAId);
+        sb.setBatchNumber("SB-CANCEL1");
+        sb.setSourceType("test");
+        sb.setSourceId(UUID.randomUUID().toString());
+        sb.setItemCount(1);
+        sb.setTotalInitialQuantity(new BigDecimal("10"));
+        sb.setTotalRemainingQuantity(new BigDecimal("10"));
+        sb.setReceivedAt(Instant.parse("2026-03-01T12:00:00Z"));
+        sb.setStatus(InventoryConstants.SUPPLY_BATCH_STATUS_ACTIVE);
+        supplyBatchRepository.save(sb);
+        InventoryBatch line = inventoryBatchRepository.findById(sourceBatchId).orElseThrow();
+        line.setSupplyBatchId(supplyId);
+        inventoryBatchRepository.save(line);
+
+        String tid = createTransferViaApi(new BigDecimal("10"));
+        mockMvc.perform(post("/api/v1/inventory/transfers/" + tid + "/send")
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNoContent());
+
+        // Sending the whole batch depleted the line and auto-closed the supply batch.
+        assertThat(inventoryBatchRepository.findById(sourceBatchId).orElseThrow().getStatus())
+                .isEqualTo(InventoryConstants.BATCH_STATUS_DEPLETED);
+        assertThat(supplyBatchRepository.findById(supplyId).orElseThrow().getStatus())
+                .isEqualTo(InventoryConstants.SUPPLY_BATCH_STATUS_CLOSED);
+
+        mockMvc.perform(post("/api/v1/inventory/transfers/" + tid + "/cancel")
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNoContent());
+
+        // Source line restored and sellable again; supply batch reopened.
+        InventoryBatch restored = inventoryBatchRepository.findById(sourceBatchId).orElseThrow();
+        assertThat(restored.getQuantityRemaining().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("10");
+        assertThat(restored.getStatus()).isEqualTo(InventoryConstants.BATCH_STATUS_ACTIVE);
+        assertThat(supplyBatchRepository.findById(supplyId).orElseThrow().getStatus())
+                .isEqualTo(InventoryConstants.SUPPLY_BATCH_STATUS_ACTIVE);
+        assertThat(inventoryBatchRepository.findActiveBatchesForPreview(
+                        TENANT, itemId, branchAId,
+                        InventoryConstants.BATCH_STATUS_ACTIVE, BigDecimal.ZERO))
+                .hasSize(1);
+    }
+
+    @Test
+    void transferCancelBackfill_restoresSourceAndReopensSupplyBatch() throws Exception {
+        String supplyId = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+        SupplyBatch sb = new SupplyBatch();
+        sb.setId(supplyId);
+        sb.setBusinessId(TENANT);
+        sb.setBranchId(branchAId);
+        sb.setBatchNumber("SB-BACKFILL1");
+        sb.setSourceType("test");
+        sb.setSourceId(UUID.randomUUID().toString());
+        sb.setItemCount(1);
+        sb.setTotalInitialQuantity(new BigDecimal("10"));
+        sb.setTotalRemainingQuantity(new BigDecimal("10"));
+        sb.setReceivedAt(Instant.parse("2026-03-01T12:00:00Z"));
+        sb.setStatus(InventoryConstants.SUPPLY_BATCH_STATUS_ACTIVE);
+        supplyBatchRepository.save(sb);
+        InventoryBatch line = inventoryBatchRepository.findById(sourceBatchId).orElseThrow();
+        line.setSupplyBatchId(supplyId);
+        inventoryBatchRepository.save(line);
+
+        String tid = createTransferViaApi(new BigDecimal("10"));
+        mockMvc.perform(post("/api/v1/inventory/transfers/" + tid + "/send")
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNoContent());
+
+        // Simulate a cancel from before the fix: transfer marked cancelled, source never restored.
+        StockTransfer t = stockTransferRepository.findById(tid).orElseThrow();
+        t.setStatus(InventoryConstants.TRANSFER_STATUS_CANCELLED);
+        stockTransferRepository.save(t);
+
+        assertThat(inventoryBatchRepository.findById(sourceBatchId).orElseThrow()
+                .getQuantityRemaining().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("0");
+        assertThat(supplyBatchRepository.findById(supplyId).orElseThrow().getStatus())
+                .isEqualTo(InventoryConstants.SUPPLY_BATCH_STATUS_CLOSED);
+
+        TransferCancelBackfillService.BackfillSummary summary =
+                transferCancelBackfillService.run(TENANT, null);
+        assertThat(summary.sourceBatchesRestored()).isEqualTo(1);
+        assertThat(summary.totalRestored()).isEqualByComparingTo("10");
+
+        InventoryBatch restored = inventoryBatchRepository.findById(sourceBatchId).orElseThrow();
+        assertThat(restored.getQuantityRemaining().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("10");
+        assertThat(restored.getStatus()).isEqualTo(InventoryConstants.BATCH_STATUS_ACTIVE);
+        assertThat(supplyBatchRepository.findById(supplyId).orElseThrow().getStatus())
+                .isEqualTo(InventoryConstants.SUPPLY_BATCH_STATUS_ACTIVE);
+
+        // Idempotent: a second run finds nothing left to restore.
+        assertThat(transferCancelBackfillService.run(TENANT, null).sourceBatchesRestored()).isZero();
+    }
+
+    @Test
+    void returnToSupplier_depletesStockAndNetsOnHand() throws Exception {
+        PostSupplierReturnRequest body = new PostSupplierReturnRequest(
+                branchAId, itemId, new BigDecimal("3"), "sup-1", null, "damaged crate");
+        mockMvc.perform(post("/api/v1/inventory/return-to-supplier")
+                        .contentType(APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated());
+
+        assertThat(inventoryBatchRepository.findById(sourceBatchId).orElseThrow()
+                .getQuantityRemaining().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("7");
+        assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock()
+                .setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("7");
+        assertThat(stockMovementRepository.findAll().stream()
+                .filter(m -> InventoryConstants.MOVEMENT_RETURN_TO_SUPPLIER.equals(m.getMovementType()))
+                .toList())
+                .hasSize(1);
     }
 
     @Test

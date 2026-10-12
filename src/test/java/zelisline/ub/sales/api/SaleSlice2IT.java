@@ -112,6 +112,7 @@ class SaleSlice2IT {
     private static final String ROLE_POS_OWNONLY = "22222222-0000-0000-0000-0000000000cc";
     private static final String ROLE_POS_PRICE = "22222222-0000-0000-0000-0000000000dd";
     private static final String ROLE_POS_WEIGHED_REFUND = "22222222-0000-0000-0000-0000000000ee";
+    private static final String ROLE_LOCKED = "22222222-0000-0000-0000-0000000000ff";
 
     @Autowired
     private MockMvc mockMvc;
@@ -479,6 +480,143 @@ class SaleSlice2IT {
         CreditAccount acc = creditAccountRepository.findByCustomerIdAndBusinessId(customerId, TENANT).orElseThrow();
         assertThat(acc.getBalanceOwed()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(creditTransactionRepository.findAll()).hasSize(2);
+    }
+
+    @Test
+    void voidSale_reversesOverpaySplitAcrossArAndWallet() throws Exception {
+        String customerId = seedCustomerWithCreditAccount(new BigDecimal("1000.00"));
+        CreditAccount seeded = creditAccountRepository.findByCustomerIdAndBusinessId(customerId, TENANT).orElseThrow();
+        seeded.setBalanceOwed(new BigDecimal("4.00")); // existing tab the overpay will pay down
+        creditAccountRepository.save(seeded);
+        openShift(new BigDecimal("100.00"));
+
+        // Total 10, cash 20 → overpay 10: 4 pays the tab (AR), 6 lands in the wallet.
+        String body = """
+                {"branchId":"%s","customerId":"%s","lines":[{"itemId":"%s","quantity":1,"unitPrice":10}],"payments":[{"method":"cash","amount":20}]}
+                """.formatted(branchId, customerId, itemId);
+
+        MvcResult r = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "overpay-void-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String saleId = objectMapper.readTree(r.getResponse().getContentAsString()).get("id").asText();
+
+        CreditAccount afterSale = creditAccountRepository.findByCustomerIdAndBusinessId(customerId, TENANT).orElseThrow();
+        assertThat(afterSale.getBalanceOwed()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(afterSale.getWalletBalance()).isEqualByComparingTo(new BigDecimal("6.00"));
+
+        mockMvc.perform(post("/api/v1/sales/{saleId}/void", saleId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"notes\":\"oops\"}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk());
+
+        Sale voided = saleRepository.findById(saleId).orElseThrow();
+        List<JournalLine> lines = journalLineRepository.findByJournalEntryId(voided.getVoidJournalEntryId());
+        assertJournalBalanced(lines);
+
+        // The void reverses each overpay leg where the sale posted it: AR debit 4, wallet debit 6.
+        LedgerAccount ar = ledgerAccountRepository.findByBusinessIdAndCode(TENANT, "1100").orElseThrow();
+        LedgerAccount wallet = ledgerAccountRepository.findByBusinessIdAndCode(TENANT, "1175").orElseThrow();
+        assertThat(lines.stream().filter(l -> ar.getId().equals(l.getLedgerAccountId()))
+                .map(JournalLine::getDebit).reduce(BigDecimal.ZERO, BigDecimal::add))
+                .isEqualByComparingTo(new BigDecimal("4.00"));
+        assertThat(lines.stream().filter(l -> wallet.getId().equals(l.getLedgerAccountId()))
+                .map(JournalLine::getDebit).reduce(BigDecimal.ZERO, BigDecimal::add))
+                .isEqualByComparingTo(new BigDecimal("6.00"));
+
+        CreditAccount afterVoid = creditAccountRepository.findByCustomerIdAndBusinessId(customerId, TENANT).orElseThrow();
+        assertThat(afterVoid.getBalanceOwed()).isEqualByComparingTo(new BigDecimal("4.00"));
+        assertThat(afterVoid.getWalletBalance()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void refundAndVoid_areBranchScopedForBranchLockedRoles() throws Exception {
+        openShift(new BigDecimal("100.00"));
+
+        String saleBody = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":1,"unitPrice":5}],"payments":[{"method":"cash","amount":5}]}
+                """.formatted(branchId, itemId);
+        MvcResult saleRes = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(saleBody)
+                        .header("Idempotency-Key", "scope-sale-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String saleId = objectMapper.readTree(saleRes.getResponse().getContentAsString()).get("id").asText();
+
+        // A cashier locked to a different branch.
+        Branch other = new Branch();
+        other.setBusinessId(TENANT);
+        other.setName("Other Branch");
+        branchRepository.save(other);
+        String otherBranchId = other.getId();
+
+        Role lockedRole = new Role();
+        lockedRole.setId(ROLE_LOCKED);
+        lockedRole.setBusinessId(null);
+        lockedRole.setRoleKey("cashier");
+        lockedRole.setName("Locked Cashier");
+        lockedRole.setSystem(true);
+        roleRepository.save(lockedRole);
+        for (String pid : List.of(P_SO, P_SC, P_SR, P_SELL, P_VOID_ANY, P_REFUND)) {
+            RolePermission rp = new RolePermission();
+            rp.setId(new RolePermission.Id(ROLE_LOCKED, pid));
+            rolePermissionRepository.save(rp);
+        }
+        User lockedCashier = new User();
+        lockedCashier.setBusinessId(TENANT);
+        lockedCashier.setEmail("locked-cashier@test");
+        lockedCashier.setName("Locked Cashier");
+        lockedCashier.setRoleId(ROLE_LOCKED);
+        lockedCashier.setBranchId(otherBranchId);
+        lockedCashier.setStatus(UserStatus.ACTIVE);
+        lockedCashier.setPasswordHash("$2a$10$stubstubstubstubstubstubstubstubst");
+        userRepository.save(lockedCashier);
+
+        String refundBody = """
+                {"lines":[{"saleItemId":"x","quantity":1}],"payments":[{"method":"cash","amount":1}],"reason":"r"}
+                """;
+
+        // Wrong branch: both refund and void are refused (403) with no state change.
+        mockMvc.perform(post("/api/v1/sales/{saleId}/refund", saleId)
+                        .contentType(APPLICATION_JSON)
+                        .content(refundBody)
+                        .header("Idempotency-Key", "scope-refund-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, lockedCashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_LOCKED)
+                        .header(TestAuthenticationFilter.HEADER_BRANCH_ID, otherBranchId))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/v1/sales/{saleId}/void", saleId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, lockedCashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_LOCKED)
+                        .header(TestAuthenticationFilter.HEADER_BRANCH_ID, otherBranchId))
+                .andExpect(status().isForbidden());
+
+        // Scoped to the sale's own branch, the void is allowed.
+        mockMvc.perform(post("/api/v1/sales/{saleId}/void", saleId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, lockedCashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_LOCKED)
+                        .header(TestAuthenticationFilter.HEADER_BRANCH_ID, branchId))
+                .andExpect(status().isOk());
     }
 
     @Test

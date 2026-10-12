@@ -11,6 +11,8 @@ public final class PurchasingConstants {
     public static final String STOCK_REF_GRN_LINE = "goods_receipt_line";
     public static final String MOVEMENT_RECEIPT = "receipt";
     public static final String MOVEMENT_WASTAGE = "wastage";
+    /** Compensating movement booked when a posted Path B supply line is reversed (keeps the ledger append-only). */
+    public static final String MOVEMENT_PURCHASE_REVERSAL = "purchase_reversal";
 
     public static final String SESSION_DRAFT = "draft";
     public static final String SESSION_POSTED = "posted";

@@ -7,6 +7,8 @@ public final class InventoryConstants {
     public static final String MOVEMENT_TRANSFER_OUT = "transfer_out";
     public static final String MOVEMENT_TRANSFER_IN = "transfer_in";
     public static final String MOVEMENT_SALE = "sale";
+    /** Outbound return of unused stock to a supplier (inventory-only; no GL). */
+    public static final String MOVEMENT_RETURN_TO_SUPPLIER = "return_to_supplier";
     public static final String MOVEMENT_SALE_VOID = "sale_void";
     public static final String MOVEMENT_REFUND = "refund";
     public static final String MOVEMENT_REFUND_WASTAGE = "refund_wastage";
@@ -81,6 +83,10 @@ public final class InventoryConstants {
     public static final String JOURNAL_ADJUSTMENT_DOWN = "inventory_adjustment_down";
     public static final String JOURNAL_STANDALONE_WASTAGE = "inventory_wastage";
     public static final String BATCH_STATUS_ACTIVE = "active";
+    /** Synthetic batch carrying a branch's oversold (negative) on-hand so later receipts net out. */
+    public static final String BATCH_SOURCE_OVERSELL = "oversell_deficit";
+    /** {@code source_id} marking an {@link #BATCH_SOURCE_OVERSELL} batch created by the backfill. */
+    public static final String OVERSELL_BACKFILL_SOURCE_ID = "backfill";
     public static final String BATCH_STATUS_IN_TRANSIT = "in_transit";
     public static final String BATCH_STATUS_DEPLETED = "depleted";
     public static final String BATCH_SOURCE_REFUND_RETURN = "refund_return";

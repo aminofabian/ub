@@ -69,18 +69,21 @@ public interface WebOrderRepository extends JpaRepository<WebOrder, String> {
             """)
     List<WebOrder> findDirtyForDesktopSync(@Param("businessId") String businessId);
 
-    /** WhatsApp orders still awaiting confirmation whose stock window has lapsed (scope §11). */
+    /**
+     * Unpaid orders on any channel whose stock window has lapsed — the expiry sweeper
+     * releases their stock (scope §11, P0-1). The {@code handoff_state = 'expired'} marker
+     * skips rows already released.
+     */
     @Query("""
             select w from WebOrder w
-             where w.channel = 'WHATSAPP'
-               and w.status = 'pending_payment'
+             where w.status = 'pending_payment'
                and (w.fulfillmentStatus is null or w.fulfillmentStatus = 'awaiting_confirmation')
                and w.expiresAt is not null
                and w.expiresAt < :now
                and (w.handoffState is null or w.handoffState <> 'expired')
              order by w.expiresAt asc
             """)
-    List<WebOrder> findExpiredUnconfirmedWhatsAppOrders(@Param("now") Instant now);
+    List<WebOrder> findExpiredUnpaidOrders(@Param("now") Instant now);
 
     /**
      * Atomically claim a one-time pickup-ticket auto-print.

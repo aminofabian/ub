@@ -23,17 +23,19 @@ import zelisline.ub.purchasing.domain.StockMovement;
 import zelisline.ub.purchasing.repository.InventoryBatchRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.sales.SalesConstants;
-import zelisline.ub.storefront.WebOrderChannels;
 import zelisline.ub.storefront.domain.WebOrder;
 import zelisline.ub.storefront.domain.WebOrderLine;
 import zelisline.ub.storefront.repository.WebOrderLineRepository;
 import zelisline.ub.storefront.repository.WebOrderRepository;
 
 /**
- * WhatsApp order expiry (scope §11). Unconfirmed WhatsApp orders hold stock for
- * {@code whatsappOrderExpiryMins}; the sweeper then marks them expired and
- * reverses the sale movements — never a raw decrement. Expiry is soft: the
- * order stays visible and confirming it re-decrements stock.
+ * Order stock expiry (scope §11, P0-1). Unpaid orders on every channel hold stock for a
+ * channel-appropriate window; the sweeper then marks them expired and reverses the sale
+ * movements — never a raw decrement. Expiry is soft: the order stays visible and confirming
+ * it re-decrements stock.
+ *
+ * <p>Named for its WhatsApp origin ({@code WhatsAppOrderExpiryService}); it now governs every
+ * unpaid channel. See {@code ONLINE_COMMERCE_SCOPE.md} P0-1.
  */
 @Service
 @RequiredArgsConstructor
@@ -54,7 +56,7 @@ public class WhatsAppOrderExpiryService {
     @Transactional
     public int sweepExpired() {
         Instant now = Instant.now();
-        List<WebOrder> expired = webOrderRepository.findExpiredUnconfirmedWhatsAppOrders(now);
+        List<WebOrder> expired = webOrderRepository.findExpiredUnpaidOrders(now);
         int released = 0;
         for (WebOrder order : expired) {
             try {
@@ -63,7 +65,7 @@ public class WhatsAppOrderExpiryService {
                 releaseStock(order);
                 released++;
             } catch (Exception e) {
-                log.warn("Failed to expire WhatsApp order {}: {}", order.getId(), e.getMessage());
+                log.warn("Failed to expire order {}: {}", order.getId(), e.getMessage());
             }
         }
         return released;
@@ -78,7 +80,7 @@ public class WhatsAppOrderExpiryService {
         releaseOutstandingStock(
                 order,
                 InventoryConstants.MOVEMENT_WEB_ORDER_EXPIRY,
-                "WhatsApp order expired — stock released");
+                "Web order expired — stock released");
     }
 
     /**
@@ -168,12 +170,12 @@ public class WhatsAppOrderExpiryService {
     /**
      * Merchant confirms an expired order: re-decrement stock for each line and
      * warn (via log) when a line cannot be reserved. The order itself is never
-     * deleted or blocked (scope §11 "expiry is soft").
+     * deleted or blocked (scope §11 "expiry is soft"). Applies to any channel —
+     * the {@code expired} marker is what says the stock was released.
      */
     @Transactional
     public void reReserveStock(WebOrder order) {
-        if (!WebOrderChannels.WHATSAPP.equals(order.getChannel())
-                || !"expired".equals(order.getHandoffState())) {
+        if (!"expired".equals(order.getHandoffState())) {
             return;
         }
         List<WebOrderLine> lines = webOrderLineRepository.findByOrderIdOrderByLineIndexAsc(order.getId());
@@ -192,7 +194,7 @@ public class WhatsAppOrderExpiryService {
                         InventoryConstants.MOVEMENT_SALE,
                         null);
             } catch (Exception e) {
-                log.warn("Re-reserve failed for expired WhatsApp order {} line {} (stock may be short): {}",
+                log.warn("Re-reserve failed for expired order {} line {} (stock may be short): {}",
                         order.getId(), line.getItemId(), e.getMessage());
             }
         }

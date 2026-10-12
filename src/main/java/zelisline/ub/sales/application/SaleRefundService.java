@@ -70,6 +70,7 @@ import zelisline.ub.sales.repository.SaleItemRepository;
 import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.tenancy.application.BranchResolutionService;
 
 @Service
 @RequiredArgsConstructor
@@ -106,6 +107,7 @@ public class SaleRefundService {
     private final AuditEventBuilder auditEventBuilder;
     private final RequestPermissionService requestPermissionService;
     private final CashDrawerLedgerService cashDrawerLedgerService;
+    private final BranchResolutionService branchResolutionService;
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -117,7 +119,7 @@ public class SaleRefundService {
             PostRefundRequest req,
             String userId
     ) {
-        return createRefund(businessId, saleId, rawIdempotencyKey, req, userId, null);
+        return createRefund(businessId, saleId, rawIdempotencyKey, req, userId, null, null);
     }
 
     @Transactional
@@ -127,7 +129,8 @@ public class SaleRefundService {
             String rawIdempotencyKey,
             PostRefundRequest req,
             String userId,
-            String roleId
+            String roleId,
+            String callerBranchId
     ) {
         String idemKey = normalizeIdempotencyKey(rawIdempotencyKey);
         var existingRefund = refundRepository.findByBusinessIdAndIdempotencyKey(businessId, idemKey);
@@ -138,6 +141,9 @@ public class SaleRefundService {
         Sale sale = saleRepository.findByIdAndBusinessIdForUpdate(saleId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Sale not found"));
         assertSaleRefundable(sale);
+        // Refunds move the original branch's drawer/stock: a branch-locked role may only
+        // refund sales from its own branch. Owners/admins (unlocked) are unaffected.
+        branchResolutionService.requireBranchForLockedRole(roleId, callerBranchId, sale.getBranchId());
 
         RefundComputation comp = computeRefund(sale, req);
         assertWeighedRefundAllowed(comp.rows(), roleId);
@@ -170,7 +176,7 @@ public class SaleRefundService {
                     refundCashOut.negate(), CashDrawerLedgerService.CONFIDENCE_INFERRED, userId, null);
         }
 
-        String jeId = postRefundJournal(businessId, refundId, comp, pays);
+        String jeId = postRefundJournal(businessId, blankToNull(sale.getBranchId()), refundId, comp, pays);
         creditSaleDebtService.reduceDebtForCreditRefund(
                 businessId, saleId, sale.getCustomerId(), sumCustomerCreditPay(pays));
         walletLedgerService.refundToWallet(businessId, saleId, sale.getCustomerId(), walletRefundShare);
@@ -500,6 +506,7 @@ public class SaleRefundService {
 
     private String postRefundJournal(
             String businessId,
+            String branchId,
             String refundId,
             RefundComputation comp,
             List<NormalizedPay> pays
@@ -521,6 +528,7 @@ public class SaleRefundService {
 
         JournalEntry entry = new JournalEntry();
         entry.setBusinessId(businessId);
+        entry.setBranchId(branchId);
         entry.setEntryDate(LocalDate.now(ZoneOffset.UTC));
         entry.setSourceType(SalesConstants.JOURNAL_SOURCE_SALE_REFUND);
         entry.setSourceId(refundId);

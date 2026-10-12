@@ -204,4 +204,17 @@ class WhatsAppOrderExpiryIT {
         assertEquals(0, expiryService.sweepExpired());
         assertNotNull(order.getExpiresAt());
     }
+
+    @Test
+    void sweep_releasesStockForWebChannelOrders() {
+        // P0-1: expiry is no longer WhatsApp-only — an abandoned WEB order releases its hold.
+        WebOrder order = webOrderRepository.findById(orderId).orElseThrow();
+        order.setChannel(WebOrderChannels.WEB);
+        webOrderRepository.save(order);
+
+        assertEquals(1, expiryService.sweepExpired());
+        assertEquals("expired", webOrderRepository.findById(orderId).orElseThrow().getHandoffState());
+        InventoryBatch batch = inventoryBatchRepository.findById(batchId).orElseThrow();
+        assertEquals(0, new BigDecimal("10.0000").compareTo(batch.getQuantityRemaining()));
+    }
 }

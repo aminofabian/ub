@@ -5,8 +5,10 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
 
 import org.springframework.context.ApplicationEventPublisher;
@@ -270,32 +272,81 @@ public class InventoryTransferService {
 
     private void cancelLine(StockTransfer t, StockTransferLine line, String userId) {
         String businessId = t.getBusinessId();
-        // Find destination batches in in_transit status and delete them
+
+        // Restore the source batches that sending drained. Each transfer_out movement for this
+        // line references the source batch it took from, so its negated delta is the quantity to
+        // put back. Sending may have depleted the source line and closed its supply batch
+        // (SupplyBatchLifecycleService) — reopen both so the returned stock counts and is sellable.
+        List<StockMovement> movements = stockMovementRepository
+                .findByBusinessIdAndReferenceTypeAndReferenceId(
+                        businessId, InventoryConstants.REF_STOCK_TRANSFER_LINE, line.getId());
+        Set<String> supplyBatchesToReopen = new LinkedHashSet<>();
+        for (StockMovement out : movements) {
+            if (!InventoryConstants.MOVEMENT_TRANSFER_OUT.equals(out.getMovementType())
+                    || out.getBatchId() == null) {
+                continue;
+            }
+            InventoryBatch src = inventoryBatchRepository
+                    .findByIdAndBusinessIdForUpdate(out.getBatchId(), businessId)
+                    .orElse(null);
+            if (src == null) {
+                continue;
+            }
+            BigDecimal returned = out.getQuantityDelta() == null
+                    ? BigDecimal.ZERO
+                    : out.getQuantityDelta().negate().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            if (returned.signum() <= 0) {
+                continue;
+            }
+            boolean wasDepleted = !InventoryConstants.BATCH_STATUS_ACTIVE.equals(src.getStatus());
+            src.setQuantityRemaining(src.getQuantityRemaining().add(returned)
+                    .setScale(QTY_SCALE, RoundingMode.HALF_UP));
+            src.setStatus(InventoryConstants.BATCH_STATUS_ACTIVE);
+            inventoryBatchRepository.save(src);
+            if (wasDepleted && src.getSupplyBatchId() != null && !src.getSupplyBatchId().isBlank()) {
+                supplyBatchesToReopen.add(src.getSupplyBatchId());
+            }
+
+            StockMovement reverseMv = new StockMovement();
+            reverseMv.setBusinessId(businessId);
+            reverseMv.setBranchId(t.getFromBranchId());
+            reverseMv.setItemId(src.getItemId());
+            reverseMv.setBatchId(src.getId());
+            reverseMv.setMovementType(InventoryConstants.MOVEMENT_ADJUSTMENT);
+            reverseMv.setReferenceType(InventoryConstants.REF_STOCK_TRANSFER_LINE);
+            reverseMv.setReferenceId(line.getId());
+            reverseMv.setQuantityDelta(returned);
+            reverseMv.setUnitCost(out.getUnitCost());
+            reverseMv.setNotes("Transfer cancelled — stock returned to source");
+            reverseMv.setCreatedBy(userId);
+            stockMovementRepository.save(reverseMv);
+        }
+        reopenClosedSupplyBatches(businessId, supplyBatchesToReopen);
+
+        // Discard the destination in-transit batches — no stock movement was booked for them,
+        // so there is nothing to reverse on the receiving side.
         List<InventoryBatch> inTransitBatches = inventoryBatchRepository
                 .findBySourceTypeAndSourceIdAndStatus(
                         InventoryConstants.BATCH_SOURCE_STOCK_TRANSFER,
                         line.getId(),
                         InventoryConstants.BATCH_STATUS_IN_TRANSIT);
         for (InventoryBatch dest : inTransitBatches) {
-            // Return stock to source by reversing the transfer_out as a stock adjustment
-            StockMovement reverseMv = new StockMovement();
-            reverseMv.setBusinessId(businessId);
-            reverseMv.setBranchId(t.getFromBranchId());
-            reverseMv.setItemId(dest.getItemId());
-            reverseMv.setBatchId(dest.getId());
-            reverseMv.setMovementType(InventoryConstants.MOVEMENT_ADJUSTMENT);
-            reverseMv.setReferenceType(InventoryConstants.REF_STOCK_TRANSFER_LINE);
-            reverseMv.setReferenceId(line.getId());
-            reverseMv.setQuantityDelta(dest.getQuantityRemaining());
-            reverseMv.setUnitCost(dest.getUnitCost());
-            reverseMv.setNotes("Transfer cancelled — stock returned");
-            reverseMv.setCreatedBy(userId);
-            stockMovementRepository.save(reverseMv);
-
-            // Delete the in_transit destination batch
             dest.setStatus(InventoryConstants.BATCH_STATUS_DEPLETED);
             dest.setQuantityRemaining(BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP));
             inventoryBatchRepository.save(dest);
+        }
+    }
+
+    /** Reopens a supply batch that a cancelled transfer's send had auto-closed. */
+    private void reopenClosedSupplyBatches(String businessId, Set<String> supplyBatchIds) {
+        for (String supplyBatchId : supplyBatchIds) {
+            supplyBatchRepository.findByIdAndBusinessId(supplyBatchId, businessId).ifPresent(sb -> {
+                if (InventoryConstants.SUPPLY_BATCH_STATUS_CLOSED.equals(sb.getStatus())) {
+                    sb.setStatus(InventoryConstants.SUPPLY_BATCH_STATUS_ACTIVE);
+                    sb.setClosedAt(null);
+                    supplyBatchRepository.save(sb);
+                }
+            });
         }
     }
 

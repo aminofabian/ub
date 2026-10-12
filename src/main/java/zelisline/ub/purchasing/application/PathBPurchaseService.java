@@ -804,7 +804,24 @@ public class PathBPurchaseService {
                 item.setCurrentStock(base.subtract(delta));
                 itemRepository.save(item);
             }
-            stockMovementRepository.delete(sm);
+            // Append-only ledger: never delete history. Detach the original movement from the
+            // batch we are about to remove and book a compensating movement so the two net to zero.
+            sm.setBatchId(null);
+            stockMovementRepository.save(sm);
+            StockMovement reversal = new StockMovement();
+            reversal.setBusinessId(businessId);
+            reversal.setBranchId(sm.getBranchId());
+            reversal.setItemId(sm.getItemId());
+            reversal.setBatchId(null);
+            reversal.setMovementType(PurchasingConstants.MOVEMENT_PURCHASE_REVERSAL);
+            reversal.setReferenceType(PurchasingConstants.STOCK_REF_RAW_LINE);
+            reversal.setReferenceId(line.getId());
+            reversal.setQuantityDelta(sm.getQuantityDelta() == null
+                    ? BigDecimal.ZERO
+                    : sm.getQuantityDelta().negate());
+            reversal.setUnitCost(sm.getUnitCost());
+            reversal.setNotes("Reversed: Path B supply line deleted");
+            stockMovementRepository.save(reversal);
         }
 
         // Clear FK on the line before deleting inventory batches (fk_rpl_inventory_batch).
@@ -838,7 +855,11 @@ public class PathBPurchaseService {
         }
         List<StockMovement> leftover = stockMovementRepository.findByBatchId(batchId);
         if (!leftover.isEmpty()) {
-            stockMovementRepository.deleteAll(leftover);
+            // Append-only ledger: detach history from the batch being removed instead of deleting it.
+            for (StockMovement m : leftover) {
+                m.setBatchId(null);
+            }
+            stockMovementRepository.saveAll(leftover);
             stockMovementRepository.flush();
         }
         if (!saleItemRepository.findByBatchId(batchId).isEmpty()) {

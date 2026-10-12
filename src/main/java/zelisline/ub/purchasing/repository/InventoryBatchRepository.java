@@ -211,6 +211,9 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
                and b.branchId = :branchId
                and b.status = :status
                and b.itemId in :itemIds
+               and (b.supplyBatchId is null or b.supplyBatchId not in (
+                   select sb.id from zelisline.ub.inventory.domain.SupplyBatch sb where sb.status = 'closed'
+               ))
              group by b.itemId
             """)
     List<Object[]> sumQuantityRemainingForItemsAtBranch(
@@ -372,6 +375,27 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             String itemId,
             String branchId,
             List<String> statuses
+    );
+
+    /**
+     * The single synthetic batch that carries an item/branch's oversold (negative) on-hand.
+     * Reused across oversells so one deficit per item/branch accumulates and later receipts net it.
+     */
+    Optional<InventoryBatch> findFirstByBusinessIdAndItemIdAndBranchIdAndSourceType(
+            String businessId,
+            String itemId,
+            String branchId,
+            String sourceType
+    );
+
+    boolean existsByBusinessIdAndItemIdAndBranchId(String businessId, String itemId, String branchId);
+
+    boolean existsByBusinessIdAndItemIdAndBranchIdAndSourceTypeAndSourceId(
+            String businessId,
+            String itemId,
+            String branchId,
+            String sourceType,
+            String sourceId
     );
 
     boolean existsByBusinessIdAndQuantityRemainingGreaterThan(String businessId, BigDecimal quantityRemaining);

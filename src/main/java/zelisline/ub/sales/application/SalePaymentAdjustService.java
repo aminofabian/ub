@@ -94,7 +94,7 @@ public class SalePaymentAdjustService {
         BigDecimal newCash = sumCashNormalized(newPayments);
         BigDecimal cashDelta = newCash.subtract(oldCash).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
 
-        postReclassJournal(businessId, saleId, oldPayments, newPayments);
+        postReclassJournal(businessId, sale.getBranchId(), saleId, oldPayments, newPayments);
         applyCreditDebtDelta(businessId, sale, oldPayments, newPayments);
         replacePayments(businessId, saleId, newPayments);
         clearCashReceivedIfNeeded(sale, newPayments);
@@ -294,6 +294,7 @@ public class SalePaymentAdjustService {
 
     private void postReclassJournal(
             String businessId,
+            String branchId,
             String saleId,
             List<SalePayment> oldPayments,
             List<NormalizedPayment> newPayments
@@ -322,6 +323,7 @@ public class SalePaymentAdjustService {
 
         JournalEntry entry = new JournalEntry();
         entry.setBusinessId(businessId);
+        entry.setBranchId(branchId);
         entry.setEntryDate(LocalDate.now(ZoneOffset.UTC));
         entry.setSourceType(SalesConstants.JOURNAL_SOURCE_SALE_PAYMENT_ADJUST);
         entry.setSourceId(saleId);

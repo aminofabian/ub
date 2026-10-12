@@ -108,8 +108,13 @@ public class WebOrdersController {
         );
     }
 
+    /**
+     * Advance pickup fulfilment. Cashiers with {@code sales.sell} can drive this from the
+     * in-POS web-orders panel (scope P2 #17) without needing storefront admin read — the
+     * same bargain {@code sales.sell} already gets for the receipt and pickup-ticket paths.
+     */
     @PatchMapping("/{orderId}/fulfillment")
-    @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
+    @PreAuthorize("hasPermission(null, 'sales.sell') or hasPermission(null, 'storefront.orders.read')")
     public WebOrderDetailResponse updateFulfillment(
             @PathVariable String orderId,
             @Valid @RequestBody UpdateWebOrderFulfillmentRequest body,

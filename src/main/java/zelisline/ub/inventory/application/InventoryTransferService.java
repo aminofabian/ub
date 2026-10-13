@@ -226,11 +226,12 @@ public class InventoryTransferService {
     }
 
     /**
-     * Phase 9: Cancel an in-transit transfer — reverses stock movements at source,
-     * discards destination batches, and marks the transfer cancelled.
+     * Cancel a draft (nothing has moved) or an in-transit transfer (stock
+     * returns to the sending branch). Completed transfers stay terminal.
      *
-     * <p>Same destination scoping as {@link #receiveTransfer}: the receiving
-     * branch owns the decision to refuse a delivery.
+     * <p>Drafts may be cancelled by either branch or an unscoped operator.
+     * In-transit transfers stay destination-scoped: the receiving branch
+     * owns the decision to refuse a delivery.
      */
     @Transactional
     public void cancelTransfer(
@@ -240,8 +241,12 @@ public class InventoryTransferService {
             String callerBranchId) {
         StockTransfer t = stockTransferRepository.findByIdAndBusinessIdFetchLines(transferId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer not found"));
+        if (InventoryConstants.TRANSFER_STATUS_DRAFT.equals(t.getStatus())) {
+            cancelDraft(t, callerBranchId);
+            return;
+        }
         if (!InventoryConstants.TRANSFER_STATUS_IN_TRANSIT.equals(t.getStatus())) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only in-transit transfers can be cancelled");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only draft or in-transit transfers can be cancelled");
         }
         requireDestinationScope(t, callerBranchId);
         validateBranchesDifferentTenant(businessId, t.getFromBranchId(), t.getToBranchId());
@@ -249,11 +254,20 @@ public class InventoryTransferService {
         for (StockTransferLine line : t.getLines()) {
             cancelLine(t, line, userId);
         }
+        markCancelled(t);
+    }
+
+    /** A draft has not moved stock, so cancelling it only closes the transfer. */
+    private void cancelDraft(StockTransfer t, String callerBranchId) {
+        requireParticipantScope(t, callerBranchId);
+        markCancelled(t);
+    }
+
+    private void markCancelled(StockTransfer t) {
         t.setStatus(InventoryConstants.TRANSFER_STATUS_CANCELLED);
         stockTransferRepository.save(t);
-
         eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.TransferCancelledEvent(
-                businessId, t.getFromBranchId(), t.getToBranchId(), transferId));
+                t.getBusinessId(), t.getFromBranchId(), t.getToBranchId(), t.getId()));
     }
 
     /**
@@ -268,6 +282,19 @@ public class InventoryTransferService {
                     HttpStatus.FORBIDDEN,
                     "Only staff at the receiving branch can confirm this transfer");
         }
+    }
+
+    /** Draft cancel: either participating branch, or an unscoped operator. */
+    private static void requireParticipantScope(StockTransfer t, String callerBranchId) {
+        String scope = callerBranchId == null ? "" : callerBranchId.trim();
+        if (scope.isEmpty()
+                || scope.equals(t.getFromBranchId())
+                || scope.equals(t.getToBranchId())) {
+            return;
+        }
+        throw new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Only staff at the sending or receiving branch can cancel this transfer");
     }
 
     private void cancelLine(StockTransfer t, StockTransferLine line, String userId) {

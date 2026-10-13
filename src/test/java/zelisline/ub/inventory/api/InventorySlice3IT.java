@@ -454,6 +454,51 @@ class InventorySlice3IT {
     }
 
     @Test
+    void transferCancel_draftDiscardsWithoutMovingStock() throws Exception {
+        String tid = createTransferViaApi(new BigDecimal("4"));
+        assertThat(stockTransferRepository.findById(tid).orElseThrow().getStatus())
+                .isEqualTo(InventoryConstants.TRANSFER_STATUS_DRAFT);
+
+        mockMvc.perform(post("/api/v1/inventory/transfers/" + tid + "/cancel")
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, branchStaff.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_STAFF)
+                        .header(TestAuthenticationFilter.HEADER_BRANCH_ID, branchAId))
+                .andExpect(status().isNoContent());
+
+        assertThat(stockTransferRepository.findById(tid).orElseThrow().getStatus())
+                .isEqualTo(InventoryConstants.TRANSFER_STATUS_CANCELLED);
+        assertThat(inventoryBatchRepository.findById(sourceBatchId).orElseThrow()
+                .getQuantityRemaining().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("10");
+        assertThat(stockMovementRepository.count()).isZero();
+
+        mockMvc.perform(post("/api/v1/inventory/transfers/" + tid + "/send")
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void transferCancel_draftFromUnrelatedBranchIsForbidden() throws Exception {
+        String tid = createTransferViaApi(new BigDecimal("1"));
+
+        mockMvc.perform(post("/api/v1/inventory/transfers/" + tid + "/cancel")
+                        .contentType(APPLICATION_JSON)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, branchStaff.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_STAFF)
+                        .header(TestAuthenticationFilter.HEADER_BRANCH_ID, "99999999-9999-9999-9999-999999999999"))
+                .andExpect(status().isForbidden());
+
+        assertThat(stockTransferRepository.findById(tid).orElseThrow().getStatus())
+                .isEqualTo(InventoryConstants.TRANSFER_STATUS_DRAFT);
+    }
+
+    @Test
     void transferCancel_reopensSupplyBatchClosedBySend() throws Exception {
         String supplyId = "dddddddd-dddd-dddd-dddd-dddddddddddd";
         SupplyBatch sb = new SupplyBatch();

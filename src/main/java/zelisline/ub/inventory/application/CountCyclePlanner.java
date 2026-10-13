@@ -25,8 +25,7 @@ public final class CountCyclePlanner {
             Map<String, Integer> categoryPositions
     ) {
         Comparator<CatalogEntry> byShelf = Comparator
-                .comparingInt((CatalogEntry e) ->
-                        categoryPositions.getOrDefault(e.categoryId(), UNCATEGORISED_POSITION))
+                .comparingInt((CatalogEntry e) -> shelfPosition(e.categoryId(), categoryPositions))
                 .thenComparing(e -> normalisedName(e.name()))
                 .thenComparing(CatalogEntry::itemId);
         return entries.stream().sorted(byShelf).map(CatalogEntry::itemId).toList();
@@ -77,6 +76,13 @@ public final class CountCyclePlanner {
         }
         LocalDate firstDay = countedToday ? today.plusDays(1) : today;
         return firstDay.plusDays(days - 1L);
+    }
+
+    private static int shelfPosition(String categoryId, Map<String, Integer> categoryPositions) {
+        if (categoryId == null) {
+            return UNCATEGORISED_POSITION;
+        }
+        return categoryPositions.getOrDefault(categoryId, UNCATEGORISED_POSITION);
     }
 
     private static String normalisedName(String name) {

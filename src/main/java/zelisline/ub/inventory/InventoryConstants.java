@@ -34,6 +34,14 @@ public final class InventoryConstants {
     public static final String STOCKTAKE_LINE_CONFIRMED = "confirmed";
     public static final String STOCKTAKE_SOURCE_MANUAL = "manual";
     public static final String STOCKTAKE_SOURCE_DAILY_AUDIT = "daily_audit";
+    public static final String STOCKTAKE_SOURCE_COUNT_CYCLE = "count_cycle";
+    public static final String STOCKTAKE_SESSION_TYPE_BATCH = "batch";
+    public static final String COUNT_CYCLE_ACTIVE = "active";
+    public static final String COUNT_CYCLE_COMPLETED = "completed";
+    public static final String COUNT_CYCLE_CANCELLED = "cancelled";
+    public static final int COUNT_CYCLE_DEFAULT_BATCH_SIZE = 100;
+    public static final int COUNT_CYCLE_MIN_BATCH_SIZE = 10;
+    public static final int COUNT_CYCLE_MAX_BATCH_SIZE = 1000;
     public static final String DAILY_AUDIT_REVIEW_PENDING = "pending";
     public static final String DAILY_AUDIT_REVIEW_APPROVED = "approved";
     public static final String DAILY_AUDIT_REVIEW_ESCALATED = "escalated";

@@ -225,25 +225,62 @@ public class StockTakeService {
                 "Daily audit manifest has no items"
             );
         }
-
-        List<String> activeIds = filterActiveItemIds(businessId, itemIds);
-        Map<String, BigDecimal> onHand = loadOnHandByItem(businessId, branchId);
-        int sessionNumber = stockTakeSessionRepository.nextSessionNumber(
-            businessId
+        StockTakeSession session = newSeededSession(
+            businessId,
+            branchId,
+            sessionType,
+            sessionDate,
+            userId
         );
+        session.setSource(InventoryConstants.STOCKTAKE_SOURCE_DAILY_AUDIT);
+        session.setDailyAuditId(dailyAuditId);
+        addSeededLines(session, filterActiveItemIds(businessId, itemIds));
+        stockTakeSessionRepository.save(session);
+        return buildResponse(session);
+    }
 
-        Map<String, List<InventoryBatch>> batchesByItem =
-            inventoryBatchRepository
-                .findActiveBatchesForItems(
-                    businessId,
-                    branchId,
-                    InventoryConstants.BATCH_STATUS_ACTIVE,
-                    activeIds,
-                    BigDecimal.ZERO
-                )
-                .stream()
-                .collect(Collectors.groupingBy(InventoryBatch::getItemId));
+    /**
+     * Opens one batch of a full-count cycle. Lines keep the given order so
+     * counters walk the shelves category by category.
+     */
+    @Transactional
+    public StockTakeSession startCountCycleBatchSession(
+        String businessId,
+        String branchId,
+        LocalDate sessionDate,
+        String countCycleId,
+        int batchNumber,
+        List<String> orderedItemIds,
+        String userId
+    ) {
+        requireBranch(businessId, branchId);
+        StockTakeSession session = newSeededSession(
+            businessId,
+            branchId,
+            InventoryConstants.STOCKTAKE_SESSION_TYPE_BATCH,
+            sessionDate,
+            userId
+        );
+        session.setSource(InventoryConstants.STOCKTAKE_SOURCE_COUNT_CYCLE);
+        session.setCountCycleId(countCycleId);
+        session.setNotes("Full count · batch " + batchNumber);
+        Set<String> activeIds = new HashSet<>(
+            filterActiveItemIds(businessId, orderedItemIds)
+        );
+        addSeededLines(
+            session,
+            orderedItemIds.stream().filter(activeIds::contains).toList()
+        );
+        return stockTakeSessionRepository.save(session);
+    }
 
+    private StockTakeSession newSeededSession(
+        String businessId,
+        String branchId,
+        String sessionType,
+        LocalDate sessionDate,
+        String userId
+    ) {
         StockTakeSession session = new StockTakeSession();
         session.setBusinessId(businessId);
         session.setBranchId(branchId);
@@ -251,13 +288,31 @@ public class StockTakeService {
         session.setSessionDate(sessionDate);
         session.setStatus(InventoryConstants.STOCKTAKE_SESSION_IN_PROGRESS);
         session.setStartedBy(userId);
-        session.setSessionNumber(sessionNumber);
-        session.setSource(InventoryConstants.STOCKTAKE_SOURCE_DAILY_AUDIT);
-        session.setDailyAuditId(dailyAuditId);
+        session.setSessionNumber(
+            stockTakeSessionRepository.nextSessionNumber(businessId)
+        );
         session.setCurrentLineIndex(0);
+        return session;
+    }
+
+    private void addSeededLines(StockTakeSession session, List<String> itemIds) {
+        String businessId = session.getBusinessId();
+        String branchId = session.getBranchId();
+        Map<String, BigDecimal> onHand = loadOnHandByItem(businessId, branchId);
+        Map<String, List<InventoryBatch>> batchesByItem =
+            inventoryBatchRepository
+                .findActiveBatchesForItems(
+                    businessId,
+                    branchId,
+                    InventoryConstants.BATCH_STATUS_ACTIVE,
+                    itemIds,
+                    BigDecimal.ZERO
+                )
+                .stream()
+                .collect(Collectors.groupingBy(InventoryBatch::getItemId));
 
         int order = 0;
-        for (String itemId : activeIds) {
+        for (String itemId : itemIds) {
             BigDecimal sys = onHand
                 .getOrDefault(itemId, BigDecimal.ZERO)
                 .setScale(QTY_SCALE, RoundingMode.HALF_UP);
@@ -289,8 +344,6 @@ public class StockTakeService {
             }
             session.getLines().add(line);
         }
-        stockTakeSessionRepository.save(session);
-        return buildResponse(session);
     }
 
     @Transactional
@@ -847,11 +900,11 @@ public class StockTakeService {
     }
 
     /**
-     * Apply a daily-audit approved physical count to inventory.
+     * Apply an approved physical count (daily audit or full-count batch) to inventory.
      * Idempotent when the line is already confirmed.
      */
     @Transactional
-    public void applyDailyAuditApprovedCount(
+    public void applyApprovedCount(
         String businessId,
         StockTakeLine line,
         String userId

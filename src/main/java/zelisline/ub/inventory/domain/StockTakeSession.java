@@ -79,6 +79,9 @@ public class StockTakeSession {
     @Column(name = "current_line_index")
     private Integer currentLineIndex;
 
+    @Column(name = "count_cycle_id", length = 36)
+    private String countCycleId;
+
     @OneToMany(mappedBy = "session", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("sortOrder ASC, id ASC")
     private List<StockTakeLine> lines = new ArrayList<>();

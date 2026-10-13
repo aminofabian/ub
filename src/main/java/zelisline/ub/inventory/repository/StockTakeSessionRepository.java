@@ -29,6 +29,7 @@ public interface StockTakeSessionRepository extends JpaRepository<StockTakeSessi
                and s.branchId = :branchId
                and s.sessionDate = :sessionDate
                and s.status = 'in_progress'
+               and s.source <> 'count_cycle'
              order by s.createdAt desc
             """)
     List<StockTakeSession> findActiveListByBusinessIdAndBranchIdAndDateFetchLines(
@@ -63,6 +64,7 @@ public interface StockTakeSessionRepository extends JpaRepository<StockTakeSessi
                and s.branchId = :branchId
                and s.status = 'in_progress'
                and s.sessionDate < :today
+               and s.source <> 'count_cycle'
              order by s.sessionDate desc
             """)
     List<StockTakeSession> findStaleListByBusinessIdAndBranchIdFetchLines(
@@ -100,6 +102,7 @@ public interface StockTakeSessionRepository extends JpaRepository<StockTakeSessi
                and (:status   is null or s.status   = :status)
                and (:from     is null or s.sessionDate >= :from)
                and (:to       is null or s.sessionDate <= :to)
+               and s.source <> 'count_cycle'
              order by s.sessionDate desc, s.createdAt desc
             """)
     List<StockTakeSession> findFiltered(
@@ -166,6 +169,18 @@ public interface StockTakeSessionRepository extends JpaRepository<StockTakeSessi
     List<StockTakeSession> findByDailyAuditIdAndBusinessIdFetchLines(
             @Param("businessId") String businessId,
             @Param("dailyAuditId") String dailyAuditId
+    );
+
+    @Query("""
+            select distinct s from StockTakeSession s
+             left join fetch s.lines
+             where s.businessId = :businessId
+               and s.countCycleId = :countCycleId
+             order by s.createdAt asc
+            """)
+    List<StockTakeSession> findByCountCycleIdFetchLines(
+            @Param("businessId") String businessId,
+            @Param("countCycleId") String countCycleId
     );
 
     @Query("""

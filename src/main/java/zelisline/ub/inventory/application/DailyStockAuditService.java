@@ -24,12 +24,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
-import zelisline.ub.catalog.application.ItemCatalogService;
-import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.domain.Item;
-import zelisline.ub.catalog.repository.CategoryRepository;
-import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.DailyStockAuditDtos;
 import zelisline.ub.inventory.api.dto.StockTakeSessionResponse;
@@ -57,9 +53,7 @@ public class DailyStockAuditService {
     private final StockTakeLineRepository stockTakeLineRepository;
     private final StockTakeService stockTakeService;
     private final SaleItemRepository saleItemRepository;
-    private final ItemRepository itemRepository;
-    private final CategoryRepository categoryRepository;
-    private final ItemCatalogService itemCatalogService;
+    private final CountItemCatalog countItemCatalog;
     private final SalesIntelligenceService salesIntelligenceService;
     private final BranchRepository branchRepository;
     private final BusinessRepository businessRepository;
@@ -739,7 +733,7 @@ public class DailyStockAuditService {
         stockTakeLineRepository.save(target);
 
         if (InventoryConstants.DAILY_AUDIT_REVIEW_APPROVED.equals(reviewStatus)) {
-            stockTakeService.applyDailyAuditApprovedCount(businessId, target, userId);
+            stockTakeService.applyApprovedCount(businessId, target, userId);
             // Keep morning review status in sync when evening is the approval target.
             if (eveningLine != null && morningLine != null && morningLine != target) {
                 morningLine.setReviewStatus(reviewStatus);
@@ -1157,67 +1151,12 @@ public class DailyStockAuditService {
     ) {}
 
     private ItemContext loadItemContext(String businessId, List<String> itemIds) {
-        if (itemIds.isEmpty()) {
-            return new ItemContext(Map.of(), Map.of(), Map.of());
-        }
-        Map<String, Item> itemsById = itemRepository
-                .findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)
-                .stream()
-                .collect(Collectors.toMap(Item::getId, i -> i));
-        Set<String> categoryIds = itemsById.values().stream()
-                .map(Item::getCategoryId)
-                .filter(id -> id != null && !id.isBlank())
-                .collect(Collectors.toSet());
-        Map<String, Category> categoriesById = categoryIds.isEmpty()
-                ? Map.of()
-                : categoryRepository.findByBusinessIdOrderByPositionAsc(businessId)
-                        .stream()
-                        .filter(c -> categoryIds.contains(c.getId()))
-                        .collect(Collectors.toMap(Category::getId, c -> c));
-        Map<String, String> thumbs = new LinkedHashMap<>(
-                itemCatalogService.resolveThumbnailUrls(businessId, itemIds)
-        );
-        // Variants without their own photo borrow the parent product image.
-        Set<String> parentIds = itemsById.values().stream()
-                .filter(i -> !thumbs.containsKey(i.getId()))
-                .map(Item::getVariantOfItemId)
-                .filter(id -> id != null && !id.isBlank())
-                .collect(Collectors.toSet());
-        if (!parentIds.isEmpty()) {
-            Map<String, String> parentThumbs = itemCatalogService.resolveThumbnailUrls(
-                    businessId,
-                    parentIds
-            );
-            for (Item item : itemsById.values()) {
-                if (thumbs.containsKey(item.getId())) {
-                    continue;
-                }
-                String parentId = item.getVariantOfItemId();
-                if (parentId == null || parentId.isBlank()) {
-                    continue;
-                }
-                String parentThumb = parentThumbs.get(parentId);
-                if (parentThumb != null && !parentThumb.isBlank()) {
-                    thumbs.put(item.getId(), parentThumb);
-                }
-            }
-        }
-        return new ItemContext(itemsById, categoriesById, thumbs);
+        CountItemCatalog.Context loaded = countItemCatalog.load(businessId, itemIds);
+        return new ItemContext(loaded.itemsById(), loaded.categoriesById(), loaded.thumbs());
     }
 
-    /**
-     * Shelf label for audits: same family + option folding as receipts / catalog.
-     */
     private static String itemDisplayName(Item item, String fallbackId) {
-        if (item == null) {
-            return fallbackId != null ? fallbackId : "";
-        }
-        String composed = ProductDisplayName.forItem(item);
-        if (!composed.isBlank()) {
-            return composed;
-        }
-        String base = blankToNull(item.getName());
-        return base != null ? base : "Item";
+        return CountItemCatalog.displayName(item, fallbackId);
     }
 
     private static String blankToNull(String value) {

@@ -12,12 +12,28 @@ import java.util.Set;
  * That session often belongs to a different shop than the host the link was
  * opened on, and the JWT tenant check would reject the link before its own
  * token is read.
+ *
+ * <p>Anonymously-readable public routes (marketplace directory, credit-claim
+ * tabs, guest support chat, barcode lookup, page seals, onboarding mute) must
+ * tolerate a leftover {@code ub.access} too: the proxy injects it as a Bearer,
+ * and {@link JwtAuthenticationFilter} fails the whole request (401/403) on an
+ * expired or different-shop token before the {@code permitAll} rule is reached.
+ *
+ * <p>Deliberately NOT listed: {@code /api/v1/public/businesses/**} (storefront)
+ * and the shopper routes — those read the signed-in shopper via
+ * {@code CurrentTenantUser}, so they must keep authenticating a valid token.
  */
 public final class PublicAuthEndpoints {
 
     private static final List<String> PREFIXES = List.of(
             "/api/v1/public/tills/",
-            "/api/v1/public/drawouts/"
+            "/api/v1/public/drawouts/",
+            "/api/v1/public/marketplace/",
+            "/api/v1/public/credits/",
+            "/api/v1/public/support/",
+            "/api/v1/public/barcode/",
+            "/api/v1/public/page-seals/",
+            "/api/v1/public/onboarding-sequence/"
     );
 
     private static final Set<String> PATHS = Set.of(

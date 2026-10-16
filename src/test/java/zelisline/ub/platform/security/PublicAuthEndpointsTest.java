@@ -52,4 +52,31 @@ class PublicAuthEndpointsTest {
         assertTrue(PublicAuthEndpoints.matches("/api/v1/public/auth/oauth/google"));
         assertFalse(PublicAuthEndpoints.matches("/api/v1/auth/oauth/google"));
     }
+
+    @Test
+    void marketplaceDirectoryBypassesJwtFilter() {
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/marketplace/suppliers/search"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/marketplace/products/search?q=rice"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/marketplace/locations"));
+        assertFalse(PublicAuthEndpoints.matches("/api/v1/marketplace"));
+    }
+
+    @Test
+    void anonymousPublicReadsBypassJwtFilter() {
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/credits/tabs/0712345678"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/credits/payer-claims/lookup"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/credits/payment-claims/abc123"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/support/threads"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/barcode/0792382313648"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/page-seals/customer-tab/0712345678"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/public/onboarding-sequence/mute?token=abc"));
+    }
+
+    @Test
+    void principalAwareStorefrontRoutesKeepAuthenticating() {
+        // Storefront/shopper checkout reads the signed-in shopper, so it must stay
+        // on the authentication path (a valid token has to be parsed, not skipped).
+        assertFalse(PublicAuthEndpoints.matches("/api/v1/public/businesses/acme/carts"));
+        assertFalse(PublicAuthEndpoints.matches("/api/v1/public/businesses/acme/orders"));
+    }
 }

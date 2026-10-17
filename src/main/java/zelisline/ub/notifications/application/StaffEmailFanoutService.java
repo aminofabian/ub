@@ -90,10 +90,11 @@ public class StaffEmailFanoutService {
             return buildAbandonedCartEmail(notification.getBusinessId(), payload);
         }
         String subject = payload.title() != null && !payload.title().isBlank() ? payload.title() : "Palmart";
-        String text = payload.body() != null && !payload.body().isBlank()
-                ? payload.title() + ": " + payload.body()
-                : payload.title();
-        return new DigestEmail(subject, text, buildGenericHtml(payload));
+        String text = OpenInPalmartEmail.text(
+                frontendBaseUrl, payload.title(), payload.body(), payload.actionUrl());
+        String html = OpenInPalmartEmail.html(
+                frontendBaseUrl, payload.title(), payload.body(), payload.actionUrl());
+        return new DigestEmail(subject, text, html);
     }
 
     private DigestEmail buildAbandonedCartEmail(String businessId, ParsedPayload payload) {
@@ -170,36 +171,7 @@ public class StaffEmailFanoutService {
     }
 
     private String absoluteActionUrl(String actionUrl) {
-        String path = actionUrl != null && !actionUrl.isBlank() ? actionUrl.trim() : "/storefront/web-orders";
-        if (path.startsWith("http://") || path.startsWith("https://")) {
-            return path;
-        }
-        String base = frontendBaseUrl != null ? frontendBaseUrl.trim() : "";
-        if (base.endsWith("/")) {
-            base = base.substring(0, base.length() - 1);
-        }
-        if (!path.startsWith("/")) {
-            path = "/" + path;
-        }
-        return base.isBlank() ? path : base + path;
-    }
-
-    private static String buildGenericHtml(ParsedPayload payload) {
-        String title = payload.title() != null && !payload.title().isBlank() ? payload.title() : "Palmart";
-        String body = payload.body() != null ? payload.body() : "";
-        String link = payload.actionUrl() != null && !payload.actionUrl().isBlank() ? payload.actionUrl() : "/";
-        return """
-                <!DOCTYPE html><html><body style="font-family:sans-serif;line-height:1.5">
-                <h2>%s</h2><p>%s</p><p><a href="%s">Open in Palmart</a></p>
-                </body></html>
-                """.formatted(escapeHtml(title), escapeHtml(body), escapeHtml(link));
-    }
-
-    private static String escapeHtml(String raw) {
-        if (raw == null) {
-            return "";
-        }
-        return raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        return OpenInPalmartEmail.absoluteUrl(frontendBaseUrl, actionUrl, "/storefront/web-orders");
     }
 
     private static String stringVal(Object raw) {

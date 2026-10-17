@@ -53,6 +53,9 @@ public class NotificationDeliveryTxnService {
     @Value("${app.notifications.delivery.max-attempts:8}")
     private int maxAttempts;
 
+    @Value("${app.public.frontend-base-url:http://localhost:3000}")
+    private String frontendBaseUrl;
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void attemptDelivery(String deliveryId) {
         NotificationDelivery delivery = deliveryRepository.findById(deliveryId).orElse(null);
@@ -132,8 +135,10 @@ public class NotificationDeliveryTxnService {
             return true;
         }
         String subject = payload.title() != null && !payload.title().isBlank() ? payload.title() : "Palmart";
-        String text = buildSmsBody(payload);
-        String html = buildNotificationHtml(payload);
+        String text = OpenInPalmartEmail.text(
+                frontendBaseUrl, payload.title(), payload.body(), payload.actionUrl());
+        String html = OpenInPalmartEmail.html(
+                frontendBaseUrl, payload.title(), payload.body(), payload.actionUrl());
         try {
             outboundMailService.sendNotificationEmail(user.getEmail().trim(), subject, text, html);
             markSent(delivery, "mail");
@@ -142,24 +147,6 @@ public class NotificationDeliveryTxnService {
             delivery.setLastError(truncate(ex.getMessage()));
             return false;
         }
-    }
-
-    private static String buildNotificationHtml(ParsedPayload payload) {
-        String title = payload.title() != null && !payload.title().isBlank() ? payload.title() : "Palmart";
-        String body = payload.body() != null ? payload.body() : "";
-        String link = payload.actionUrl() != null && !payload.actionUrl().isBlank() ? payload.actionUrl() : "/";
-        return """
-                <!DOCTYPE html><html><body style="font-family:sans-serif;line-height:1.5">
-                <h2>%s</h2><p>%s</p><p><a href="%s">Open in Palmart</a></p>
-                </body></html>
-                """.formatted(escapeHtml(title), escapeHtml(body), escapeHtml(link));
-    }
-
-    private static String escapeHtml(String raw) {
-        if (raw == null) {
-            return "";
-        }
-        return raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     private static String truncate(String raw) {

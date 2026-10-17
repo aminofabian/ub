@@ -1,20 +1,22 @@
 package zelisline.ub.integrations.easytax.api.dto;
 
 /**
- * Read model for the EasyTax integration. The password is never returned —
- * only {@code hasPassword} so the UI can show whether one is stored.
+ * Read model for the tenant's EasyTax integration. The password is never returned —
+ * only {@code hasPassword}. The endpoint and platform availability are read-only
+ * values supplied by the platform administrator.
  */
 public record EasyTaxSettingsResponse(
         boolean enabled,
         String environment,
-        String baseUrl,
         String username,
         boolean hasPassword,
         String tin,
-        String branchId,
-        String deviceSerial,
-        /** Every required field is present, so the integration can run. */
+        /** This tenant has supplied username, password, and TIN. */
         boolean configured,
+        /** The platform administrator has enabled EasyTax. */
+        boolean platformEnabled,
+        /** Endpoint the tenant will use for the selected environment; null when unavailable. */
+        String resolvedBaseUrl,
         String lastTestedAt,
         Boolean lastTestOk,
         String lastTestMessage

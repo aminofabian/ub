@@ -20,9 +20,9 @@ import zelisline.ub.integrations.easytax.repository.EasyTaxSettingsRepository;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 
 /**
- * Owns the opt-in EasyTax (KRA eTIMS) configuration for a business: reading and
- * updating settings, testing connectivity, and resolving the active config for
- * the submission pipeline to consume.
+ * Owns the tenant's opt-in EasyTax configuration. The endpoint comes from
+ * {@link PlatformEasyTaxSettingsService}; the tenant supplies only credentials and TIN,
+ * and each branch supplies its KRA branch id + device serial.
  */
 @Service
 @RequiredArgsConstructor
@@ -31,6 +31,7 @@ public class EasyTaxSettingsService {
     private static final int MESSAGE_MAX = 500;
 
     private final EasyTaxSettingsRepository repository;
+    private final PlatformEasyTaxSettingsService platformSettingsService;
     private final EasyTaxClient client;
     private final CredentialEncryptionService encryptionService;
 
@@ -46,20 +47,11 @@ public class EasyTaxSettingsService {
         if (request.environment() != null) {
             settings.setEnvironment(parseEnvironment(request.environment()));
         }
-        if (request.baseUrl() != null) {
-            settings.setBaseUrl(trimToNull(request.baseUrl()));
-        }
         if (request.username() != null) {
             settings.setUsername(trimToNull(request.username()));
         }
         if (request.tin() != null) {
             settings.setTin(trimToNull(request.tin()));
-        }
-        if (request.branchId() != null) {
-            settings.setBranchId(trimToNull(request.branchId()));
-        }
-        if (request.deviceSerial() != null) {
-            settings.setDeviceSerial(trimToNull(request.deviceSerial()));
         }
         if (request.password() != null && !request.password().isBlank()) {
             settings.setPasswordEncrypted(encryptionService.encryptSecret(request.password()));
@@ -70,15 +62,18 @@ public class EasyTaxSettingsService {
 
         if (settings.isEnabled() && !settings.isConfigured()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Add the EasyTax base URL, username, password, TIN, branch ID, and device serial "
-                            + "before enabling the integration");
+                    "Add the EasyTax username, password, and TIN before enabling the integration");
+        }
+        if (settings.isEnabled() && !platformSettingsService.isEnabled()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "EasyTax is not enabled by the platform administrator");
         }
 
         repository.save(settings);
         return toResponse(settings);
     }
 
-    /** True when the shop has opted in. Cheap check for other services. */
+    /** True when the tenant has opted in. */
     @Transactional(readOnly = true)
     public boolean isEnabled(String businessId) {
         return repository.findById(businessId)
@@ -87,8 +82,8 @@ public class EasyTaxSettingsService {
     }
 
     /**
-     * Resolved settings when the business has opted in and is fully configured.
-     * The submission pipeline should treat an empty result as "do not call EasyTax".
+     * Resolved settings when the tenant has opted in and is fully configured. The
+     * submission pipeline should treat an empty result as "do not call EasyTax".
      */
     @Transactional(readOnly = true)
     public Optional<EasyTaxSettings> resolveActive(String businessId) {
@@ -97,20 +92,27 @@ public class EasyTaxSettingsService {
                 .filter(EasyTaxSettings::isConfigured);
     }
 
+    /** Endpoint for these settings, from the platform configuration. */
+    @Transactional(readOnly = true)
+    public Optional<String> resolveBaseUrl(EasyTaxSettings settings) {
+        return platformSettingsService.resolveBaseUrl(settings.getEnvironment());
+    }
+
     @Transactional
     public EasyTaxTestResponse testConnection(String businessId) {
         EasyTaxSettings settings = loadOrDisabled(businessId);
-        if (settings.getBaseUrl() == null || settings.getBaseUrl().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Add the EasyTax base URL before testing the connection");
-        }
         if (settings.getPasswordEncrypted() == null || settings.getPasswordEncrypted().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Add the EasyTax password before testing the connection");
         }
 
+        String baseUrl = resolveBaseUrl(settings)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "EasyTax is not available for " + environmentLabel(settings.getEnvironment())
+                                + ". Ask your platform administrator to enable it and set the endpoint."));
+
         String password = encryptionService.decrypt(settings.getPasswordEncrypted());
-        EasyTaxClient.ProbeResult result = client.probe(settings.getBaseUrl(), settings.getUsername(), password);
+        EasyTaxClient.ProbeResult result = client.probe(baseUrl, settings.getUsername(), password);
 
         settings.setLastTestedAt(Instant.now());
         settings.setLastTestOk(result.ok());
@@ -128,6 +130,26 @@ public class EasyTaxSettingsService {
                 .orElseGet(() -> EasyTaxSettings.disabledFor(businessId));
     }
 
+    private EasyTaxSettingsResponse toResponse(EasyTaxSettings settings) {
+        EasyTaxSettingsResponse response = new EasyTaxSettingsResponse(
+                settings.isEnabled(),
+                settings.getEnvironment() != null ? settings.getEnvironment().name() : null,
+                settings.getUsername(),
+                settings.getPasswordEncrypted() != null && !settings.getPasswordEncrypted().isBlank(),
+                settings.getTin(),
+                settings.isConfigured(),
+                platformSettingsService.isEnabled(),
+                platformSettingsService.resolveBaseUrl(settings.getEnvironment()).orElse(null),
+                settings.getLastTestedAt() != null ? settings.getLastTestedAt().toString() : null,
+                settings.getLastTestOk(),
+                settings.getLastTestMessage());
+        return response;
+    }
+
+    private static String environmentLabel(EasyTaxEnvironment environment) {
+        return environment == EasyTaxEnvironment.PRODUCTION ? "the production environment" : "the sandbox";
+    }
+
     private static EasyTaxEnvironment parseEnvironment(String raw) {
         String normalized = raw.trim().toUpperCase(Locale.ROOT);
         for (EasyTaxEnvironment candidate : EasyTaxEnvironment.values()) {
@@ -137,22 +159,6 @@ public class EasyTaxSettingsService {
         }
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "environment must be SANDBOX or PRODUCTION");
-    }
-
-    private static EasyTaxSettingsResponse toResponse(EasyTaxSettings settings) {
-        return new EasyTaxSettingsResponse(
-                settings.isEnabled(),
-                settings.getEnvironment() != null ? settings.getEnvironment().name() : null,
-                settings.getBaseUrl(),
-                settings.getUsername(),
-                settings.getPasswordEncrypted() != null && !settings.getPasswordEncrypted().isBlank(),
-                settings.getTin(),
-                settings.getBranchId(),
-                settings.getDeviceSerial(),
-                settings.isConfigured(),
-                settings.getLastTestedAt() != null ? settings.getLastTestedAt().toString() : null,
-                settings.getLastTestOk(),
-                settings.getLastTestMessage());
     }
 
     private static String trimToNull(String value) {

@@ -14,12 +14,12 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * Per-business EasyTax (KRA eTIMS) integration settings.
+ * Per-business EasyTax (KRA eTIMS) opt-in and credentials.
  *
- * <p>This row is the opt-in: {@link #enabled} is false until a shop chooses to
- * turn the integration on and supplies the device details. The password is
- * never stored in the clear — {@link #passwordEncrypted} holds the AES-256-GCM
- * blob produced by {@code CredentialEncryptionService}.
+ * <p>The EasyTax endpoint is platform-owned (see {@link PlatformEasyTaxSettings}); the
+ * tenant only chooses an environment. KRA branch id and device serial live per branch
+ * in {@link EasyTaxBranchSettings}. The password is never stored in the clear —
+ * {@link #passwordEncrypted} holds the AES-256-GCM blob.
  */
 @Getter
 @Setter
@@ -38,9 +38,6 @@ public class EasyTaxSettings {
     @Column(name = "environment", nullable = false, length = 16)
     private EasyTaxEnvironment environment = EasyTaxEnvironment.SANDBOX;
 
-    @Column(name = "base_url", length = 255)
-    private String baseUrl;
-
     @Column(name = "username", length = 191)
     private String username;
 
@@ -49,12 +46,6 @@ public class EasyTaxSettings {
 
     @Column(name = "tin", length = 32)
     private String tin;
-
-    @Column(name = "branch_id", length = 32)
-    private String branchId;
-
-    @Column(name = "device_serial", length = 64)
-    private String deviceSerial;
 
     @Column(name = "last_tested_at")
     private Instant lastTestedAt;
@@ -71,14 +62,9 @@ public class EasyTaxSettings {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    /** True when every field the API needs before it can talk to EasyTax is present. */
+    /** True when this tenant has supplied everything it owns before it can run. */
     public boolean isConfigured() {
-        return isPresent(baseUrl)
-                && isPresent(username)
-                && isPresent(passwordEncrypted)
-                && isPresent(tin)
-                && isPresent(branchId)
-                && isPresent(deviceSerial);
+        return isPresent(username) && isPresent(passwordEncrypted) && isPresent(tin);
     }
 
     private static boolean isPresent(String value) {

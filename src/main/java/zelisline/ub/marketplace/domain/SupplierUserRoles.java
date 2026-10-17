@@ -20,6 +20,8 @@ public final class SupplierUserRoles {
     public static final String PERM_MONEY_WRITE = "supplier.money.write";
     public static final String PERM_PROFILE_WRITE = "supplier.profile.write";
     public static final String PERM_TEAM_MANAGE = "supplier.team.manage";
+    /** EasyTax / KRA eTIMS opt-in and credentials (supplier files under its own TIN). */
+    public static final String PERM_TAX_MANAGE = "supplier.tax.manage";
 
     public static final Set<String> ADMIN_PERMISSIONS = Set.of(
             PERM_CATALOG_READ,
@@ -30,7 +32,8 @@ public final class SupplierUserRoles {
             PERM_MONEY_READ,
             PERM_MONEY_WRITE,
             PERM_PROFILE_WRITE,
-            PERM_TEAM_MANAGE
+            PERM_TEAM_MANAGE,
+            PERM_TAX_MANAGE
     );
 
     public static final Set<String> STAFF_PERMISSIONS = Set.of(

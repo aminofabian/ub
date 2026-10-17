@@ -17,6 +17,8 @@ public class OAuthLoginState {
 
     public static final String INTENT_SIGN_IN = "sign_in";
     public static final String INTENT_SIGN_UP = "sign_up";
+    /** Verified Google identity waiting for the person to pick one of their shops. */
+    public static final String INTENT_SHOP_PICK = "shop_pick";
 
     @Id
     @Column(name = "state_hash", length = 64, nullable = false)

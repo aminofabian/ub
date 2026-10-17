@@ -11,9 +11,11 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.identity.api.dto.GoogleOAuthCompleteShopRequest;
 import zelisline.ub.identity.api.dto.GoogleOAuthExchangeRequest;
 import zelisline.ub.identity.api.dto.GoogleOAuthExchangeResponse;
 import zelisline.ub.identity.api.dto.GoogleOAuthPublicConfigResponse;
+import zelisline.ub.identity.api.dto.GoogleOAuthShopChoiceResponse;
 import zelisline.ub.identity.api.dto.GoogleOAuthStartRequest;
 import zelisline.ub.identity.api.dto.GoogleOAuthStartResponse;
 import zelisline.ub.identity.application.GoogleOAuthService;
@@ -54,5 +56,18 @@ public class GoogleOAuthController {
     public ResponseEntity<GoogleOAuthExchangeResponse> exchange(
             HttpServletRequest http, @Valid @RequestBody GoogleOAuthExchangeRequest body) {
         return googleOAuthService.exchange(http, body.code(), body.state());
+    }
+
+    /** Staff shops for a Google sign-in that paused because the email is on more than one. */
+    @GetMapping("/api/v1/auth/oauth/google/shops")
+    public GoogleOAuthShopChoiceResponse shops(HttpServletRequest http) {
+        return googleOAuthService.shops(http);
+    }
+
+    /** Finish Google sign-in after the person picks one of those shops. */
+    @PostMapping("/api/v1/auth/oauth/google/complete")
+    public ResponseEntity<GoogleOAuthExchangeResponse> completeShop(
+            HttpServletRequest http, @Valid @RequestBody GoogleOAuthCompleteShopRequest body) {
+        return googleOAuthService.completeShop(http, body.slug());
     }
 }

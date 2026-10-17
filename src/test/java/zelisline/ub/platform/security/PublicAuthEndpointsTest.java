@@ -49,6 +49,9 @@ class PublicAuthEndpointsTest {
     void googleOauthRoutesBypassJwtFilter() {
         assertTrue(PublicAuthEndpoints.matches("/api/v1/auth/oauth/google/start"));
         assertTrue(PublicAuthEndpoints.matches("/api/v1/auth/oauth/google/callback"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/auth/oauth/google/exchange"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/auth/oauth/google/shops"));
+        assertTrue(PublicAuthEndpoints.matches("/api/v1/auth/oauth/google/complete"));
         assertTrue(PublicAuthEndpoints.matches("/api/v1/public/auth/oauth/google"));
         assertFalse(PublicAuthEndpoints.matches("/api/v1/auth/oauth/google"));
     }

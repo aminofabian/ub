@@ -52,6 +52,8 @@ public final class PublicAuthEndpoints {
             "/api/v1/auth/oauth/google/start",
             "/api/v1/auth/oauth/google/callback",
             "/api/v1/auth/oauth/google/exchange",
+            "/api/v1/auth/oauth/google/shops",
+            "/api/v1/auth/oauth/google/complete",
             "/api/v1/public/auth/oauth/google",
             "/api/v1/supplier-portal/auth/login",
             "/api/v1/supplier-portal/auth/claim/config",

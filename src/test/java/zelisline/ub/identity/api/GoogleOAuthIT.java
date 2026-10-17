@@ -10,6 +10,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.time.Instant;
 import java.util.UUID;
 
+import jakarta.servlet.http.Cookie;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,10 +23,17 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import zelisline.ub.identity.application.GoogleOAuthService;
+import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.identity.domain.OAuthLoginState;
+import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.domain.UserOAuthIdentity;
+import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.OAuthLoginStateRepository;
 import zelisline.ub.identity.repository.UserOAuthIdentityRepository;
+import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.tenancy.domain.Business;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.platform.api.dto.UpdatePlatformIntegrationsRequest;
 import zelisline.ub.platform.application.PlatformIntegrationSettingsService;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
@@ -53,6 +62,12 @@ class GoogleOAuthIT {
 
     @Autowired
     private UserOAuthIdentityRepository userOAuthIdentityRepository;
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private BusinessRepository businessRepository;
 
     @MockitoBean
     @SuppressWarnings("unused")
@@ -170,6 +185,70 @@ class GoogleOAuthIT {
     }
 
     @Test
+    void shopPick_listsStaffShopsThenSignsIntoTheChosenOne() throws Exception {
+        String email = "multi-shop-" + UUID.randomUUID() + "@example.com";
+        Business alpha = shop("alpha-" + UUID.randomUUID().toString().substring(0, 8), "Alpha Mart");
+        Business beta = shop("beta-" + UUID.randomUUID().toString().substring(0, 8), "Beta Mart");
+        staffMember(alpha.getId(), email);
+        staffMember(beta.getId(), email);
+        String token = "pick-" + UUID.randomUUID();
+        String binding = "bind-" + UUID.randomUUID();
+        saveShopPick(token, binding, email);
+
+        mockMvc.perform(get("/api/v1/auth/oauth/google/shops")
+                        .cookie(shopPickCookies(token, binding)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.email").value(email))
+                .andExpect(jsonPath("$.destinations[?(@.slug == '" + alpha.getSlug() + "')]").exists())
+                .andExpect(jsonPath("$.destinations[?(@.slug == '" + beta.getSlug() + "')]").exists())
+                .andExpect(jsonPath("$.destinations[?(@.door == 'SHOPPER')]").doesNotExist());
+
+        mockMvc.perform(post("/api/v1/auth/oauth/google/complete")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"slug\":\"" + alpha.getSlug() + "\"}")
+                        .cookie(shopPickCookies(token, binding)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").isNotEmpty())
+                .andExpect(jsonPath("$.slug").value(alpha.getSlug()));
+
+        mockMvc.perform(post("/api/v1/auth/oauth/google/complete")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"slug\":\"" + beta.getSlug() + "\"}")
+                        .cookie(shopPickCookies(token, binding)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("expired_state"));
+    }
+
+    @Test
+    void shopPick_rejectsAShopTheGoogleAccountIsNotOn() throws Exception {
+        String email = "one-shop-" + UUID.randomUUID() + "@example.com";
+        Business alpha = shop("only-" + UUID.randomUUID().toString().substring(0, 8), "Only Mart");
+        staffMember(alpha.getId(), email);
+        String token = "pick-" + UUID.randomUUID();
+        String binding = "bind-" + UUID.randomUUID();
+        saveShopPick(token, binding, email);
+
+        mockMvc.perform(post("/api/v1/auth/oauth/google/complete")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"slug\":\"not-their-shop\"}")
+                        .cookie(shopPickCookies(token, binding)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("unknown_shop"));
+
+        mockMvc.perform(get("/api/v1/auth/oauth/google/shops")
+                        .cookie(shopPickCookies(token, binding)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.email").value(email));
+    }
+
+    @Test
+    void shopPick_missingCookieExpires() throws Exception {
+        mockMvc.perform(get("/api/v1/auth/oauth/google/shops"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("expired_state"));
+    }
+
+    @Test
     void googleSecret_encryptRoundTrip() {
         enableGoogle();
         var resolved = platformIntegrationSettingsService.resolveGoogleOauth();
@@ -197,6 +276,46 @@ class GoogleOAuthIT {
         assertThat(userOAuthIdentityRepository.findByUserId(userId)).hasSize(1);
         userOAuthIdentityRepository.deleteByUserId(userId);
         assertThat(userOAuthIdentityRepository.findByUserId(userId)).isEmpty();
+    }
+
+    private Business shop(String slug, String name) {
+        Business business = new Business();
+        business.setSlug(slug);
+        business.setName(name);
+        return businessRepository.save(business);
+    }
+
+    private void staffMember(String businessId, String email) {
+        User user = new User();
+        user.setBusinessId(businessId);
+        user.setEmail(email);
+        user.setName("Owner");
+        user.setRoleId(UUID.randomUUID().toString());
+        user.setStatus(UserStatus.ACTIVE);
+        user.setPasswordHash("$2a$10$placeholderplaceholderplaceholder");
+        userRepository.save(user);
+    }
+
+    private void saveShopPick(String token, String binding, String email) {
+        OAuthLoginState row = new OAuthLoginState();
+        row.setStateHash(TokenHasher.sha256Hex(token));
+        row.setCodeVerifier("shop-pick");
+        row.setIntent(OAuthLoginState.INTENT_SHOP_PICK);
+        row.setNextPath("/business");
+        row.setBrowserBinding(binding);
+        row.setNonce("nonce-nonce");
+        row.setRedirectUri("http://localhost:3000/api/v1/auth/oauth/google/callback");
+        row.setExpiresAt(Instant.now().plusSeconds(600));
+        row.setOnboardDraftJson(
+                "{\"email\":\"" + email + "\",\"subject\":\"google-sub-1\",\"name\":\"Owner\"}");
+        oauthLoginStateRepository.save(row);
+    }
+
+    private static Cookie[] shopPickCookies(String token, String binding) {
+        return new Cookie[] {
+                new Cookie(GoogleOAuthService.SHOP_PICK_COOKIE, token),
+                new Cookie(GoogleOAuthService.BIND_COOKIE, binding)
+        };
     }
 
     private void enableGoogle() {

@@ -36,6 +36,7 @@ public class LedgerBootstrapService {
         ensure(businessId, LedgerAccountCodes.LOYALTY_REDEMPTION_LIABILITY, "Loyalty redemption clearing", "liability");
         ensure(businessId, LedgerAccountCodes.LOYALTY_MARKETING_EXPENSE, "Loyalty marketing expense (earn accrual)", "expense");
         ensure(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE, "Accounts Payable – Suppliers", "liability");
+        ensure(businessId, LedgerAccountCodes.VAT_PAYABLE, "VAT payable", "liability");
         ensure(businessId, LedgerAccountCodes.GOODS_RECEIVED_NOT_INVOICED, "Goods received not invoiced (GRNI)", "liability");
         ensure(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE, "Inventory shrinkage (wastage)", "expense");
         ensure(businessId, LedgerAccountCodes.PURCHASE_PRICE_VARIANCE, "Purchase price variance", "expense");

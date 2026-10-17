@@ -210,6 +210,8 @@ public class WebOrderReceiptService {
                 blankToNull(order.getCustomerPhone()),
                 lines,
                 List.of(new ReceiptPaymentRow(paymentLabel, money(order.getGrandTotal()), null)),
+                // Web orders are not taxed at checkout, so they carry no VAT line.
+                null,
                 money(order.getGrandTotal()),
                 null,
                 null,

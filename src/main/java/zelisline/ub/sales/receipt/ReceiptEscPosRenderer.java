@@ -100,6 +100,9 @@ public final class ReceiptEscPosRenderer {
             out.add(padLeft(strip(p.amount()), w));
         }
         out.add(repeat('-', w));
+        if (s.taxTotalDisplay() != null && !s.taxTotalDisplay().isBlank()) {
+            out.add(padLeft("VAT included " + strip(s.taxTotalDisplay()), w));
+        }
         out.add(padLeft("TOTAL " + strip(s.grandTotalDisplay()) + " " + strip(s.currency()), w));
         if (s.cashReceivedDisplay() != null && !s.cashReceivedDisplay().isBlank()) {
             out.add(padLeft("Received " + strip(s.cashReceivedDisplay()), w));

@@ -161,6 +161,10 @@ public class SaleReceiptService {
             changeGivenDisplay = money(cashReceived.subtract(sale.getGrandTotal()));
         }
 
+        String taxTotalDisplay = sale.getTaxTotal() != null && sale.getTaxTotal().signum() > 0
+                ? money(sale.getTaxTotal())
+                : null;
+
         return new ReceiptSnapshot(
                 business.getName(),
                 blankToNull(logoUrl),
@@ -182,6 +186,7 @@ public class SaleReceiptService {
                 customerPhone,
                 lines,
                 payments,
+                taxTotalDisplay,
                 money(sale.getGrandTotal()),
                 cashReceivedDisplay,
                 changeGivenDisplay,

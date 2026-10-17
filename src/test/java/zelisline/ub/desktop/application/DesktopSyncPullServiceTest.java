@@ -170,6 +170,7 @@ class DesktopSyncPullServiceTest {
             "completed",
             "idem-" + id,
             new BigDecimal("1500.00"),
+            new BigDecimal("206.90"),
             new BigDecimal("1500.00"),
             STAFF_ID,
             "customer-1",
@@ -182,7 +183,8 @@ class DesktopSyncPullServiceTest {
                 "line-1", 0, "ITEM", "Tusker 500ml", "item-1",
                 new BigDecimal("1"), new BigDecimal("1500.00"), new BigDecimal("1500.00"),
                 new BigDecimal("1200.00"), new BigDecimal("1200.00"), new BigDecimal("300.00"),
-                null, null, null, null)),
+                null, null, null, null,
+                "B", new BigDecimal("16.000"), new BigDecimal("206.90"))),
             List.of(new CloudSalesSnapshot.CloudSalePaymentData(
                 "pay-1", "CASH", new BigDecimal("1500.00"), null, 0))
         );
@@ -237,10 +239,17 @@ class DesktopSyncPullServiceTest {
         server.verify();
         assertEquals(1, inserted);
 
-        // The sale is stamped synced so it is never pushed back up.
+        // The sale is stamped synced so it is never pushed back up, and its tax
+        // breakdown rides the feed so cloud-originated sales carry VAT on the till.
         verify(saleRepository).save(org.mockito.ArgumentMatchers.argThat(sale ->
-            "sale-1".equals(sale.getId()) && sale.getCloudSyncedAt() != null));
-        verify(saleItemRepository).save(any());
+            "sale-1".equals(sale.getId())
+                && sale.getCloudSyncedAt() != null
+                && sale.getTaxTotal() != null
+                && sale.getTaxTotal().compareTo(new BigDecimal("206.90")) == 0));
+        verify(saleItemRepository).save(org.mockito.ArgumentMatchers.argThat(item ->
+            "B".equals(item.getTaxCode())
+                && item.getTaxAmount() != null
+                && item.getTaxAmount().compareTo(new BigDecimal("206.90")) == 0));
         verify(salePaymentRepository).save(any());
 
         // The placeholder shift is closed AND stamped synced so the push side

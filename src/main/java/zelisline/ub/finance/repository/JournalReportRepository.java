@@ -249,6 +249,40 @@ public interface JournalReportRepository extends JpaRepository<JournalLine, Stri
             @Param("branchId") String branchId
     );
 
+    interface TaxCodeVatRow {
+        String getTaxCode();
+        BigDecimal getTaxableAmount();
+        BigDecimal getTaxAmount();
+        Number getLineCount();
+    }
+
+    /**
+     * Sales mix by KRA tax code for completed sales in the period. The taxable base is
+     * {@code line_total − tax_amount} (prices are tax-inclusive). Lines with no resolved
+     * tax rate group under an empty code. Gross of refund adjustments.
+     */
+    @Query(value = """
+            select coalesce(si.tax_code, '')                          as taxCode,
+                   coalesce(sum(si.line_total - si.tax_amount), 0)    as taxableAmount,
+                   coalesce(sum(si.tax_amount), 0)                    as taxAmount,
+                   count(*)                                           as lineCount
+              from sales s
+              join sale_items si on si.sale_id = s.id
+             where s.business_id = :businessId
+               and s.status = 'completed'
+               and cast(s.sold_at as date) >= :from
+               and cast(s.sold_at as date) <= :to
+               and (:branchId is null or s.branch_id = :branchId)
+             group by coalesce(si.tax_code, '')
+             order by taxCode
+            """, nativeQuery = true)
+    List<TaxCodeVatRow> sumVatByTaxCode(
+            @Param("businessId") String businessId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to,
+            @Param("branchId") String branchId
+    );
+
     @Query(value = """
             select count(*)
               from shifts s

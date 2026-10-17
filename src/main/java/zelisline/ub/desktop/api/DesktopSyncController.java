@@ -362,7 +362,8 @@ public class DesktopSyncController {
             t.getName(),
             t.getRatePercent(),
             t.isInclusive(),
-            t.isActive()
+            t.isActive(),
+            t.getEtimsTaxCode()
         );
     }
 
@@ -692,6 +693,7 @@ public class DesktopSyncController {
             sale.getStatus(),
             sale.getIdempotencyKey(),
             sale.getGrandTotal(),
+            sale.getTaxTotal(),
             sale.getCashReceived(),
             sale.getSoldBy(),
             sale.getCustomerId(),
@@ -721,7 +723,10 @@ public class DesktopSyncController {
             item.getRegularUnitPrice(),
             item.getDiscountAmount(),
             item.getDiscountId(),
-            item.getDiscountName()
+            item.getDiscountName(),
+            item.getTaxCode(),
+            item.getTaxRatePercent(),
+            item.getTaxAmount()
         );
     }
 

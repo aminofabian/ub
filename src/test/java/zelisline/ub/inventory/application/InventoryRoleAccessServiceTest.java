@@ -80,8 +80,9 @@ class InventoryRoleAccessServiceTest {
     @Test
     void stockManagerAlwaysGetsPathA() {
         stubRole("stock_manager");
-        stubReceiveStock(false);
 
+        // Path A access is role-based for a stock manager — it does not consult the
+        // receive-stock settings, so this test needs no extra stubbing.
         assertThat(service.grantsDelegatedPathAAccess(BUSINESS_ID, ROLE_ID)).isTrue();
     }
 
@@ -116,25 +117,4 @@ class InventoryRoleAccessServiceTest {
                 ));
     }
 
-    private void stubReceiveStock(boolean allowStockManager) {
-        Business business = new Business();
-        business.setId(BUSINESS_ID);
-        business.setSettings("{}");
-        when(businessRepository.findById(BUSINESS_ID)).thenReturn(Optional.of(business));
-        when(businessInventorySettingsService.readFromSettingsJson(any()))
-                .thenReturn(new InventorySettingsResponse(
-                        StocktakeSettingsResponse.defaults(),
-                        null,
-                        null,
-                        new zelisline.ub.tenancy.api.dto.ReceiveStockSettingsResponse(
-                                true,
-                                allowStockManager,
-                                true,
-                                false
-                        ),
-                        null,
-                        CheckoutSettingsResponse.defaults(),
-                        CatalogSettingsResponse.defaults()
-                ));
-    }
 }

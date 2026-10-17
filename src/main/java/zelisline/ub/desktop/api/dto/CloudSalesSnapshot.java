@@ -27,6 +27,8 @@ public record CloudSalesSnapshot(
             String status,
             String idempotencyKey,
             BigDecimal grandTotal,
+            /** Tax contained in {@link #grandTotal} (prices are tax-inclusive). */
+            BigDecimal taxTotal,
             BigDecimal cashReceived,
             String soldBy,
             String customerId,
@@ -54,7 +56,12 @@ public record CloudSalesSnapshot(
             BigDecimal regularUnitPrice,
             BigDecimal discountAmount,
             String discountId,
-            String discountName
+            String discountName,
+            /** KRA eTIMS tax code (A/B/C/D/E) captured at sale time; null when untaxed. */
+            String taxCode,
+            BigDecimal taxRatePercent,
+            /** Tax contained in {@link #lineTotal} (prices are tax-inclusive). */
+            BigDecimal taxAmount
     ) {}
 
     public record CloudSalePaymentData(

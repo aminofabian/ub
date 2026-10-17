@@ -35,6 +35,7 @@ import zelisline.ub.pricing.api.dto.PostSellingPriceRequest;
 import zelisline.ub.pricing.api.dto.PostTaxRateRequest;
 import zelisline.ub.pricing.api.dto.PriceRuleResponse;
 import zelisline.ub.pricing.api.dto.PutPriceRuleRequest;
+import zelisline.ub.pricing.api.dto.PutTaxRateRequest;
 import zelisline.ub.pricing.api.dto.SellPriceSuggestionResponse;
 import zelisline.ub.pricing.api.dto.SellingPriceResponse;
 import zelisline.ub.pricing.api.dto.TaxRateResponse;
@@ -136,7 +137,7 @@ public class PricingService {
                 }
                 existing.setSetBy(userId);
                 sellingPriceRepository.save(existing);
-                syncCatalogShelfFromSellingPrice(businessId, req.itemId(), existing.getPrice());
+                syncCatalogShelfFromSellingPrice(businessId, req.itemId(), existing.getPrice(), branchId);
                 eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.PriceChangedEvent(
                         businessId, branchId, req.itemId(), itemName(businessId, req.itemId()),
                         oldPrice, req.price()));
@@ -165,7 +166,7 @@ public class PricingService {
         row.setSetBy(userId);
         row.setNotes(req.notes());
         sellingPriceRepository.save(row);
-        syncCatalogShelfFromSellingPrice(businessId, req.itemId(), row.getPrice());
+        syncCatalogShelfFromSellingPrice(businessId, req.itemId(), row.getPrice(), branchId);
         BigDecimal prior = priorForEvent != null ? priorForEvent : BigDecimal.ZERO;
         eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.PriceChangedEvent(
                 businessId, branchId, req.itemId(), itemName(businessId, req.itemId()),
@@ -503,19 +504,48 @@ public class PricingService {
 
     @Transactional
     public TaxRateResponse createTaxRate(String businessId, PostTaxRateRequest req) {
+        if (taxRateRepository.existsByBusinessIdAndName(businessId, req.name())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Tax rate name already exists");
+        }
         TaxRate t = new TaxRate();
         t.setBusinessId(businessId);
         t.setName(req.name());
         t.setRatePercent(req.ratePercent().setScale(3, RoundingMode.HALF_UP));
         t.setInclusive(req.inclusive());
         t.setActive(req.active());
+        t.setEtimsTaxCode(blankToNull(req.etimsTaxCode()));
+        taxRateRepository.save(t);
+        return toTaxDto(t);
+    }
+
+    @Transactional
+    public TaxRateResponse updateTaxRate(String businessId, String taxRateId, PutTaxRateRequest req) {
+        TaxRate t = taxRateRepository.findByIdAndBusinessId(taxRateId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tax rate not found"));
+        if (!t.getName().equals(req.name())
+                && taxRateRepository.existsByBusinessIdAndNameAndIdNot(businessId, req.name(), taxRateId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Tax rate name already exists");
+        }
+        t.setName(req.name());
+        t.setRatePercent(req.ratePercent().setScale(3, RoundingMode.HALF_UP));
+        t.setInclusive(req.inclusive());
+        t.setActive(req.active());
+        t.setEtimsTaxCode(blankToNull(req.etimsTaxCode()));
         taxRateRepository.save(t);
         return toTaxDto(t);
     }
 
     @Transactional(readOnly = true)
     public List<TaxRateResponse> listTaxRates(String businessId) {
-        return taxRateRepository.findByBusinessIdAndActiveIsTrueOrderByNameAsc(businessId).stream()
+        return listTaxRates(businessId, false);
+    }
+
+    @Transactional(readOnly = true)
+    public List<TaxRateResponse> listTaxRates(String businessId, boolean includeInactive) {
+        List<TaxRate> rows = includeInactive
+                ? taxRateRepository.findByBusinessIdOrderByNameAsc(businessId)
+                : taxRateRepository.findByBusinessIdAndActiveIsTrueOrderByNameAsc(businessId);
+        return rows.stream()
                 .map(this::toTaxDto)
                 .toList();
     }
@@ -600,11 +630,24 @@ public class PricingService {
      * Keep catalog {@code bundlePrice} (default shelf / sell) aligned with the latest posted
      * selling price so supplier links, product list, and POS fallbacks all show the new price.
      */
+    /**
+     * Keeps the catalog shelf ({@code items.bundle_price}) aligned with the pricing module's
+     * open selling price.
+     *
+     * <p>Only a <b>business-wide</b> selling price may set the shelf: {@code bundle_price} is a
+     * single business-wide value read by the storefront, barcode lookup, and as the last-resort
+     * fallback in {@link #getCurrentOpenSellingPrice}. Letting a branch-scoped price write it
+     * would silently change every other branch's fallback (and the public price).
+     */
     private void syncCatalogShelfFromSellingPrice(
             String businessId,
             String itemId,
-            BigDecimal price
+            BigDecimal price,
+            String branchId
     ) {
+        if (branchId != null) {
+            return;
+        }
         if (price == null || price.signum() <= 0) {
             return;
         }
@@ -663,6 +706,12 @@ public class PricingService {
     }
 
     private TaxRateResponse toTaxDto(TaxRate t) {
-        return new TaxRateResponse(t.getId(), t.getName(), t.getRatePercent(), t.isInclusive());
+        return new TaxRateResponse(
+                t.getId(),
+                t.getName(),
+                t.getRatePercent(),
+                t.isInclusive(),
+                t.isActive(),
+                t.getEtimsTaxCode());
     }
 }

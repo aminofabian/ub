@@ -49,6 +49,7 @@ import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.sales.SalesConstants;
+import zelisline.ub.sales.application.SaleTaxService;
 import zelisline.ub.sales.domain.SaleItem;
 import zelisline.ub.sales.domain.SaleLineKinds;
 import zelisline.ub.sales.repository.SaleItemRepository;
@@ -69,6 +70,7 @@ class DesktopSyncIngestServiceTest {
     private final SaleRepository saleRepository = mock(SaleRepository.class);
     private final SaleItemRepository saleItemRepository = mock(SaleItemRepository.class);
     private final SalePaymentRepository salePaymentRepository = mock(SalePaymentRepository.class);
+    private final SaleTaxService saleTaxService = mock(SaleTaxService.class);
     private final CustomerRepository customerRepository = mock(CustomerRepository.class);
     private final CustomerPhoneRepository customerPhoneRepository = mock(CustomerPhoneRepository.class);
     private final CreditAccountRepository creditAccountRepository = mock(CreditAccountRepository.class);
@@ -88,7 +90,7 @@ class DesktopSyncIngestServiceTest {
     private DesktopSyncIngestService service() {
         return new DesktopSyncIngestService(
             shiftRepository, saleRepository, saleItemRepository,
-            salePaymentRepository, customerRepository, customerPhoneRepository,
+            salePaymentRepository, saleTaxService, customerRepository, customerPhoneRepository,
             creditAccountRepository, supplierRepository, supplierContactRepository,
             rawPurchaseSessionRepository, rawPurchaseLineRepository,
             supplierInvoiceRepository, supplierInvoiceLineRepository,

@@ -95,7 +95,9 @@ public record MasterDataSnapshot(
             String name,
             BigDecimal ratePercent,
             boolean inclusive,
-            boolean active
+            boolean active,
+            /** KRA eTIMS tax code (A/B/C/D/E); null when the shop has not set one. */
+            String etimsTaxCode
     ) {}
 
     /**

@@ -150,7 +150,16 @@ class StockTakeRestockIT {
         b.setId(TENANT);
         b.setName("Restock Shop");
         b.setSlug("restock-shop");
-        b.setSettings("{}");
+        // Keep the counting window open so morning-session ITs pass at any clock time
+        // (mirrors DailyStockAuditIT).
+        b.setSettings(
+                "{\"inventory\":{\"stocktake\":{"
+                        + "\"morningStartsAt\":\"00:00\","
+                        + "\"morningEndsAt\":\"23:00\","
+                        + "\"eveningStartsAt\":\"23:00\","
+                        + "\"eveningEndsAt\":\"23:59\""
+                        + "}}}");
+        b.setTimezone("Africa/Nairobi");
         businessRepository.save(b);
         ledgerBootstrapService.ensureStandardAccounts(TENANT);
 

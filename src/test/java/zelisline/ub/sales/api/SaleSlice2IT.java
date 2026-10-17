@@ -49,10 +49,17 @@ import zelisline.ub.credits.repository.PublicPaymentClaimRepository;
 import zelisline.ub.credits.repository.WalletTransactionRepository;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.CreateVariantRequest;
+import zelisline.ub.catalog.domain.Category;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.ItemCatalogService;
+import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.pricing.domain.TaxRate;
+import zelisline.ub.pricing.repository.TaxRateRepository;
+import zelisline.ub.finance.VatBucket;
+import zelisline.ub.finance.application.FinanceReportsService;
+import zelisline.ub.finance.application.VatReportCsvService;
 import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.domain.JournalLine;
 import zelisline.ub.finance.domain.LedgerAccount;
@@ -163,6 +170,14 @@ class SaleSlice2IT {
     @Autowired
     private LedgerAccountRepository ledgerAccountRepository;
     @Autowired
+    private CategoryRepository categoryRepository;
+    @Autowired
+    private TaxRateRepository taxRateRepository;
+    @Autowired
+    private FinanceReportsService financeReportsService;
+    @Autowired
+    private VatReportCsvService vatReportCsvService;
+    @Autowired
     private CustomerRepository customerRepository;
     @Autowired
     private CustomerPhoneRepository customerPhoneRepository;
@@ -215,6 +230,8 @@ class SaleSlice2IT {
         shiftRepository.deleteAll();
         inventoryBatchRepository.deleteAll();
         itemRepository.deleteAll();
+        categoryRepository.deleteAll();
+        taxRateRepository.deleteAll();
         itemTypeRepository.deleteAll();
         userRepository.deleteAll();
         rolePermissionRepository.deleteAll();
@@ -1910,6 +1927,103 @@ class SaleSlice2IT {
                         null, null, null, null, null, null),
                 null
         ).id();
+    }
+
+    @Test
+    void postSale_taxedItem_splitsRevenueAndPostsVatPayable() throws Exception {
+        TaxRate vat = new TaxRate();
+        vat.setBusinessId(TENANT);
+        vat.setName("VAT 16");
+        vat.setRatePercent(new BigDecimal("16"));
+        vat.setInclusive(true);
+        vat.setActive(true);
+        vat.setEtimsTaxCode("B");
+        taxRateRepository.save(vat);
+
+        Category category = new Category();
+        category.setBusinessId(TENANT);
+        category.setName("Taxed goods");
+        category.setSlug("taxed-goods");
+        category.setPosition(0);
+        category.setDefaultTaxRateId(vat.getId());
+        categoryRepository.save(category);
+
+        var seededItem = itemRepository.findById(itemId).orElseThrow();
+        seededItem.setCategoryId(category.getId());
+        itemRepository.save(seededItem);
+
+        openShift(new BigDecimal("50.00"));
+
+        // 116.00 gross at 16% inclusive contains 16.00 VAT and 100.00 net.
+        String body = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":1,"unitPrice":116}],"payments":[{"method":"cash","amount":116}]}
+                """.formatted(branchId, itemId);
+
+        MvcResult r = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "tax-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String saleId = objectMapper.readTree(r.getResponse().getContentAsString()).get("id").asText();
+        Sale taxedSale = saleRepository.findById(saleId).orElseThrow();
+        assertThat(taxedSale.getTaxTotal()).isEqualByComparingTo("16.00");
+
+        LedgerAccount revenue = ledgerAccountRepository
+                .findByBusinessIdAndCode(TENANT, LedgerAccountCodes.SALES_REVENUE).orElseThrow();
+        LedgerAccount vatPayable = ledgerAccountRepository
+                .findByBusinessIdAndCode(TENANT, "2200").orElseThrow();
+
+        List<JournalLine> lines = journalLineRepository.findByJournalEntryId(taxedSale.getJournalEntryId());
+        assertJournalBalanced(lines);
+        assertThat(lines).anySatisfy(l -> {
+            assertThat(l.getLedgerAccountId()).isEqualTo(revenue.getId());
+            assertThat(l.getCredit()).isEqualByComparingTo("100.00");
+        });
+        assertThat(lines).anySatisfy(l -> {
+            assertThat(l.getLedgerAccountId()).isEqualTo(vatPayable.getId());
+            assertThat(l.getCredit()).isEqualByComparingTo("16.00");
+        });
+
+        // The VAT report reads the same ledger, so the sale's tax shows up as collectable VAT.
+        var vatReport = financeReportsService.vatReport(
+                TENANT, LocalDate.now().minusDays(1), LocalDate.now().plusDays(1), null);
+        assertThat(vatReport.vatCollected()).isEqualByComparingTo("16.00");
+        assertThat(vatReport.vatReversed()).isEqualByComparingTo("0.00");
+        assertThat(vatReport.vatPayable()).isEqualByComparingTo("16.00");
+        assertThat(vatReport.netRevenue()).isEqualByComparingTo("100.00");
+        assertThat(vatReport.byTaxCode()).anySatisfy(row -> {
+            assertThat(row.taxCode()).isEqualTo("B");
+            assertThat(row.taxableAmount()).isEqualByComparingTo("100.00");
+            assertThat(row.taxAmount()).isEqualByComparingTo("16.00");
+        });
+
+        // Bucketed variants fold the same ledger movement into day and month buckets.
+        var dailyBuckets = financeReportsService.vatReportBuckets(
+                TENANT, LocalDate.now().minusDays(1), LocalDate.now().plusDays(1), VatBucket.DAY, null);
+        assertThat(dailyBuckets).hasSize(3);
+        assertThat(dailyBuckets).anySatisfy(b -> {
+            assertThat(b.vatPayable()).isEqualByComparingTo("16.00");
+            assertThat(b.netRevenue()).isEqualByComparingTo("100.00");
+        });
+
+        var monthBuckets = financeReportsService.vatReportBuckets(
+                TENANT, LocalDate.now().withDayOfMonth(1), LocalDate.now().plusDays(1), VatBucket.MONTH, null);
+        assertThat(monthBuckets).hasSize(1);
+        assertThat(monthBuckets.getFirst().vatPayable()).isEqualByComparingTo("16.00");
+
+        // The CSV download reuses the same figures, so it cannot drift from the report.
+        String csv = new String(
+                vatReportCsvService.vatReportCsv(
+                        TENANT, LocalDate.now().minusDays(1), LocalDate.now().plusDays(1), VatBucket.DAY, null),
+                StandardCharsets.UTF_8);
+        assertThat(csv).contains("VAT payable,16.00");
+        assertThat(csv).contains("B,100.00,16.00,1");
+        assertThat(csv).contains("Breakdown by day");
     }
 
     private static void assertJournalBalanced(List<JournalLine> lines) {

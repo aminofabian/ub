@@ -20,14 +20,18 @@ import org.springframework.web.server.ResponseStatusException;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.finance.BusinessTimeZones;
 import zelisline.ub.finance.LedgerAccountCodes;
+import zelisline.ub.finance.VatBucket;
 import zelisline.ub.finance.api.dto.BalanceSheetResponse;
 import zelisline.ub.finance.api.dto.DailyProfitPoint;
 import zelisline.ub.finance.api.dto.FinancePulseResponse;
 import zelisline.ub.finance.api.dto.ProfitAndLossResponse;
+import zelisline.ub.finance.api.dto.VatBucketResponse;
+import zelisline.ub.finance.api.dto.VatReportResponse;
 import zelisline.ub.finance.repository.JournalReportRepository;
 import zelisline.ub.finance.repository.JournalReportRepository.AccountBalance;
 import zelisline.ub.finance.repository.JournalReportRepository.SaleAggregate;
 import zelisline.ub.finance.repository.JournalReportRepository.RefundAggregate;
+import zelisline.ub.finance.repository.JournalReportRepository.TaxCodeVatRow;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -368,6 +372,123 @@ public class FinanceReportsService {
                 totalLiabAndEquity,
                 balanced
         );
+    }
+
+    /**
+     * VAT position for a period. The money figures read the ledger's VAT payable and
+     * sales revenue accounts (so voids and refunds are already netted); the tax-code
+     * breakdown reads completed sale lines for the period.
+     */
+    @Transactional(readOnly = true)
+    public VatReportResponse vatReport(String businessId, LocalDate from, LocalDate to, String branchId) {
+        if (from == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "from is required");
+        }
+        LocalDate target = to != null ? to : LocalDate.now(resolveZone(businessId));
+        String resolvedBranch = resolveBranch(businessId, branchId);
+
+        BigDecimal vatCollected = BigDecimal.ZERO;
+        BigDecimal vatReversed = BigDecimal.ZERO;
+        BigDecimal revenueCredit = BigDecimal.ZERO;
+        BigDecimal revenueDebit = BigDecimal.ZERO;
+        for (AccountBalance row : journalReportRepository
+                .sumByAccountForPeriod(businessId, from, target, resolvedBranch)) {
+            if (LedgerAccountCodes.VAT_PAYABLE.equals(row.getCode())) {
+                vatCollected = vatCollected.add(money(row.getCreditTotal()));
+                vatReversed = vatReversed.add(money(row.getDebitTotal()));
+            } else if (LedgerAccountCodes.SALES_REVENUE.equals(row.getCode())) {
+                revenueCredit = revenueCredit.add(money(row.getCreditTotal()));
+                revenueDebit = revenueDebit.add(money(row.getDebitTotal()));
+            }
+        }
+
+        List<VatReportResponse.TaxCodeRow> byTaxCode = new ArrayList<>();
+        for (TaxCodeVatRow row : journalReportRepository
+                .sumVatByTaxCode(businessId, from, target, resolvedBranch)) {
+            byTaxCode.add(new VatReportResponse.TaxCodeRow(
+                    row.getTaxCode() == null ? "" : row.getTaxCode(),
+                    money(row.getTaxableAmount()),
+                    money(row.getTaxAmount()),
+                    row.getLineCount() == null ? 0L : row.getLineCount().longValue()));
+        }
+
+        return new VatReportResponse(
+                from,
+                target,
+                resolvedBranch,
+                vatCollected.setScale(2, RoundingMode.HALF_UP),
+                vatReversed.setScale(2, RoundingMode.HALF_UP),
+                vatCollected.subtract(vatReversed).setScale(2, RoundingMode.HALF_UP),
+                revenueCredit.subtract(revenueDebit).setScale(2, RoundingMode.HALF_UP),
+                byTaxCode);
+    }
+
+    /**
+     * The same VAT position as {@link #vatReport}, split into day or month buckets and
+     * zero-filled across the range (mirrors {@link #dailyProfitAndLoss}). Bucket figures
+     * come from the ledger, so voids and refunds are already netted.
+     */
+    @Transactional(readOnly = true)
+    public List<VatBucketResponse> vatReportBuckets(
+            String businessId,
+            LocalDate from,
+            LocalDate to,
+            VatBucket bucket,
+            String branchId
+    ) {
+        if (from == null || to == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "from and to are required");
+        }
+        if (to.isBefore(from)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "to must be on or after from");
+        }
+        boolean monthly = bucket == VatBucket.MONTH;
+        String resolvedBranch = resolveBranch(businessId, branchId);
+
+        // acc = [vatCollected, vatReversed, revenueCredit, revenueDebit], keyed by bucket start.
+        Map<LocalDate, BigDecimal[]> byBucket = new HashMap<>();
+        for (JournalReportRepository.DailyAccountBalance row : journalReportRepository
+                .sumByAccountForPeriodByDay(businessId, from, to, resolvedBranch)) {
+            boolean vat = LedgerAccountCodes.VAT_PAYABLE.equals(row.getCode());
+            boolean revenue = LedgerAccountCodes.SALES_REVENUE.equals(row.getCode());
+            if (!vat && !revenue) {
+                continue;
+            }
+            LocalDate day = toLocalDate(row.getJournalDay());
+            if (day == null) {
+                continue;
+            }
+            LocalDate key = monthly ? day.withDayOfMonth(1) : day;
+            BigDecimal[] acc = byBucket.computeIfAbsent(key, k -> new BigDecimal[] {
+                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO });
+            if (vat) {
+                acc[0] = acc[0].add(money(row.getCreditTotal()));
+                acc[1] = acc[1].add(money(row.getDebitTotal()));
+            } else {
+                acc[2] = acc[2].add(money(row.getCreditTotal()));
+                acc[3] = acc[3].add(money(row.getDebitTotal()));
+            }
+        }
+
+        List<VatBucketResponse> out = new ArrayList<>();
+        for (LocalDate start = monthly ? from.withDayOfMonth(1) : from;
+                !start.isAfter(to);
+                start = monthly ? start.plusMonths(1) : start.plusDays(1)) {
+            BigDecimal[] acc = byBucket.getOrDefault(start, new BigDecimal[] {
+                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO });
+            BigDecimal collected = acc[0].setScale(2, RoundingMode.HALF_UP);
+            BigDecimal reversed = acc[1].setScale(2, RoundingMode.HALF_UP);
+            BigDecimal netRevenue = acc[2].subtract(acc[3]).setScale(2, RoundingMode.HALF_UP);
+            LocalDate end = monthly ? start.withDayOfMonth(start.lengthOfMonth()) : start;
+            out.add(new VatBucketResponse(
+                    start,
+                    end,
+                    collected,
+                    reversed,
+                    collected.subtract(reversed).setScale(2, RoundingMode.HALF_UP),
+                    netRevenue));
+        }
+        return out;
     }
 
     private String resolveBranch(String businessId, String branchId) {

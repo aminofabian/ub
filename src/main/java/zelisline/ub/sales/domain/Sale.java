@@ -54,6 +54,13 @@ public class Sale {
     private BigDecimal grandTotal;
 
     /**
+     * Tax contained in {@link #grandTotal} (prices are tax-inclusive), so
+     * {@code grandTotal - taxTotal} is the net revenue. Reported to KRA eTIMS.
+     */
+    @Column(name = "tax_total", nullable = false, precision = 14, scale = 2)
+    private BigDecimal taxTotal = BigDecimal.ZERO;
+
+    /**
      * Cash handed over by the customer (may exceed grand total). Receipt-only;
      * ledger still posts the sale total. Null when not a cash tender with change.
      */
@@ -112,6 +119,9 @@ public class Sale {
         }
         if (refundedTotal == null) {
             refundedTotal = BigDecimal.ZERO;
+        }
+        if (taxTotal == null) {
+            taxTotal = BigDecimal.ZERO;
         }
         if (createdAt == null) {
             createdAt = now;

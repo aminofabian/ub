@@ -35,6 +35,7 @@ import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.platform.realtime.RealtimeBridge;
+import zelisline.ub.sales.application.SaleTaxService;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
 import zelisline.ub.sales.domain.SaleLineKinds;
@@ -90,6 +91,7 @@ public class DesktopSyncIngestService {
     private final SaleRepository saleRepository;
     private final SaleItemRepository saleItemRepository;
     private final SalePaymentRepository salePaymentRepository;
+    private final SaleTaxService saleTaxService;
     private final CustomerRepository customerRepository;
     private final CustomerPhoneRepository customerPhoneRepository;
     private final CreditAccountRepository creditAccountRepository;
@@ -769,8 +771,8 @@ public class DesktopSyncIngestService {
         sale.setRefundedTotal(data.refundedTotal() == null
             ? java.math.BigDecimal.ZERO
             : data.refundedTotal());
-        saleRepository.save(sale);
 
+        List<SaleItem> ingestedItems = new ArrayList<>();
         if (data.items() != null) {
             for (ShiftSyncRequest.SaleItemData itemData : data.items()) {
                 SaleItem item = new SaleItem();
@@ -801,8 +803,17 @@ public class DesktopSyncIngestService {
                 item.setDiscountAmount(itemData.discountAmount());
                 item.setDiscountId(itemData.discountId());
                 item.setDiscountName(itemData.discountName());
-                saleItemRepository.save(item);
+                ingestedItems.add(item);
             }
+        }
+
+        // Till sales arrive without a tax breakdown. Derive it from the cloud's
+        // tax configuration so desktop-originated sales are eTIMS-reportable too.
+        sale.setTaxTotal(saleTaxService.applyTax(businessId, ingestedItems));
+        // Header first: sale_items carry an FK back to the sale.
+        saleRepository.save(sale);
+        for (SaleItem item : ingestedItems) {
+            saleItemRepository.save(item);
         }
 
         if (data.payments() != null) {

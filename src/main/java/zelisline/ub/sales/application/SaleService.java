@@ -98,6 +98,7 @@ public class SaleService {
     private final SaleRepository saleRepository;
     private final SaleItemRepository saleItemRepository;
     private final SalePaymentRepository salePaymentRepository;
+    private final SaleTaxService saleTaxService;
     private final ShiftRepository shiftRepository;
     private final OpenShiftResolver openShiftResolver;
     private final BranchRepository branchRepository;
@@ -202,6 +203,7 @@ public class SaleService {
 
         String saleId = UUID.randomUUID().toString();
         List<SaleItem> saleItems = pickAndBuildSaleItems(businessId, req, saleId, userId, linePricing);
+        BigDecimal taxTotal = saleTaxService.applyTax(businessId, saleItems);
 
         Shift shift = openShiftResolver
                 .findOpenForUpdate(businessId, req.branchId(), tillDeviceKey)
@@ -225,7 +227,8 @@ public class SaleService {
                 resolved.normalized(),
                 effectiveSoldAt,
                 customerId,
-                cashReceived
+                cashReceived,
+                taxTotal
         );
         saleItemRepository.saveAll(saleItems);
 
@@ -241,6 +244,7 @@ public class SaleService {
                 req.branchId(),
                 saleId,
                 grandTotal,
+                taxTotal,
                 cogsTotal,
                 resolved.normalized(),
                 overpayAlloc.towardWallet(),
@@ -371,7 +375,8 @@ public class SaleService {
             List<NormalizedPayment> paymentsNorm,
             Instant soldAt,
             String customerIdOrNull,
-            BigDecimal cashReceivedOrNull
+            BigDecimal cashReceivedOrNull,
+            BigDecimal taxTotal
     ) {
         Sale sale = new Sale();
         sale.setId(saleId);
@@ -382,6 +387,7 @@ public class SaleService {
         sale.setStatus(SalesConstants.SALE_STATUS_COMPLETED);
         sale.setIdempotencyKey(idempotencyKey);
         sale.setGrandTotal(grandTotal);
+        sale.setTaxTotal(taxTotal);
         sale.setCashReceived(cashReceivedOrNull);
         sale.setJournalEntryId(null);
         sale.setSoldBy(userId);
@@ -754,6 +760,7 @@ public class SaleService {
             String branchId,
             String saleId,
             BigDecimal grandTotal,
+            BigDecimal taxTotal,
             BigDecimal cogs,
             List<NormalizedPayment> paymentsNorm,
             BigDecimal overpayToWallet,
@@ -777,7 +784,15 @@ public class SaleService {
             BigDecimal amt = e.getValue().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
             entry.debit(ledgerAccountResolver.resolveId(businessId, e.getKey()), amt);
         }
-        entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE), grandTotal);
+        SaleTaxLedgerSplit.Split revenue = SaleTaxLedgerSplit.of(grandTotal, taxTotal);
+        entry.credit(
+                ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE),
+                revenue.net());
+        if (revenue.tax().signum() > 0) {
+            entry.credit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.VAT_PAYABLE),
+                    revenue.tax());
+        }
         if (overpayToAr != null && overpayToAr.signum() > 0) {
             entry.credit(
                     ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.ACCOUNTS_RECEIVABLE_CUSTOMERS),

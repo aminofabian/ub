@@ -30,6 +30,7 @@ import zelisline.ub.pricing.api.dto.PostSellingPriceRequest;
 import zelisline.ub.pricing.api.dto.PostTaxRateRequest;
 import zelisline.ub.pricing.api.dto.PriceRuleResponse;
 import zelisline.ub.pricing.api.dto.PutPriceRuleRequest;
+import zelisline.ub.pricing.api.dto.PutTaxRateRequest;
 import zelisline.ub.pricing.api.dto.ResolvePricesRequest;
 import zelisline.ub.pricing.api.dto.SellPriceSuggestionResponse;
 import zelisline.ub.pricing.api.dto.SellingPriceResponse;
@@ -155,9 +156,13 @@ public class PricingController {
 
     @GetMapping("/tax-rates")
     @PreAuthorize("hasPermission(null, 'pricing.read')")
-    public List<TaxRateResponse> listTaxRates(HttpServletRequest request) {
+    public List<TaxRateResponse> listTaxRates(
+            @RequestParam(defaultValue = "false") boolean includeInactive,
+            HttpServletRequest request
+    ) {
         CurrentTenantUser.requireHuman(request);
-        return pricingService.listTaxRates(TenantRequestIds.resolveBusinessId(request));
+        return pricingService.listTaxRates(
+                TenantRequestIds.resolveBusinessId(request), includeInactive);
     }
 
     @PostMapping("/tax-rates")
@@ -169,6 +174,21 @@ public class PricingController {
     ) {
         CurrentTenantUser.requireHuman(request);
         return pricingService.createTaxRate(TenantRequestIds.resolveBusinessId(request), body);
+    }
+
+    @PutMapping("/tax-rates/{taxRateId}")
+    @PreAuthorize("hasPermission(null, 'pricing.rules.manage')")
+    public TaxRateResponse updateTaxRate(
+            @PathVariable String taxRateId,
+            @Valid @RequestBody PutTaxRateRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return pricingService.updateTaxRate(
+                TenantRequestIds.resolveBusinessId(request),
+                taxRateId,
+                body
+        );
     }
 
     @GetMapping("/resolved-price")

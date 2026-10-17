@@ -164,7 +164,7 @@ public class SaleVoidService {
                 businessId, saleId, sale.getCustomerId());
         creditSaleDebtService.reverseDebtForVoidedSale(businessId, sale, payments);
         String voidJeId = postVoidJournal(
-                businessId, sale.getBranchId(), saleId, grandTotal, cogs, payments, overpayToAr, overpay);
+                businessId, sale.getBranchId(), saleId, grandTotal, sale.getTaxTotal(), cogs, payments, overpayToAr, overpay);
         loyaltyPointsService.reverseLoyaltyForVoidedSale(
                 businessId,
                 saleId,
@@ -330,6 +330,7 @@ public class SaleVoidService {
             String branchId,
             String saleId,
             BigDecimal grandTotal,
+            BigDecimal taxTotal,
             BigDecimal cogs,
             List<SalePayment> payments,
             BigDecimal overpayToAr,
@@ -353,7 +354,15 @@ public class SaleVoidService {
             BigDecimal amt = e.getValue().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
             entry.credit(ledgerAccountResolver.resolveId(businessId, e.getKey()), amt);
         }
-        entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE), grandTotal);
+        SaleTaxLedgerSplit.Split revenue = SaleTaxLedgerSplit.of(grandTotal, taxTotal);
+        entry.debit(
+                ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE),
+                revenue.net());
+        if (revenue.tax().signum() > 0) {
+            entry.debit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.VAT_PAYABLE),
+                    revenue.tax());
+        }
         // Reverse the overpay exactly where the sale posted it: AR for the tab-paying portion,
         // wallet liability for the rest. Debiting it all to wallet left AR credited and the GL
         // out of step with the subledger.

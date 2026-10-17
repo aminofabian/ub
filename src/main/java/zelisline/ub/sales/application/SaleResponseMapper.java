@@ -35,7 +35,10 @@ public final class SaleResponseMapper {
                     si.getLineTotal(),
                     si.getUnitCost(),
                     si.getCostTotal(),
-                    si.getProfit()
+                    si.getProfit(),
+                    si.getTaxCode(),
+                    si.getTaxRatePercent(),
+                    si.getTaxAmount()
             ));
         }
         List<SalePaymentResponse> paymentDtos = new ArrayList<>();
@@ -50,6 +53,7 @@ public final class SaleResponseMapper {
                 sale.getShiftId(),
                 sale.getStatus(),
                 sale.getGrandTotal(),
+                sale.getTaxTotal(),
                 sale.getCashReceived(),
                 sale.getRefundedTotal(),
                 sale.getJournalEntryId(),

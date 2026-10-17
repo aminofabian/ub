@@ -538,6 +538,7 @@ public class DesktopConnectService {
             tax.setRatePercent(t.ratePercent());
             tax.setInclusive(t.inclusive());
             tax.setActive(t.active());
+            tax.setEtimsTaxCode(t.etimsTaxCode());
             taxRateRepository.save(tax);
         }
 

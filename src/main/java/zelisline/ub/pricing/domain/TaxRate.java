@@ -35,6 +35,14 @@ public class TaxRate {
     @Column(name = "inclusive", nullable = false)
     private boolean inclusive;
 
+    /**
+     * KRA eTIMS tax code (A = exempt, B = 16%, C = 0%, D = non-VAT, E = 8%).
+     * When null the sale pipeline derives it from {@link #ratePercent} where that
+     * is unambiguous; 0% is left unset because it could be zero-rated or exempt.
+     */
+    @Column(name = "etims_tax_code", length = 8)
+    private String etimsTaxCode;
+
     @Column(name = "active", nullable = false)
     private boolean active = true;
 

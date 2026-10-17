@@ -1039,6 +1039,7 @@ public class DesktopSyncPullService {
         sale.setStatus(data.status());
         sale.setIdempotencyKey(data.idempotencyKey());
         sale.setGrandTotal(data.grandTotal());
+        sale.setTaxTotal(data.taxTotal() == null ? java.math.BigDecimal.ZERO : data.taxTotal());
         sale.setCashReceived(data.cashReceived());
         // Keep the cloud receipt number so the local next-receipt sequence
         // stays aligned — unless another local sale already holds it (the till
@@ -1102,6 +1103,12 @@ public class DesktopSyncPullService {
                 item.setDiscountAmount(itemData.discountAmount());
                 item.setDiscountId(itemData.discountId());
                 item.setDiscountName(itemData.discountName());
+                // Tax breakdown rides along so cloud-originated sales carry VAT on the till too.
+                item.setTaxCode(itemData.taxCode());
+                item.setTaxRatePercent(itemData.taxRatePercent());
+                item.setTaxAmount(itemData.taxAmount() == null
+                    ? java.math.BigDecimal.ZERO
+                    : itemData.taxAmount());
                 saleItemRepository.save(item);
             }
         }
@@ -2019,6 +2026,8 @@ public class DesktopSyncPullService {
         t.setRatePercent(d.ratePercent());
         t.setInclusive(d.inclusive());
         t.setActive(d.active());
+        // The eTIMS code rides along so till-side sales capture it like the cloud does.
+        t.setEtimsTaxCode(d.etimsTaxCode());
     }
 
     private static String slugify(String name) {

@@ -31,6 +31,7 @@ class ReceiptRendererTest {
                 null,
                 lines,
                 List.of(new ReceiptPaymentRow("cash", "416.40", null)),
+                "57.43",
                 "416.40",
                 "500.00",
                 "83.60",
@@ -79,6 +80,17 @@ class ReceiptRendererTest {
     }
 
     @Test
+    void escPos_showsVatIncludedWhenTheSaleCarriesTax() {
+        ReceiptSnapshot s = sampleSnapshot(List.of(
+                new ReceiptLineRow("Beef Mince", "1", "kg", "1200.00", "416.40")
+        ));
+
+        String text = new String(ReceiptEscPosRenderer.render(s, 58), StandardCharsets.US_ASCII);
+
+        assertThat(text).contains("VAT included 57.43");
+    }
+
+    @Test
     void escPos_endsWithFeedPartialCutAndDrawerKick() {
         ReceiptSnapshot s = sampleSnapshot(List.of(
                 new ReceiptLineRow("Soda", "1", "each", "5.00", "5.00")
@@ -120,6 +132,7 @@ class ReceiptRendererTest {
                 "0712345678",
                 List.of(new ReceiptLineRow("Soda", "1", "each", "5.00", "5.00")),
                 List.of(new ReceiptPaymentRow("pending payment", "5.00", null)),
+                null,
                 "5.00",
                 null,
                 null,
@@ -133,6 +146,8 @@ class ReceiptRendererTest {
         assertThat(text).contains("Customer: Jane Doe");
         assertThat(text).contains("Phone: 0712345678");
         assertThat(text).contains("Online order");
+        // Web orders are untaxed, so no VAT line is printed.
+        assertThat(text).doesNotContain("VAT");
     }
 
     @Test
@@ -203,6 +218,7 @@ class ReceiptRendererTest {
                 null,
                 List.of(new ReceiptLineRow("Beef Mince", "0.347", "kg", "1200.00", "416.40")),
                 List.of(new ReceiptPaymentRow("cash", "416.40", null)),
+                "57.43",
                 "416.40",
                 "500.00",
                 "83.60",
@@ -237,6 +253,7 @@ class ReceiptRendererTest {
                 null,
                 List.of(new ReceiptLineRow("Soda", "1", "each", "5.00", "5.00")),
                 List.of(new ReceiptPaymentRow("cash", "5.00", null)),
+                null,
                 "5.00",
                 "5.00",
                 "0.00",

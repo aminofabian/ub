@@ -14,6 +14,11 @@ public record SaleItemResponse(
         BigDecimal lineTotal,
         BigDecimal unitCost,
         BigDecimal costTotal,
-        BigDecimal profit
+        BigDecimal profit,
+        /** KRA eTIMS tax code (A/B/C/D/E) captured at sale time; null when untaxed. */
+        String taxCode,
+        BigDecimal taxRatePercent,
+        /** Tax contained in {@link #lineTotal} (prices are tax-inclusive). */
+        BigDecimal taxAmount
 ) {
 }

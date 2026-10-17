@@ -13,6 +13,8 @@ public record SaleResponse(
         String shiftId,
         String status,
         BigDecimal grandTotal,
+        /** Tax contained in {@link #grandTotal} (prices are tax-inclusive). */
+        BigDecimal taxTotal,
         /** Cash handed over (full cash sales); null otherwise. */
         BigDecimal cashReceived,
         BigDecimal refundedTotal,

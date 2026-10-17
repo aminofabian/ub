@@ -60,6 +60,8 @@ class ShopperIdentifyServiceTest {
         TenantMessagingConfig config = Mockito.mock(TenantMessagingConfig.class);
         Mockito.when(config.secretsReadable()).thenReturn(true);
         Mockito.when(config.metaWhatsAppConfigured()).thenReturn(true);
+        // sendCode requires SMS specifically (the delivery below is asserted as "sms").
+        Mockito.when(config.smsConfigured()).thenReturn(true);
         Mockito.when(messagingSettingsService.resolvePlatformForContactReply()).thenReturn(config);
         Mockito.when(customerMessageDispatcher.deliverBothChannels(
                         Mockito.eq(config), Mockito.eq("0714282874"), Mockito.anyString()))

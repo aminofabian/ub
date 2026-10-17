@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -532,6 +533,79 @@ class PricingSlice5IT {
 
         List<?> list = objectMapper.readValue(res.getResponse().getContentAsString(), new TypeReference<>() {});
         assertThat(list).hasSize(1);
+    }
+
+    @Test
+    void taxRate_updateAndIncludeInactive() throws Exception {
+        MvcResult created = mockMvc.perform(post("/api/v1/pricing/tax-rates")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"name\":\"VAT 16\",\"ratePercent\":16,\"inclusive\":false,"
+                                + "\"active\":true,\"etimsTaxCode\":\"B\"}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String taxRateId = objectMapper.readTree(created.getResponse().getContentAsString())
+                .get("id").asText();
+
+        MvcResult updated = mockMvc.perform(put("/api/v1/pricing/tax-rates/" + taxRateId)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"name\":\"VAT 8\",\"ratePercent\":8,\"inclusive\":true,"
+                                + "\"active\":false,\"etimsTaxCode\":\"E\"}")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        var body = objectMapper.readTree(updated.getResponse().getContentAsString());
+        assertThat(body.get("name").asText()).isEqualTo("VAT 8");
+        assertThat(body.get("ratePercent").decimalValue()).isEqualByComparingTo("8");
+        assertThat(body.get("inclusive").asBoolean()).isTrue();
+        assertThat(body.get("active").asBoolean()).isFalse();
+        assertThat(body.get("etimsTaxCode").asText()).isEqualTo("E");
+
+        // A deactivated rate drops out of the default list but stays reachable for editing.
+        MvcResult activeOnly = mockMvc.perform(get("/api/v1/pricing/tax-rates")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        List<?> withoutInactive = objectMapper.readValue(
+                activeOnly.getResponse().getContentAsString(), new TypeReference<>() {});
+        assertThat(withoutInactive).isEmpty();
+
+        MvcResult withInactive = mockMvc.perform(get("/api/v1/pricing/tax-rates")
+                        .param("includeInactive", "true")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        List<?> all = objectMapper.readValue(
+                withInactive.getResponse().getContentAsString(), new TypeReference<>() {});
+        assertThat(all).hasSize(1);
+    }
+
+    @Test
+    void taxRate_duplicateNameRejected() throws Exception {
+        String payload = "{\"name\":\"VAT\",\"ratePercent\":16,\"inclusive\":false,\"active\":true}";
+        mockMvc.perform(post("/api/v1/pricing/tax-rates")
+                        .contentType(APPLICATION_JSON)
+                        .content(payload)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/v1/pricing/tax-rates")
+                        .contentType(APPLICATION_JSON)
+                        .content(payload)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isConflict());
     }
 
     private void postSelling(LocalDate from, BigDecimal price) throws Exception {

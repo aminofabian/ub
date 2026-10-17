@@ -538,7 +538,15 @@ public class SaleRefundService {
             BigDecimal amt = e.getValue().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
             entry.credit(ledgerAccountResolver.resolveId(businessId, e.getKey()), amt);
         }
-        entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE), comp.totalMoney());
+        SaleTaxLedgerSplit.Split revenue = SaleTaxLedgerSplit.of(comp.totalMoney(), refundTaxOf(comp));
+        entry.debit(
+                ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE),
+                revenue.net());
+        if (revenue.tax().signum() > 0) {
+            entry.debit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.VAT_PAYABLE),
+                    revenue.tax());
+        }
         entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.COST_OF_GOODS_SOLD), comp.totalCogs());
         if (nonWeighedCogs.signum() != 0) {
             entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), nonWeighedCogs);
@@ -548,6 +556,27 @@ public class SaleRefundService {
         }
 
         return ledgerPostingPort.post(entry);
+    }
+
+    /**
+     * VAT contained in the refunded lines: the whole line's tax when the full quantity
+     * comes back, or its share for a partial return. Untaxed sales carry zero tax, so
+     * their refund posts exactly as before.
+     */
+    private static BigDecimal refundTaxOf(RefundComputation comp) {
+        BigDecimal tax = BigDecimal.ZERO;
+        for (RefundRow row : comp.rows()) {
+            SaleItem si = row.saleItem();
+            BigDecimal lineTax = si.getTaxAmount();
+            BigDecimal lineTotal = si.getLineTotal();
+            if (lineTax == null || lineTax.signum() <= 0
+                    || lineTotal == null || lineTotal.signum() <= 0) {
+                continue;
+            }
+            tax = tax.add(row.money().multiply(lineTax)
+                    .divide(lineTotal, MONEY_SCALE, RoundingMode.HALF_UP));
+        }
+        return tax;
     }
 
     private Refund persistRefundAggregate(

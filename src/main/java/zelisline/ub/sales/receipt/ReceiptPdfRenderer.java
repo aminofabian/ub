@@ -105,6 +105,9 @@ public final class ReceiptPdfRenderer {
             }
 
             addRule(doc, false);
+            if (s.taxTotalDisplay() != null && !s.taxTotalDisplay().isBlank()) {
+                addMoneyRow(doc, "VAT included", moneyDisplay(s.taxTotalDisplay(), s.currency()), money, money);
+            }
             addMoneyRow(doc, "TOTAL", moneyDisplay(s.grandTotalDisplay(), s.currency()), totalLabel, totalLabel);
             if (s.cashReceivedDisplay() != null && !s.cashReceivedDisplay().isBlank()) {
                 addMoneyRow(doc, "Received", moneyDisplay(s.cashReceivedDisplay(), s.currency()), money, money);

@@ -2,6 +2,9 @@ package zelisline.ub.finance.api;
 
 import java.time.LocalDate;
 
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -12,11 +15,15 @@ import java.util.List;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.finance.VatBucket;
 import zelisline.ub.finance.api.dto.BalanceSheetResponse;
 import zelisline.ub.finance.api.dto.DailyProfitPoint;
 import zelisline.ub.finance.api.dto.FinancePulseResponse;
 import zelisline.ub.finance.api.dto.ProfitAndLossResponse;
+import zelisline.ub.finance.api.dto.VatBucketResponse;
+import zelisline.ub.finance.api.dto.VatReportResponse;
 import zelisline.ub.finance.application.FinanceReportsService;
+import zelisline.ub.finance.application.VatReportCsvService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
@@ -34,6 +41,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class FinanceReportsController {
 
     private final FinanceReportsService financeReportsService;
+    private final VatReportCsvService vatReportCsvService;
 
     @GetMapping("/pulse")
     @PreAuthorize("hasPermission(null, 'finance.reports.read')")
@@ -73,6 +81,52 @@ public class FinanceReportsController {
         CurrentTenantUser.require(request);
         return financeReportsService.dailyProfitAndLoss(
                 TenantRequestIds.resolveBusinessId(request), from, to, branchId);
+    }
+
+    @GetMapping("/vat")
+    @PreAuthorize("hasPermission(null, 'finance.reports.read')")
+    public VatReportResponse vatReport(
+            @RequestParam("from") LocalDate from,
+            @RequestParam(value = "to", required = false) LocalDate to,
+            @RequestParam(value = "branchId", required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return financeReportsService.vatReport(
+                TenantRequestIds.resolveBusinessId(request), from, to, branchId);
+    }
+
+    @GetMapping("/vat/buckets")
+    @PreAuthorize("hasPermission(null, 'finance.reports.read')")
+    public List<VatBucketResponse> vatReportBuckets(
+            @RequestParam("from") LocalDate from,
+            @RequestParam("to") LocalDate to,
+            @RequestParam(value = "bucket", defaultValue = "day") VatBucket bucket,
+            @RequestParam(value = "branchId", required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return financeReportsService.vatReportBuckets(
+                TenantRequestIds.resolveBusinessId(request), from, to, bucket, branchId);
+    }
+
+    @GetMapping(value = "/vat/export.csv", produces = "text/csv")
+    @PreAuthorize("hasPermission(null, 'finance.reports.read')")
+    public ResponseEntity<byte[]> vatReportCsv(
+            @RequestParam("from") LocalDate from,
+            @RequestParam(value = "to", required = false) LocalDate to,
+            @RequestParam(value = "bucket", defaultValue = "day") VatBucket bucket,
+            @RequestParam(value = "branchId", required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        byte[] body = vatReportCsvService.vatReportCsv(
+                TenantRequestIds.resolveBusinessId(request), from, to, bucket, branchId);
+        String filename = "vat-report-" + from + (to != null ? "-to-" + to : "") + ".csv";
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .contentType(MediaType.parseMediaType("text/csv; charset=UTF-8"))
+                .body(body);
     }
 
     @GetMapping("/balance-sheet")

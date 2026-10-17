@@ -33,6 +33,8 @@ public final class LedgerAccountCodes {
     public static final String LOYALTY_MARKETING_EXPENSE = "5310";
 
     public static final String ACCOUNTS_PAYABLE = "2100";
+    /** VAT collected on sales but not yet remitted to KRA (liability). */
+    public static final String VAT_PAYABLE = "2200";
     public static final String GOODS_RECEIVED_NOT_INVOICED = "2150";
     public static final String SUPPLIER_ADVANCES = "1160";
     public static final String INVENTORY_SHRINKAGE = "5210";

@@ -32,6 +32,8 @@ public record ReceiptSnapshot(
         String customerPhone,
         List<ReceiptLineRow> lines,
         List<ReceiptPaymentRow> payments,
+        /** Tax contained in the total (prices are tax-inclusive); null when the sale had no tax. */
+        String taxTotalDisplay,
         String grandTotalDisplay,
         /** Cash handed over; null when not applicable. */
         String cashReceivedDisplay,

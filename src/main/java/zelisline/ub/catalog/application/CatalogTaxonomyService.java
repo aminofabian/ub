@@ -148,7 +148,8 @@ public class CatalogTaxonomyService {
         if (t == null) {
             return null;
         }
-        return new TaxRateSummaryResponse(t.getId(), t.getName(), t.getRatePercent(), t.isInclusive());
+        return new TaxRateSummaryResponse(
+                t.getId(), t.getName(), t.getRatePercent(), t.isInclusive(), t.getEtimsTaxCode());
     }
 
     @Transactional(readOnly = true)

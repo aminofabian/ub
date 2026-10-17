@@ -75,6 +75,21 @@ public class SaleItem {
     @Column(name = "discount_name")
     private String discountName;
 
+    /** Effective tax rate resolved from the item's category chain at sale time. */
+    @Column(name = "tax_rate_id", length = 36)
+    private String taxRateId;
+
+    @Column(name = "tax_rate_percent", precision = 7, scale = 3)
+    private BigDecimal taxRatePercent;
+
+    /** KRA eTIMS tax code (A/B/C/D/E) captured at sale time. */
+    @Column(name = "tax_code", length = 8)
+    private String taxCode;
+
+    /** Tax contained in {@link #lineTotal} (prices are tax-inclusive). */
+    @Column(name = "tax_amount", nullable = false, precision = 14, scale = 2)
+    private BigDecimal taxAmount = BigDecimal.ZERO;
+
     @PrePersist
     void onCreate() {
         if (id == null || id.isBlank()) {

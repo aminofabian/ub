@@ -135,6 +135,7 @@ public class SupplyReceiptQueryService {
                     supName,
                     inv.getInvoiceNumber(),
                     inv.getCreatedAt(),
+                    inv.getInvoiceDate(),
                     (int) cnt,
                     grand,
                     paid,

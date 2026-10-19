@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Locale;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -101,13 +102,13 @@ public class FinanceReportsController {
     public List<VatBucketResponse> vatReportBuckets(
             @RequestParam("from") LocalDate from,
             @RequestParam("to") LocalDate to,
-            @RequestParam(value = "bucket", defaultValue = "day") VatBucket bucket,
+            @RequestParam(value = "bucket", defaultValue = "day") String bucket,
             @RequestParam(value = "branchId", required = false) String branchId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         return financeReportsService.vatReportBuckets(
-                TenantRequestIds.resolveBusinessId(request), from, to, bucket, branchId);
+                TenantRequestIds.resolveBusinessId(request), from, to, parseBucket(bucket), branchId);
     }
 
     @GetMapping(value = "/vat/export.csv", produces = "text/csv")
@@ -115,13 +116,13 @@ public class FinanceReportsController {
     public ResponseEntity<byte[]> vatReportCsv(
             @RequestParam("from") LocalDate from,
             @RequestParam(value = "to", required = false) LocalDate to,
-            @RequestParam(value = "bucket", defaultValue = "day") VatBucket bucket,
+            @RequestParam(value = "bucket", defaultValue = "day") String bucket,
             @RequestParam(value = "branchId", required = false) String branchId,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         byte[] body = vatReportCsvService.vatReportCsv(
-                TenantRequestIds.resolveBusinessId(request), from, to, bucket, branchId);
+                TenantRequestIds.resolveBusinessId(request), from, to, parseBucket(bucket), branchId);
         String filename = "vat-report-" + from + (to != null ? "-to-" + to : "") + ".csv";
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
@@ -138,5 +139,10 @@ public class FinanceReportsController {
     ) {
         CurrentTenantUser.require(request);
         return financeReportsService.balanceSheet(TenantRequestIds.resolveBusinessId(request), asOf, branchId);
+    }
+
+    /** Accept day/DAY/month/MONTH — the UI sends lowercase while the enum is uppercase. */
+    private static VatBucket parseBucket(String raw) {
+        return VatBucket.valueOf(raw.trim().toUpperCase(Locale.ROOT));
     }
 }

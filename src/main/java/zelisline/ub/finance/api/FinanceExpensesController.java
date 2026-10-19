@@ -26,6 +26,7 @@ import zelisline.ub.finance.api.dto.PatchExpenseRequest;
 import zelisline.ub.finance.api.dto.ExpenseListResponse;
 import zelisline.ub.finance.api.dto.ExpensePayOptionsResponse;
 import zelisline.ub.finance.api.dto.ExpenseResponse;
+import zelisline.ub.finance.api.dto.ExpenseSummaryResponse;
 import zelisline.ub.finance.api.dto.PostExpenseRequest;
 import zelisline.ub.finance.application.ExpenseDisbursementService;
 import zelisline.ub.finance.application.ExpenseService;
@@ -162,6 +163,33 @@ public class FinanceExpensesController {
                     "branchId, categoryType, categoryCode, source, approvalStatus, and q require from= and to=");
         }
         return expenseService.listExpensesForDate(businessId, date);
+    }
+
+    @GetMapping("/summary")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.read')")
+    public ExpenseSummaryResponse summary(
+            @RequestParam("from") LocalDate from,
+            @RequestParam("to") LocalDate to,
+            @RequestParam(value = "branchId", required = false) String branchId,
+            @RequestParam(value = "categoryType", required = false) String categoryType,
+            @RequestParam(value = "categoryCode", required = false) String categoryCode,
+            @RequestParam(value = "source", required = false) String source,
+            @RequestParam(value = "approvalStatus", required = false) String approvalStatus,
+            @RequestParam(value = "q", required = false) String q,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return expenseService.summarizeExpensesForPeriod(
+                TenantRequestIds.resolveBusinessId(request),
+                from,
+                to,
+                branchId,
+                categoryType,
+                categoryCode,
+                source,
+                approvalStatus,
+                q
+        );
     }
 
     @GetMapping("/{expenseId}/pay-options")

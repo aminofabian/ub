@@ -6,7 +6,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -39,6 +43,7 @@ import zelisline.ub.finance.FinanceConstants;
 import zelisline.ub.finance.LedgerAccountCodes;
 import zelisline.ub.finance.api.dto.ExpenseListResponse;
 import zelisline.ub.finance.api.dto.ExpenseResponse;
+import zelisline.ub.finance.api.dto.ExpenseSummaryResponse;
 import zelisline.ub.finance.api.dto.PatchExpenseRequest;
 import zelisline.ub.finance.api.dto.PostExpenseRequest;
 import zelisline.ub.finance.domain.Expense;
@@ -216,6 +221,169 @@ public class ExpenseService {
         );
     }
 
+    /**
+     * Exact period totals without paging through the list. Posted money is kept
+     * separate from pending/rejected so the hub can reconcile to ledger OpEx
+     * without ever calling unposted bills "expenses".
+     */
+    @Transactional(readOnly = true)
+    public ExpenseSummaryResponse summarizeExpensesForPeriod(
+            String businessId,
+            LocalDate from,
+            LocalDate to,
+            String branchId,
+            String categoryType,
+            String categoryCode,
+            String source,
+            String approvalStatus,
+            String q
+    ) {
+        if (from == null || to == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "from and to are required");
+        }
+        if (to.isBefore(from)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "to must be on or after from");
+        }
+        String resolvedBranch = blankToNull(branchId);
+        if (resolvedBranch != null) {
+            branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(resolvedBranch, businessId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
+        }
+        String resolvedCategory = blankToNull(categoryType);
+        if (resolvedCategory != null) {
+            resolvedCategory = resolvedCategory.toLowerCase();
+            if (!FinanceConstants.EXPENSE_CATEGORY_FIXED.equals(resolvedCategory)
+                    && !FinanceConstants.EXPENSE_CATEGORY_VARIABLE.equals(resolvedCategory)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "categoryType must be fixed or variable");
+            }
+        }
+        String resolvedCategoryCode;
+        try {
+            resolvedCategoryCode = ExpenseCategoryCodes.normalize(categoryCode);
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
+        String resolvedSource = blankToNull(source) == null ? null : normalizeSource(source);
+        String resolvedApproval = blankToNull(approvalStatus) == null ? null : normalizeApprovalStatus(approvalStatus);
+        String resolvedQ = blankToNull(q);
+
+        List<Object[]> rows = expenseRepository.summarizeForPeriod(
+                businessId,
+                from,
+                to,
+                resolvedBranch,
+                resolvedCategory,
+                resolvedCategoryCode,
+                resolvedSource,
+                resolvedApproval,
+                resolvedQ
+        );
+
+        BigDecimal total = BigDecimal.ZERO;
+        BigDecimal posted = BigDecimal.ZERO;
+        BigDecimal pending = BigDecimal.ZERO;
+        BigDecimal rejected = BigDecimal.ZERO;
+        BigDecimal postedFixed = BigDecimal.ZERO;
+        BigDecimal postedVariable = BigDecimal.ZERO;
+        int totalCount = 0;
+        int postedCount = 0;
+        int pendingCount = 0;
+        int rejectedCount = 0;
+        Map<String, CategoryAccumulator> categories = new LinkedHashMap<>();
+
+        for (Object[] row : rows) {
+            String status = row[0] == null ? "" : row[0].toString();
+            String code = row[1] == null || row[1].toString().isBlank() ? "other" : row[1].toString();
+            String type = row[2] == null ? "" : row[2].toString();
+            int count = row[3] instanceof Number n ? n.intValue() : 0;
+            BigDecimal amount = row[4] == null
+                    ? BigDecimal.ZERO
+                    : new BigDecimal(row[4].toString()).setScale(2, RoundingMode.HALF_UP);
+
+            total = total.add(amount);
+            totalCount += count;
+            if (FinanceConstants.EXPENSE_APPROVAL_POSTED.equals(status)) {
+                posted = posted.add(amount);
+                postedCount += count;
+                if (FinanceConstants.EXPENSE_CATEGORY_FIXED.equals(type)) {
+                    postedFixed = postedFixed.add(amount);
+                } else if (FinanceConstants.EXPENSE_CATEGORY_VARIABLE.equals(type)) {
+                    postedVariable = postedVariable.add(amount);
+                }
+            } else if (FinanceConstants.EXPENSE_APPROVAL_PENDING.equals(status)) {
+                pending = pending.add(amount);
+                pendingCount += count;
+            } else if (FinanceConstants.EXPENSE_APPROVAL_REJECTED.equals(status)) {
+                rejected = rejected.add(amount);
+                rejectedCount += count;
+            }
+
+            categories.computeIfAbsent(code, CategoryAccumulator::new)
+                    .add(status, amount, count);
+        }
+
+        List<ExpenseSummaryResponse.CategoryTotal> categoryTotals = new ArrayList<>();
+        for (CategoryAccumulator acc : categories.values()) {
+            categoryTotals.add(acc.toTotal());
+        }
+        categoryTotals.sort(
+                Comparator.comparing(ExpenseSummaryResponse.CategoryTotal::postedAmount).reversed()
+                        .thenComparing(Comparator.comparing(
+                                ExpenseSummaryResponse.CategoryTotal::pendingAmount).reversed())
+                        .thenComparing(ExpenseSummaryResponse.CategoryTotal::categoryCode)
+        );
+
+        return new ExpenseSummaryResponse(
+                from,
+                to,
+                resolvedBranch,
+                money(total),
+                money(posted),
+                money(pending),
+                money(rejected),
+                money(postedFixed),
+                money(postedVariable),
+                totalCount,
+                postedCount,
+                pendingCount,
+                rejectedCount,
+                List.copyOf(categoryTotals)
+        );
+    }
+
+    private static final class CategoryAccumulator {
+        private final String code;
+        private BigDecimal posted = BigDecimal.ZERO;
+        private BigDecimal pending = BigDecimal.ZERO;
+        private BigDecimal rejected = BigDecimal.ZERO;
+        private int count;
+
+        private CategoryAccumulator(String code) {
+            this.code = code;
+        }
+
+        private void add(String status, BigDecimal amount, int rows) {
+            count += rows;
+            if (FinanceConstants.EXPENSE_APPROVAL_POSTED.equals(status)) {
+                posted = posted.add(amount);
+            } else if (FinanceConstants.EXPENSE_APPROVAL_PENDING.equals(status)) {
+                pending = pending.add(amount);
+            } else if (FinanceConstants.EXPENSE_APPROVAL_REJECTED.equals(status)) {
+                rejected = rejected.add(amount);
+            }
+        }
+
+        private ExpenseSummaryResponse.CategoryTotal toTotal() {
+            return new ExpenseSummaryResponse.CategoryTotal(
+                    code,
+                    money(posted),
+                    money(pending),
+                    money(rejected),
+                    count
+            );
+        }
+    }
+
     @Transactional
     public Expense createRecurringExpense(String businessId, PostExpenseRequest req, String systemUserId) {
         return executeRecordExpense(businessId, req, systemUserId, null, true);
@@ -356,6 +524,10 @@ public class ExpenseService {
 
         if (FinanceConstants.EXPENSE_APPROVAL_POSTED.equals(e.getApprovalStatus()) && booksChanged) {
             if (e.getJournalEntryId() != null) {
+                // Clear the FK before deleting the old journal entry — otherwise
+                // fk_expenses_journal_entry blocks the delete and edits 500.
+                e.setJournalEntryId(null);
+                expenseRepository.saveAndFlush(e);
                 ledgerPostingPort.deleteBySource(
                         businessId, FinanceConstants.JOURNAL_SOURCE_EXPENSE, e.getId());
             }
@@ -381,6 +553,10 @@ public class ExpenseService {
             cashDrawerLedgerService.reverseExpensePaidOut(e.getId(), e.getAmount());
         }
         if (e.getJournalEntryId() != null) {
+            // Same FK rule as update: detach the expense from the journal
+            // before deleting the journal entry.
+            e.setJournalEntryId(null);
+            expenseRepository.saveAndFlush(e);
             ledgerPostingPort.deleteBySource(
                     businessId, FinanceConstants.JOURNAL_SOURCE_EXPENSE, e.getId());
         }
@@ -880,6 +1056,10 @@ public class ExpenseService {
                     HttpStatus.BAD_REQUEST, "approvalStatus must be posted, pending_approval, or rejected");
         }
         return value;
+    }
+
+    private static BigDecimal money(BigDecimal value) {
+        return (value == null ? BigDecimal.ZERO : value).setScale(2, RoundingMode.HALF_UP);
     }
 
     private static ExpenseResponse toDto(Expense e) {

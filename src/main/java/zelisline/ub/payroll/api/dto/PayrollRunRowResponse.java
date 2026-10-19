@@ -29,7 +29,8 @@ public record PayrollRunRowResponse(
          */
         String joinPayMode,
         /**
-         * False until the 25th of the labeled month — payable base is zero until then.
+         * True once the labeled month reaches its scheduled pay day (25th).
+         * Informational: the API allows paying earlier when a shop needs to.
          */
         boolean salaryReleased,
         /** Employment start / join date from the staff profile, if set. */
@@ -55,6 +56,11 @@ public record PayrollRunRowResponse(
         BigDecimal suggestedNet,
         boolean alreadyPaid,
         String payslipId,
-        Instant paidAt
+        Instant paidAt,
+        /** Local 07… number used by the M-Pesa payment schedule (null when unset). */
+        String phone,
+        /** Finance expense linked to this period's payslip, when already paid. */
+        String expenseId,
+        String paymentMethod
 ) {
 }

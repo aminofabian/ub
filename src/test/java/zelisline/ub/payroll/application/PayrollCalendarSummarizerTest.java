@@ -133,6 +133,9 @@ class PayrollCalendarSummarizerTest {
                 BigDecimal.ZERO,
                 false,
                 null,
+                null,
+                null,
+                null,
                 null
         );
         var month = PayrollCalendarSummarizer.summarize(
@@ -186,6 +189,9 @@ class PayrollCalendarSummarizerTest {
                 amount,
                 paid,
                 paid ? "payslip-1" : null,
+                null,
+                null,
+                null,
                 null
         );
     }

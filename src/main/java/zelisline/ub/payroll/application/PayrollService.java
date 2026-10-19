@@ -8,8 +8,11 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -38,6 +41,7 @@ import zelisline.ub.payroll.api.dto.PayrollArrearPeriodResponse;
 import zelisline.ub.payroll.api.dto.PayrollCalendarMonthResponse;
 import zelisline.ub.payroll.api.dto.PayrollCalendarResponse;
 import zelisline.ub.payroll.api.dto.PayrollRunRowResponse;
+import zelisline.ub.payroll.api.dto.PayrollSummaryResponse;
 import zelisline.ub.payroll.api.dto.PayslipResponse;
 import zelisline.ub.payroll.api.dto.SalaryAdvanceResponse;
 import zelisline.ub.payroll.api.dto.SalaryResponse;
@@ -48,6 +52,8 @@ import zelisline.ub.finance.ExpenseCategoryCodes;
 import zelisline.ub.finance.FinanceConstants;
 import zelisline.ub.finance.api.dto.PostExpenseRequest;
 import zelisline.ub.finance.application.ExpenseService;
+import zelisline.ub.finance.domain.Expense;
+import zelisline.ub.finance.repository.ExpenseRepository;
 import zelisline.ub.credits.domain.KenyanPhoneForms;
 import zelisline.ub.payroll.application.KenyaPayrollStatutoryCalculator.StatutoryBreakdown;
 import zelisline.ub.payroll.application.AdvanceRepaymentAllocator.AdvanceBalance;
@@ -91,6 +97,7 @@ public class PayrollService {
     private final BranchRepository branchRepository;
     private final BusinessRepository businessRepository;
     private final ExpenseService expenseService;
+    private final ExpenseRepository expenseRepository;
     private final ObjectMapper objectMapper;
     /** Proxied self-reference so {@link #payAll} pays each person in its own transaction. */
     private final ObjectProvider<PayrollService> self;
@@ -118,10 +125,12 @@ public class PayrollService {
                 .findByBusinessIdAndStaffProfileIdOrderByEffectiveFromDescCreatedAtDesc(
                         businessId, profile.getId());
 
-        // First salary must cover the join month: if they joined on the 15th, do not let
-        // "effective from" slip to next month (which would skip the join month entirely).
+        // A salary cannot start before employment, but it can start later
+        // (probation, unpaid first months, a raise agreed from next month).
+        // The old rule pulled every first salary back to the join date, which
+        // silently overpaid the months in between.
         if (history.isEmpty() && profile.getStartDate() != null
-                && effectiveFrom.isAfter(profile.getStartDate())) {
+                && effectiveFrom.isBefore(profile.getStartDate())) {
             effectiveFrom = profile.getStartDate();
         }
         // Keep join date and first salary aligned when start date was never set.
@@ -377,12 +386,379 @@ public class PayrollService {
                     suggestedNet,
                     existing.isPresent(),
                     existing.map(Payslip::getId).orElse(null),
-                    existing.map(Payslip::getPaidAt).orElse(null)
+                    existing.map(Payslip::getPaidAt).orElse(null),
+                    resolveStaffPhone(profile, user),
+                    existing.map(Payslip::getExpenseId).orElse(null),
+                    existing.map(Payslip::getPaymentMethod).orElse(null)
             ));
         }
 
         rows.sort(Comparator.comparing(PayrollRunRowResponse::displayName, String.CASE_INSENSITIVE_ORDER));
         return rows;
+    }
+
+    /**
+     * One-screen pay-run answer: cost, cash, statutory, readiness blockers,
+     * finance reconciliation, branch split, and last-month comparison.
+     *
+     * <p>Deliberately uses {@link #previewRun} so the numbers on the overview
+     * and the rows in the table can never drift apart. The previous month is
+     * previewed too (cheap for a 5–20 person shop) to answer "is this month
+     * more expensive than last?".
+     */
+    @Transactional
+    public PayrollSummaryResponse summary(
+            String businessId,
+            int year,
+            int month,
+            String branchId,
+            boolean statutory
+    ) {
+        validatePeriod(year, month);
+        LocalDate today = LocalDate.now();
+        LocalDate unlockDate = PayrollPeriod.unlockDate(year, month);
+        boolean released = PayrollPeriod.isReleased(year, month, today);
+
+        List<PayrollRunRowResponse> rows = previewRun(businessId, year, month, branchId, statutory);
+        Map<String, StaffProfile> profilesById = staffProfileService.findProfilesByBusiness(businessId).stream()
+                .collect(Collectors.toMap(StaffProfile::getId, Function.identity(), (a, b) -> a));
+        Map<String, User> usersById = userRepository.pageByBusiness(businessId, Pageable.unpaged())
+                .getContent()
+                .stream()
+                .collect(Collectors.toMap(User::getId, Function.identity(), (a, b) -> a));
+
+        // Payslips have no branch column — resolve the branch through the staff
+        // profile + user so a branch-filtered overview reconciles to the rows.
+        String resolvedBranch = blankToNull(branchId);
+        Set<String> allowedProfileIds = null;
+        if (resolvedBranch != null) {
+            Set<String> branchUserIds = usersById.values().stream()
+                    .filter(user -> resolvedBranch.equals(user.getBranchId()))
+                    .map(User::getId)
+                    .collect(Collectors.toSet());
+            allowedProfileIds = profilesById.values().stream()
+                    .filter(profile -> branchUserIds.contains(profile.getUserId()))
+                    .map(StaffProfile::getId)
+                    .collect(Collectors.toSet());
+        }
+        final Set<String> branchProfileIds = allowedProfileIds;
+
+        List<Payslip> periodPayslips = payslipRepository
+                .findByBusinessIdAndPeriodYearAndPeriodMonth(businessId, year, month)
+                .stream()
+                .filter(payslip -> branchProfileIds == null
+                        || branchProfileIds.contains(payslip.getStaffProfileId()))
+                .toList();
+        Map<String, Payslip> payslipByProfileId = periodPayslips.stream()
+                .collect(Collectors.toMap(
+                        Payslip::getStaffProfileId, Function.identity(), (a, b) -> a));
+
+        BigDecimal currentGross = ZERO_MONEY;
+        BigDecimal arrearsGross = ZERO_MONEY;
+        BigDecimal statutoryTotal = ZERO_MONEY;
+        BigDecimal advancesScheduled = ZERO_MONEY;
+        BigDecimal netPayable = ZERO_MONEY;
+        int paidCount = 0;
+        int pendingCount = 0;
+        int onLeaveCount = 0;
+        int missingSalaryCount = 0;
+
+        for (PayrollRunRowResponse row : rows) {
+            currentGross = currentGross.add(row.baseSalary());
+            if (row.alreadyPaid()) {
+                paidCount++;
+                // Use what was actually withheld on the payslip, not a fresh
+                // estimate based on today's statutory toggle.
+                Payslip paidPayslip = payslipByProfileId.get(row.staffProfileId());
+                statutoryTotal = statutoryTotal.add(paidPayslip != null
+                        ? statutoryFromPayslip(paidPayslip)
+                        : row.statutoryTotal());
+            } else if (isPayable(row)) {
+                pendingCount++;
+                // Only a payable run will actually create the arrears payslips;
+                // a paid person's remaining old months are a separate liability.
+                arrearsGross = arrearsGross.add(row.arrearsBaseTotal());
+                statutoryTotal = statutoryTotal
+                        .add(row.statutoryTotal())
+                        .add(row.arrearsStatutoryTotal());
+                netPayable = netPayable.add(row.suggestedNet());
+                advancesScheduled = advancesScheduled.add(row.advancesScheduledThisRun());
+            }
+            if (EmploymentStatus.ON_LEAVE.equals(row.employmentStatus())) {
+                onLeaveCount++;
+            }
+            if (row.monthlySalary().signum() <= 0 && !isDeferredJoinMonth(row, year, month)) {
+                missingSalaryCount++;
+            }
+        }
+
+        BigDecimal paidNet = periodPayslips.stream()
+                .map(Payslip::getNetPaid)
+                .reduce(ZERO_MONEY, (a, b) -> money(a.add(b)));
+        BigDecimal gross = money(currentGross.add(arrearsGross));
+        BigDecimal cashRequired = money(netPayable.add(paidNet));
+
+        // ── Finance reconciliation ─────────────────────────────────────────
+        Set<String> expenseIds = periodPayslips.stream()
+                .map(Payslip::getExpenseId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        BigDecimal postedAmount = expenseRepository.findAllById(expenseIds).stream()
+                .filter(expense -> businessId.equals(expense.getBusinessId()))
+                .map(Expense::getAmount)
+                .reduce(ZERO_MONEY, (a, b) -> money(a.add(b)));
+        int postedCount = (int) periodPayslips.stream()
+                .filter(payslip -> payslip.getExpenseId() != null)
+                .count();
+        int unpostedCount = periodPayslips.size() - postedCount;
+        BigDecimal unpostedNet = periodPayslips.stream()
+                .filter(payslip -> payslip.getExpenseId() == null)
+                .map(Payslip::getNetPaid)
+                .reduce(ZERO_MONEY, (a, b) -> money(a.add(b)));
+        PayrollSummaryResponse.Finance finance = new PayrollSummaryResponse.Finance(
+                postedCount, unpostedCount, postedAmount, unpostedNet);
+
+        // ── Previous month ────────────────────────────────────────────────
+        int[] prev = previousPeriod(year, month);
+        List<PayrollRunRowResponse> prevRows = previewRun(businessId, prev[0], prev[1], branchId, statutory);
+        BigDecimal prevGross = runGross(prevRows);
+        BigDecimal prevPaidNet = payslipRepository
+                .findByBusinessIdAndPeriodYearAndPeriodMonth(businessId, prev[0], prev[1])
+                .stream()
+                .filter(payslip -> branchProfileIds == null
+                        || branchProfileIds.contains(payslip.getStaffProfileId()))
+                .map(Payslip::getNetPaid)
+                .reduce(ZERO_MONEY, (a, b) -> money(a.add(b)));
+        BigDecimal deltaPct = prevGross.signum() == 0
+                ? null
+                : gross.subtract(prevGross)
+                        .multiply(BigDecimal.valueOf(100))
+                        .divide(prevGross, 1, RoundingMode.HALF_UP);
+        PayrollSummaryResponse.Comparison previous = new PayrollSummaryResponse.Comparison(
+                prev[0], prev[1], prevGross, prevPaidNet, prevRows.size(), deltaPct);
+
+        // ── Readiness ─────────────────────────────────────────────────────
+        List<PayrollSummaryResponse.Issue> issues = new ArrayList<>();
+
+        List<PayrollRunRowResponse> noSalary = rows.stream()
+                .filter(row -> row.monthlySalary().signum() <= 0
+                        && !isDeferredJoinMonth(row, year, month))
+                .toList();
+        addIssue(issues, "no_salary", "No salary set", "blocker",
+                "Open the row and add a monthly amount before this run can close.",
+                noSalary);
+
+        List<PayrollRunRowResponse> onLeave = rows.stream()
+                .filter(row -> EmploymentStatus.ON_LEAVE.equals(row.employmentStatus()))
+                .toList();
+        addIssue(issues, "on_leave", "On leave", "warning",
+                "Excluded from pay-all. Update employment status when they return.",
+                onLeave);
+
+        List<PayrollRunRowResponse> advanceOverNet = rows.stream()
+                .filter(PayrollService::isPayable)
+                .filter(row -> row.advancesOutstanding().compareTo(row.suggestedNet()) > 0)
+                .toList();
+        addIssue(issues, "advance_over_net", "Advance exceeds this pay", "warning",
+                "Only what fits in the pay pool is recovered; the balance carries forward.",
+                advanceOverNet);
+
+        List<PayrollRunRowResponse> missingContact = rows.stream()
+                .filter(row -> row.monthlySalary().signum() > 0)
+                .filter(row -> {
+                    StaffProfile profile = profilesById.get(row.staffProfileId());
+                    if (profile == null) {
+                        return false;
+                    }
+                    User user = usersById.get(profile.getUserId());
+                    return resolveStaffPhone(profile, user) == null
+                            && readBankDetails(profile.getBankDetails()).isEmpty();
+                })
+                .toList();
+        addIssue(issues, "missing_contact", "No phone or bank details", "warning",
+                "Add an M-Pesa number or bank account so you can actually pay them.",
+                missingContact);
+
+        List<PayrollRunRowResponse> noStartDate = rows.stream()
+                .filter(row -> row.startDate() == null)
+                .toList();
+        addIssue(issues, "no_start_date", "No start date", "info",
+                "Tenure and join-month proration cannot be checked without a join date.",
+                noStartDate);
+
+        List<PayrollSummaryResponse.StaffRef> unpostedStaff = periodPayslips.stream()
+                .filter(payslip -> payslip.getExpenseId() == null)
+                .map(Payslip::getStaffProfileId)
+                .distinct()
+                .map(profileId -> {
+                    StaffProfile profile = profilesById.get(profileId);
+                    User user = profile != null ? usersById.get(profile.getUserId()) : null;
+                    return new PayrollSummaryResponse.StaffRef(
+                            profile != null ? profile.getUserId() : null,
+                            profile != null ? displayName(profile, user) : "Staff");
+                })
+                .limit(ISSUE_STAFF_LIMIT)
+                .toList();
+        if (unpostedCount > 0) {
+            issues.add(new PayrollSummaryResponse.Issue(
+                    "unposted",
+                    "Paid but not in finance",
+                    "These salaries left the business without an expense in the books.",
+                    "warning",
+                    unpostedCount,
+                    unpostedStaff
+            ));
+        }
+
+        Set<String> manualAdvanceProfileIds = salaryAdvanceRepository
+                .findByBusinessIdAndStatusOrderByAdvancedOnDescCreatedAtDesc(
+                        businessId, AdvanceStatus.OUTSTANDING)
+                .stream()
+                .filter(advance -> "manual".equalsIgnoreCase(advance.getRepaymentMode()))
+                .filter(advance -> advanceBalance(advance).signum() > 0)
+                .map(SalaryAdvance::getStaffProfileId)
+                .collect(Collectors.toSet());
+        List<PayrollRunRowResponse> manualAdvances = rows.stream()
+                .filter(row -> manualAdvanceProfileIds.contains(row.staffProfileId()))
+                .toList();
+        addIssue(issues, "manual_advance", "Manual advance", "info",
+                "Pay-all skips manual advances; choose the deduction when you confirm payment.",
+                manualAdvances);
+
+        if (!released && !rows.isEmpty()) {
+            List<PayrollSummaryResponse.StaffRef> everyone = rows.stream()
+                    .map(row -> new PayrollSummaryResponse.StaffRef(row.userId(), row.displayName()))
+                    .limit(ISSUE_STAFF_LIMIT)
+                    .toList();
+            issues.add(new PayrollSummaryResponse.Issue(
+                    "not_released",
+                    "Scheduled pay day " + unlockDate,
+                    "Review and prepare now; paying before pay day is allowed when the shop needs it.",
+                    "info",
+                    rows.size(),
+                    everyone
+            ));
+        }
+
+        // ── Branch split ──────────────────────────────────────────────────
+        Map<String, List<PayrollRunRowResponse>> byBranch = rows.stream()
+                .collect(Collectors.groupingBy(
+                        row -> row.branchId() == null ? "" : row.branchId(),
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
+        List<PayrollSummaryResponse.BranchBreakdown> branches = byBranch.entrySet().stream()
+                .map(entry -> {
+                    List<PayrollRunRowResponse> branchRows = entry.getValue();
+                    String name = branchRows.stream()
+                            .map(PayrollRunRowResponse::branchName)
+                            .filter(Objects::nonNull)
+                            .findFirst()
+                            .orElse("Unassigned");
+                    int branchPaid = (int) branchRows.stream()
+                            .filter(PayrollRunRowResponse::alreadyPaid)
+                            .count();
+                    int branchPending = (int) branchRows.stream()
+                            .filter(PayrollService::isPayable)
+                            .count();
+                    BigDecimal branchGross = runGross(branchRows);
+                    BigDecimal branchNet = branchRows.stream()
+                            .filter(PayrollService::isPayable)
+                            .map(PayrollRunRowResponse::suggestedNet)
+                            .reduce(ZERO_MONEY, (a, b) -> money(a.add(b)));
+                    return new PayrollSummaryResponse.BranchBreakdown(
+                            blankToNull(entry.getKey()),
+                            name,
+                            branchRows.size(),
+                            branchPaid,
+                            branchPending,
+                            branchGross,
+                            branchNet
+                    );
+                })
+                .sorted(Comparator.comparing(
+                        PayrollSummaryResponse.BranchBreakdown::branchName,
+                        String.CASE_INSENSITIVE_ORDER))
+                .toList();
+
+        return new PayrollSummaryResponse(
+                year,
+                month,
+                released,
+                unlockDate,
+                rows.size(),
+                paidCount,
+                pendingCount,
+                onLeaveCount,
+                missingSalaryCount,
+                money(currentGross),
+                money(arrearsGross),
+                gross,
+                money(statutoryTotal),
+                money(advancesScheduled),
+                money(netPayable),
+                paidNet,
+                cashRequired,
+                previous,
+                finance,
+                issues,
+                branches
+        );
+    }
+
+    private static final int ISSUE_STAFF_LIMIT = 8;
+
+    private static boolean isPayable(PayrollRunRowResponse row) {
+        return !row.alreadyPaid()
+                && !EmploymentStatus.ON_LEAVE.equals(row.employmentStatus())
+                && row.baseSalary().signum() > 0;
+    }
+
+    /** Gross cost of the run: current period for everyone, arrears only where payable. */
+    private static BigDecimal runGross(List<PayrollRunRowResponse> rows) {
+        return rows.stream()
+                .map(row -> money(row.baseSalary().add(
+                        isPayable(row) ? row.arrearsBaseTotal() : ZERO_MONEY)))
+                .reduce(ZERO_MONEY, (a, b) -> money(a.add(b)));
+    }
+
+    private static BigDecimal statutoryFromPayslip(Payslip payslip) {
+        return money(
+                nz(payslip.getPayeDeducted())
+                        .add(nz(payslip.getNssfDeducted()))
+                        .add(nz(payslip.getShifDeducted()))
+                        .add(nz(payslip.getHousingLevyDeducted())));
+    }
+
+    private static BigDecimal nz(BigDecimal value) {
+        return value == null ? ZERO_MONEY : value;
+    }
+
+    private static boolean isDeferredJoinMonth(PayrollRunRowResponse row, int year, int month) {
+        if (row.startDate() == null || !JoinPayMode.DEFERRED.equals(row.joinPayMode())) {
+            return false;
+        }
+        LocalDate start = row.startDate();
+        return start.getYear() == year && start.getMonthValue() == month;
+    }
+
+    private static void addIssue(
+            List<PayrollSummaryResponse.Issue> issues,
+            String code,
+            String label,
+            String severity,
+            String detail,
+            List<PayrollRunRowResponse> rows
+    ) {
+        if (rows.isEmpty()) {
+            return;
+        }
+        List<PayrollSummaryResponse.StaffRef> staff = rows.stream()
+                .limit(ISSUE_STAFF_LIMIT)
+                .map(row -> new PayrollSummaryResponse.StaffRef(row.userId(), row.displayName()))
+                .toList();
+        issues.add(new PayrollSummaryResponse.Issue(
+                code, label, detail, severity, rows.size(), staff));
     }
 
     @Transactional
@@ -454,9 +830,9 @@ public class PayrollService {
                     arrear,
                     body.note(),
                     actorId,
-                    false,
-                    null,
-                    null
+                    Boolean.TRUE.equals(body.postExpense()),
+                    body.paymentMethod(),
+                    body.branchId()
             );
         }
 
@@ -487,21 +863,22 @@ public class PayrollService {
         BigDecimal housing = statutoryBreakdown != null ? statutoryBreakdown.housingLevy() : ZERO_MONEY;
         BigDecimal statutoryTotal = statutoryBreakdown != null ? statutoryBreakdown.total() : ZERO_MONEY;
 
-        BigDecimal arrearsBaseTotal = arrearPeriods.stream()
-                .map(PayrollArrearPeriodResponse::baseSalary)
-                .reduce(ZERO_MONEY, BigDecimal::add);
-        BigDecimal arrearsStatutoryTotal = arrearPeriods.stream()
-                .map(PayrollArrearPeriodResponse::statutoryTotal)
-                .reduce(ZERO_MONEY, BigDecimal::add);
-        BigDecimal arrearNetTotal = arrearPeriods.stream()
-                .map(PayrollArrearPeriodResponse::netBeforeAdvances)
-                .reduce(ZERO_MONEY, BigDecimal::add);
+        // Other deductions are withheld from this period's pay only (arrears are
+        // separate payslips). Reject an over-deduction instead of silently
+        // clamping net to zero and swallowing the excess.
+        BigDecimal maxOther = base.subtract(statutoryTotal).max(ZERO_MONEY);
+        if (other.compareTo(maxOther) > 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Other deductions (" + other.toPlainString()
+                            + ") exceed what is payable after statutory ("
+                            + maxOther.toPlainString() + ")"
+            );
+        }
 
-        BigDecimal combinedBase = base.add(arrearsBaseTotal);
-        BigDecimal combinedStatutory = statutoryTotal.add(arrearsStatutoryTotal);
         // Arrear payslips are disbursed in full as separate payslips, so advances can only
-        // be recovered from the current month's pay. Sizing the pool from combinedBase would
-        // reduce advance balances without actually withholding that money.
+        // be recovered from the current month's pay. Sizing the pool from the combined
+        // base would reduce advance balances without actually withholding that money.
         BigDecimal availableForAdvances = base.subtract(statutoryTotal).subtract(other).max(ZERO_MONEY);
         if (body.advancesToDeduct() != null) {
             BigDecimal cap = money(body.advancesToDeduct());
@@ -533,7 +910,6 @@ public class PayrollService {
         BigDecimal deducted = AdvanceRepaymentAllocator.totalAllocated(allocations);
 
         BigDecimal net = base.subtract(statutoryTotal).subtract(deducted).subtract(other).max(ZERO_MONEY);
-        BigDecimal totalDisbursement = arrearNetTotal.add(net);
 
         Payslip payslip = new Payslip();
         payslip.setBusinessId(businessId);
@@ -561,21 +937,21 @@ public class PayrollService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Payslip already exists for this period");
         }
 
-        if (Boolean.TRUE.equals(body.postExpense()) && totalDisbursement.signum() > 0) {
+        if (Boolean.TRUE.equals(body.postExpense()) && net.signum() > 0) {
             String paymentMethod = normalizePaymentMethod(body.paymentMethod());
             String expenseBranch = blankToNull(body.branchId()) != null
                     ? body.branchId().trim()
                     : user.getBranchId();
-            String expenseLabel = arrearPeriods.isEmpty()
-                    ? "Salary — " + display + " — " + month + "/" + year
-                    : "Salary — " + display + " — " + month + "/" + year + " (+ arrears)";
+            // One expense per payslip (arrears get their own rows above) keeps the
+            // payroll ↔ finance link one-to-one and makes the run reconcile.
+            String expenseLabel = "Salary — " + display + " — " + month + "/" + year;
             var expense = expenseService.recordExpense(
                     businessId,
                     new PostExpenseRequest(
                             LocalDate.now(),
                             expenseLabel,
                             FinanceConstants.EXPENSE_CATEGORY_FIXED,
-                            totalDisbursement,
+                            net,
                             paymentMethod,
                             false,
                             expenseBranch,
@@ -689,8 +1065,29 @@ public class PayrollService {
         }
 
         LocalDate today = LocalDate.now();
-        Map<Integer, BigDecimal> netPaidByMonth = payslipRepository
-                .findByBusinessIdAndPeriodYearOrderByPeriodMonthAsc(businessId, year)
+        String resolvedBranch = blankToNull(branchId);
+        Set<String> branchProfileIds = null;
+        if (resolvedBranch != null) {
+            Set<String> branchUserIds = userRepository.pageByBusiness(businessId, Pageable.unpaged())
+                    .getContent()
+                    .stream()
+                    .filter(user -> resolvedBranch.equals(user.getBranchId()))
+                    .map(User::getId)
+                    .collect(Collectors.toSet());
+            branchProfileIds = staffProfileService.findProfilesByBusiness(businessId).stream()
+                    .filter(profile -> branchUserIds.contains(profile.getUserId()))
+                    .map(StaffProfile::getId)
+                    .collect(Collectors.toSet());
+        }
+        final Set<String> allowedProfileIds = branchProfileIds;
+        List<Payslip> yearPayslips = payslipRepository
+                .findByBusinessIdAndPeriodYearOrderByPeriodMonthAsc(businessId, year);
+        if (allowedProfileIds != null) {
+            yearPayslips = yearPayslips.stream()
+                    .filter(payslip -> allowedProfileIds.contains(payslip.getStaffProfileId()))
+                    .toList();
+        }
+        Map<Integer, BigDecimal> netPaidByMonth = yearPayslips
                 .stream()
                 .collect(Collectors.groupingBy(
                         Payslip::getPeriodMonth,
@@ -837,6 +1234,15 @@ public class PayrollService {
                         row.userId(),
                         row.displayName(),
                         ex.getReason() != null ? ex.getReason() : ex.getMessage()
+                ));
+            } catch (RuntimeException ex) {
+                // One person's unexpected failure (constraint, expense posting, …)
+                // must not abort the rest of a bulk run. Their transaction already
+                // rolled back because `pay` is invoked through the proxy.
+                failures.add(new PayAllRunResponse.PayAllRunFailure(
+                        row.userId(),
+                        row.displayName(),
+                        "Unexpected error: " + (ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName())
                 ));
             }
         }
@@ -1052,7 +1458,14 @@ public class PayrollService {
         payslip.setHousingLevyDeducted(arrear.housingLevySuggested());
         payslip.setNetPaid(arrear.netBeforeAdvances());
         payslip.setPaidAt(Instant.now());
-        payslip.setNote(blankToNull(note != null ? note : "Arrears catch-up"));
+        String arrearNote = blankToNull(note == null || note.isBlank()
+                ? "Arrears catch-up"
+                : "Arrears catch-up · " + note);
+        // payslips.note is VARCHAR(500); the request note is capped, but the
+        // prefix needs to fit too.
+        payslip.setNote(arrearNote == null || arrearNote.length() <= 500
+                ? arrearNote
+                : arrearNote.substring(0, 500));
         payslip.setCreatedBy(actorId);
         payslipRepository.save(payslip);
 

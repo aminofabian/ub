@@ -109,6 +109,23 @@ public class FinanceExpenseSchedulesController {
         );
     }
 
+    @GetMapping("/occurrences/range")
+    @PreAuthorize("hasPermission(null, 'finance.expenses.read')")
+    public List<ExpenseScheduleOccurrenceResponse> listOccurrenceRange(
+            @RequestParam("from") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) java.time.LocalDate from,
+            @RequestParam("to") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) java.time.LocalDate to,
+            @RequestParam(value = "branchId", required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return occurrenceService.listForRange(
+                TenantRequestIds.resolveBusinessId(request),
+                from,
+                to,
+                branchId
+        );
+    }
+
     @GetMapping("/calendar")
     @PreAuthorize("hasPermission(null, 'finance.expenses.read')")
     public ExpenseCalendarResponse calendar(

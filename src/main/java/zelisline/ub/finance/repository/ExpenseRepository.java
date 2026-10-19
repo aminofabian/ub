@@ -1,5 +1,6 @@
 package zelisline.ub.finance.repository;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.Instant;
 import java.util.List;
@@ -48,6 +49,32 @@ public interface ExpenseRepository extends JpaRepository<Expense, String> {
     );
 
     @Query("""
+            select e.approvalStatus, e.categoryCode, e.categoryType, count(e), coalesce(sum(e.amount), 0)
+              from Expense e
+             where e.businessId = :businessId
+               and e.expenseDate >= :from
+               and e.expenseDate <= :to
+               and (:branchId is null or e.branchId = :branchId)
+               and (:categoryType is null or e.categoryType = :categoryType)
+               and (:categoryCode is null or e.categoryCode = :categoryCode)
+               and (:source is null or e.source = :source)
+               and (:approvalStatus is null or e.approvalStatus = :approvalStatus)
+               and (:q is null or lower(e.name) like lower(concat('%', :q, '%')))
+             group by e.approvalStatus, e.categoryCode, e.categoryType
+            """)
+    List<Object[]> summarizeForPeriod(
+            @Param("businessId") String businessId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to,
+            @Param("branchId") String branchId,
+            @Param("categoryType") String categoryType,
+            @Param("categoryCode") String categoryCode,
+            @Param("source") String source,
+            @Param("approvalStatus") String approvalStatus,
+            @Param("q") String q
+    );
+
+    @Query("""
             select coalesce(sum(e.amount), 0)
               from Expense e
              where e.businessId = :businessId
@@ -58,7 +85,7 @@ public interface ExpenseRepository extends JpaRepository<Expense, String> {
                and e.createdAt >= :openedAt
                and e.createdAt <= :closedAt
             """)
-    java.math.BigDecimal sumDrawerCashExpensesForShiftWindow(
+    BigDecimal sumDrawerCashExpensesForShiftWindow(
             @Param("businessId") String businessId,
             @Param("branchId") String branchId,
             @Param("openedAt") Instant openedAt,

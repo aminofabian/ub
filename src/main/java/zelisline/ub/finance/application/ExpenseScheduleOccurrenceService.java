@@ -54,10 +54,29 @@ public class ExpenseScheduleOccurrenceService {
             int month,
             String branchId
     ) {
-        LocalDate today = businessToday(businessId);
         YearMonth ym = YearMonth.of(year, month);
-        LocalDate start = ym.atDay(1);
-        LocalDate end = ym.atEndOfMonth();
+        return listForRange(businessId, ym.atDay(1), ym.atEndOfMonth(), branchId);
+    }
+
+    /**
+     * Occurrences across an arbitrary date window. The expenses hub uses this
+     * instead of calling one month at a time, so a week/custom range that
+     * crosses a month boundary stays correct.
+     */
+    @Transactional(readOnly = true)
+    public List<ExpenseScheduleOccurrenceResponse> listForRange(
+            String businessId,
+            LocalDate start,
+            LocalDate end,
+            String branchId
+    ) {
+        if (start == null || end == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "from and to are required");
+        }
+        if (end.isBefore(start)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "to must be on or after from");
+        }
+        LocalDate today = businessToday(businessId);
 
         List<ExpenseSchedule> schedules = filterSchedules(
                 expenseScheduleRepository.findByBusinessIdAndActiveTrue(businessId),

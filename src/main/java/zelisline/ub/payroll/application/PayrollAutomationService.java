@@ -121,7 +121,16 @@ public class PayrollAutomationService {
                 settings.getBranchId(),
                 settings.isApplyStatutory()
         );
-        long pending = preview.stream().filter(row -> !row.alreadyPaid()).count();
+        long pending = preview.stream()
+                .filter(row -> !row.alreadyPaid())
+                .filter(row -> !"on_leave".equalsIgnoreCase(row.employmentStatus()))
+                .filter(row -> row.baseSalary().signum() > 0)
+                .count();
+        // Nothing to act on → no notification. A reminder that fires every month
+        // after payroll is already closed is noise, not a nudge.
+        if (pending == 0) {
+            return;
+        }
 
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("title", "Payroll due — " + period.getMonth() + "/" + period.getYear());

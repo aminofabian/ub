@@ -23,6 +23,7 @@ import zelisline.ub.payroll.api.dto.PayRunRequest;
 import zelisline.ub.payroll.api.dto.PayrollAdvanceLedgerRowResponse;
 import zelisline.ub.payroll.api.dto.PayrollCalendarResponse;
 import zelisline.ub.payroll.api.dto.PayrollRunRowResponse;
+import zelisline.ub.payroll.api.dto.PayrollSummaryResponse;
 import zelisline.ub.payroll.api.dto.PayslipResponse;
 import zelisline.ub.payroll.application.PayrollService;
 import zelisline.ub.platform.security.CurrentTenantUser;
@@ -47,6 +48,25 @@ public class PayrollRunController {
     ) {
         CurrentTenantUser.requireHuman(request);
         return payrollService.previewRun(
+                TenantRequestIds.resolveBusinessId(request),
+                year,
+                month,
+                branchId,
+                statutory
+        );
+    }
+
+    @GetMapping("/summary")
+    @PreAuthorize("hasPermission(null, 'payroll.view')")
+    public PayrollSummaryResponse summary(
+            @RequestParam int year,
+            @RequestParam int month,
+            @RequestParam(required = false) String branchId,
+            @RequestParam(defaultValue = "false") boolean statutory,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return payrollService.summary(
                 TenantRequestIds.resolveBusinessId(request),
                 year,
                 month,

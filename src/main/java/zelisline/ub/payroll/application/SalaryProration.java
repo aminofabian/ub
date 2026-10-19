@@ -11,8 +11,10 @@ import zelisline.ub.payroll.domain.JoinPayMode;
  * Join-month pay for a calendar month: full, half, day-prorated, or deferred
  * (zero for the join month, salary starts next payroll cycle).
  *
- * <p>Callers must also gate on {@link PayrollPeriod#isReleased} — before the 25th
- * of the labeled month, payable salary stays zero for everyone.
+ * <p>Pay day (the 25th of the labeled month) is tracked by
+ * {@link PayrollPeriod#isReleased} and surfaced to the UI as a due date. It is
+ * informational: a shop may pay earlier, and the preview keeps the amounts
+ * visible so the run can be prepared before pay day.
  */
 public final class SalaryProration {
 

@@ -2,7 +2,9 @@ package zelisline.ub.finance.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -443,6 +445,132 @@ class ExpenseSlice1IT {
         Expense saved = expenseRepository.findByIdAndBusinessId(expenseId, TENANT).orElseThrow();
         assertThat(saved.getJournalEntryId()).isNotBlank();
         assertThat(saved.getApprovedBy()).isEqualTo(manager.getId());
+    }
+
+    @Test
+    void expenseSummary_reportsPostedAndPendingSeparately_andRespectsFilters() throws Exception {
+        LocalDate day = LocalDate.now();
+        for (String body : List.of(
+                """
+                {
+                  "expenseDate":"%s",
+                  "name":"Boda delivery",
+                  "categoryType":"variable",
+                  "amount":10.00,
+                  "paymentMethod":"cash",
+                  "includeInCashDrawer":false,
+                  "categoryCode":"transport"
+                }
+                """.formatted(day),
+                """
+                {
+                  "expenseDate":"%s",
+                  "name":"Large rent bill",
+                  "categoryType":"fixed",
+                  "amount":7500.00,
+                  "paymentMethod":"bank",
+                  "includeInCashDrawer":false,
+                  "categoryCode":"rent"
+                }
+                """.formatted(day))) {
+            mockMvc.perform(post("/api/v1/finance/expenses")
+                            .contentType(APPLICATION_JSON)
+                            .content(body)
+                            .header("X-Tenant-Id", TENANT)
+                            .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                            .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                    .andExpect(status().isCreated());
+        }
+
+        MvcResult summaryRes = mockMvc.perform(get("/api/v1/finance/expenses/summary")
+                        .param("from", day.toString())
+                        .param("to", day.toString())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode summary = objectMapper.readTree(summaryRes.getResponse().getContentAsString());
+        assertThat(summary.get("postedAmount").decimalValue()).isEqualByComparingTo("10.00");
+        assertThat(summary.get("pendingAmount").decimalValue()).isEqualByComparingTo("7500.00");
+        assertThat(summary.get("totalAmount").decimalValue()).isEqualByComparingTo("7510.00");
+        assertThat(summary.get("postedCount").asInt()).isEqualTo(1);
+        assertThat(summary.get("pendingCount").asInt()).isEqualTo(1);
+        assertThat(summary.get("totalCount").asInt()).isEqualTo(2);
+        assertThat(summary.get("postedVariableAmount").decimalValue()).isEqualByComparingTo("10.00");
+        assertThat(summary.get("postedFixedAmount").decimalValue()).isEqualByComparingTo("0.00");
+
+        MvcResult rentRes = mockMvc.perform(get("/api/v1/finance/expenses/summary")
+                        .param("from", day.toString())
+                        .param("to", day.toString())
+                        .param("categoryCode", "rent")
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode rent = objectMapper.readTree(rentRes.getResponse().getContentAsString());
+        assertThat(rent.get("postedAmount").decimalValue()).isEqualByComparingTo("0.00");
+        assertThat(rent.get("pendingAmount").decimalValue()).isEqualByComparingTo("7500.00");
+        assertThat(rent.get("totalCount").asInt()).isEqualTo(1);
+    }
+
+    @Test
+    void editAndDeletePostedExpense_repostsThenRemovesJournalWithoutFkViolation() throws Exception {
+        LocalDate day = LocalDate.now();
+        MvcResult createdRes = mockMvc.perform(post("/api/v1/finance/expenses")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "expenseDate":"%s",
+                                  "name":"Original bill",
+                                  "categoryType":"variable",
+                                  "amount":10.00,
+                                  "paymentMethod":"cash",
+                                  "includeInCashDrawer":false,
+                                  "categoryCode":"transport"
+                                }
+                                """.formatted(day))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+        JsonNode created = objectMapper.readTree(createdRes.getResponse().getContentAsString());
+        String expenseId = created.get("id").asText();
+        String originalJournal = created.get("journalEntryId").asText();
+        assertThat(originalJournal).isNotBlank();
+
+        MvcResult editedRes = mockMvc.perform(patch("/api/v1/finance/expenses/" + expenseId)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "expenseDate":"%s",
+                                  "name":"Edited bill",
+                                  "categoryType":"variable",
+                                  "amount":12.50,
+                                  "paymentMethod":"bank",
+                                  "categoryCode":"utilities"
+                                }
+                                """.formatted(day))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode edited = objectMapper.readTree(editedRes.getResponse().getContentAsString());
+        assertThat(edited.get("amount").decimalValue()).isEqualByComparingTo("12.50");
+        assertThat(edited.get("journalEntryId").asText()).isNotBlank();
+        assertThat(edited.get("journalEntryId").asText()).isNotEqualTo(originalJournal);
+
+        mockMvc.perform(delete("/api/v1/finance/expenses/" + expenseId)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isNoContent());
+
+        assertThat(expenseRepository.findByIdAndBusinessId(expenseId, TENANT)).isEmpty();
+        assertThat(journalLineRepository.count()).isZero();
     }
 
     private static Permission perm(String id, String key, String desc) {

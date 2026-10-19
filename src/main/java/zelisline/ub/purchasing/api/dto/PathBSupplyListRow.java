@@ -2,6 +2,7 @@ package zelisline.ub.purchasing.api.dto;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 
 /**
  * Listed supplier receipt (posted invoice from Path B receive or Path A order confirm / GRN).
@@ -12,6 +13,8 @@ public record PathBSupplyListRow(
         String supplierName,
         String invoiceNumber,
         Instant createdAt,
+        /** Business date printed on the supplier bill. */
+        LocalDate invoiceDate,
         int lineCount,
         BigDecimal grandTotal,
         BigDecimal amountPaid,

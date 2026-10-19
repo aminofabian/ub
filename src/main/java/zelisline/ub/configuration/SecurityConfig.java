@@ -211,8 +211,12 @@ public class SecurityConfig {
 
                         .requestMatchers("/api/v1/supplier-portal/**").hasRole("SUPPLIER")
 
+                        // Tenant JWT auth tokens carry no GrantedAuthority (permissions
+                        // are resolved by DataPermissionEvaluator), so hasAnyRole here
+                        // rejected every owner/admin with 401. Controllers in this
+                        // namespace guard themselves with hasPermission(...).
                         .requestMatchers("/api/v1/admin/**")
-                            .hasAnyRole("OWNER", "ADMIN", "SUPER_ADMIN")
+                            .authenticated()
 
                         .requestMatchers("/api/v1/pos/**", "/api/v1/sales/**", "/api/v1/shifts/**")
                             .authenticated()

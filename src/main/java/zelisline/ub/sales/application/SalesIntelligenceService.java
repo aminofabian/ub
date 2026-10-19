@@ -84,7 +84,8 @@ public class SalesIntelligenceService {
     private static final int DEFAULT_VELOCITY_LIMIT = 100;
     private static final int MAX_VELOCITY_LIMIT = 500;
     private static final int DEFAULT_PROFIT_ITEM_LIMIT = 10;
-    private static final int MAX_PROFIT_ITEM_LIMIT = 50;
+    /** A month of sold SKUs. The query already aggregates every item; this only caps the response. */
+    private static final int MAX_PROFIT_ITEM_LIMIT = 500;
     private static final int STOCK_IN_LIMIT = 40;
     private static final int ITEM_RECENT_SALES_LIMIT = 80;
     private static final int DEFAULT_CUSTOMER_SPEND_LIMIT = 400;

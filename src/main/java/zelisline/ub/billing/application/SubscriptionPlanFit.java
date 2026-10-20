@@ -8,9 +8,10 @@ import java.util.Locale;
 import java.util.Objects;
 
 /**
- * Picks the cheapest published plan that covers a shop's live catalog and
- * staff seats. Limits come from {@code platform_subscription_plans} (null =
- * unlimited). Anything past every published cap is negotiable.
+ * Picks the cheapest published plan at or above the shop's current tier that
+ * covers its live catalog, staff seats, and trailing daily sales. Limits come
+ * from {@code platform_subscription_plans} (null = unlimited). Anything past
+ * every published cap is negotiable.
  */
 public final class SubscriptionPlanFit {
 
@@ -25,19 +26,39 @@ public final class SubscriptionPlanFit {
             Integer productLimit,
             Integer cashierLimit,
             int sortOrder,
-            BigDecimal monthlyPriceKes
+            BigDecimal monthlyPriceKes,
+            BigDecimal dailyRevenueLimitKes
     ) {
         public PlanSnapshot {
             tierCode = tierCode == null ? "" : tierCode.trim().toLowerCase(Locale.ROOT);
             displayName = displayName == null || displayName.isBlank() ? tierCode : displayName.trim();
             monthlyPriceKes = monthlyPriceKes == null ? BigDecimal.ZERO : monthlyPriceKes;
+            dailyRevenueLimitKes = normalizeMoney(dailyRevenueLimitKes);
+        }
+
+        /** Product/seat-only snapshot (legacy callers and tests). */
+        public PlanSnapshot(
+                String tierCode,
+                String displayName,
+                Integer productLimit,
+                Integer cashierLimit,
+                int sortOrder,
+                BigDecimal monthlyPriceKes
+        ) {
+            this(tierCode, displayName, productLimit, cashierLimit, sortOrder, monthlyPriceKes, null);
         }
     }
 
-    public record Usage(long productCount, long userCount) {
+    public record Usage(long productCount, long userCount, BigDecimal dailyRevenueKes) {
         public Usage {
             productCount = Math.max(0, productCount);
             userCount = Math.max(0, userCount);
+            dailyRevenueKes = normalizeMoney(dailyRevenueKes);
+        }
+
+        /** Catalog + seats only (legacy callers and tests). */
+        public Usage(long productCount, long userCount) {
+            this(productCount, userCount, BigDecimal.ZERO);
         }
     }
 
@@ -47,6 +68,7 @@ public final class SubscriptionPlanFit {
             PlanSnapshot recommended,
             boolean overProductLimit,
             boolean overUserLimit,
+            boolean overDailyRevenueLimit,
             boolean needsUpgrade,
             boolean negotiable,
             boolean talkToUs,
@@ -65,7 +87,13 @@ public final class SubscriptionPlanFit {
                         .toList();
 
         PlanSnapshot recommended = null;
+        int currentSortOrder = current != null ? current.sortOrder() : Integer.MIN_VALUE;
         for (PlanSnapshot plan : ordered) {
+            // Packages only move up. Never point an owner at a tier below the
+            // one they already pay for, even when usage would make it fit.
+            if (plan.sortOrder() < currentSortOrder) {
+                continue;
+            }
             if (fits(safeUsage, plan)) {
                 recommended = plan;
                 break;
@@ -75,6 +103,8 @@ public final class SubscriptionPlanFit {
         boolean currentFits = current != null && fits(safeUsage, current);
         boolean overProduct = current != null && exceeds(safeUsage.productCount(), current.productLimit());
         boolean overUser = current != null && exceeds(safeUsage.userCount(), current.cashierLimit());
+        boolean overRevenue = current != null
+                && exceedsMoney(safeUsage.dailyRevenueKes(), current.dailyRevenueLimitKes());
         boolean negotiable = recommended == null;
         boolean needsUpgrade = current == null ? recommended != null : !currentFits;
         boolean talkToUs = negotiable || (recommended != null && isEnterprise(recommended.tierCode()));
@@ -85,10 +115,18 @@ public final class SubscriptionPlanFit {
                 recommended,
                 overProduct,
                 overUser,
+                overRevenue,
                 needsUpgrade,
                 negotiable,
                 talkToUs,
-                reasons(safeUsage, current, recommended, overProduct, overUser, negotiable));
+                reasons(
+                        safeUsage,
+                        current,
+                        recommended,
+                        overProduct,
+                        overUser,
+                        overRevenue,
+                        negotiable));
     }
 
     public static boolean fits(Usage usage, PlanSnapshot plan) {
@@ -98,11 +136,18 @@ public final class SubscriptionPlanFit {
         if (exceeds(usage.productCount(), plan.productLimit())) {
             return false;
         }
-        return !exceeds(usage.userCount(), plan.cashierLimit());
+        if (exceeds(usage.userCount(), plan.cashierLimit())) {
+            return false;
+        }
+        return !exceedsMoney(usage.dailyRevenueKes(), plan.dailyRevenueLimitKes());
     }
 
     public static boolean exceeds(long used, Integer limit) {
         return limit != null && used > limit;
+    }
+
+    public static boolean exceedsMoney(BigDecimal used, BigDecimal limit) {
+        return limit != null && used != null && used.compareTo(limit) > 0;
     }
 
     public static boolean isEnterprise(String tierCode) {
@@ -159,6 +204,7 @@ public final class SubscriptionPlanFit {
             PlanSnapshot recommended,
             boolean overProduct,
             boolean overUser,
+            boolean overRevenue,
             boolean negotiable
     ) {
         List<String> reasons = new ArrayList<>();
@@ -179,6 +225,15 @@ public final class SubscriptionPlanFit {
                     + formatCount(current.cashierLimit())
                     + "-person team");
         }
+        if (overRevenue && current != null && current.dailyRevenueLimitKes() != null) {
+            reasons.add("Average daily sales of KES "
+                    + formatMoney(usage.dailyRevenueKes())
+                    + " exceed "
+                    + currentName
+                    + "'s KES "
+                    + formatMoney(current.dailyRevenueLimitKes())
+                    + " daily revenue cap");
+        }
         if (negotiable) {
             reasons.add("This shop is past every published plan. A custom quote is the next step.");
         } else if (recommended != null && current != null && !currentFitsName(current, recommended)) {
@@ -193,5 +248,17 @@ public final class SubscriptionPlanFit {
 
     static String formatCount(long value) {
         return String.format(Locale.US, "%,d", value);
+    }
+
+    static String formatMoney(BigDecimal value) {
+        BigDecimal safe = value == null ? BigDecimal.ZERO : value;
+        return String.format(Locale.US, "%,.0f", safe);
+    }
+
+    private static BigDecimal normalizeMoney(BigDecimal value) {
+        if (value == null) {
+            return BigDecimal.ZERO;
+        }
+        return value.signum() < 0 ? BigDecimal.ZERO : value;
     }
 }

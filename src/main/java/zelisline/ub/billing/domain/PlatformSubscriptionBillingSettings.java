@@ -24,7 +24,7 @@ public class PlatformSubscriptionBillingSettings {
     private String id = SINGLETON_ID;
 
     @Column(name = "billing_enabled", nullable = false)
-    private boolean billingEnabled;
+    private boolean billingEnabled = true;
 
     @Column(name = "default_grace_days", nullable = false)
     private int defaultGraceDays = 15;

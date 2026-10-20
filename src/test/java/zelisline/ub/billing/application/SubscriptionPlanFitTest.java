@@ -67,8 +67,39 @@ class SubscriptionPlanFitTest {
                 CATALOGUE);
 
         assertThat(result.needsUpgrade()).isFalse();
-        assertThat(result.recommended().tierCode()).isEqualTo("free");
+        assertThat(result.recommended().tierCode()).isEqualTo("business");
         assertThat(SubscriptionPlanFit.fits(result.usage(), result.current())).isTrue();
+    }
+
+    @Test
+    void dailyRevenueOverCapPushesToABiggerPackage() {
+        List<SubscriptionPlanFit.PlanSnapshot> catalogue = List.of(
+                planWithDailyCap("starter", "Starter", 1000, 3, 1, 300, 15_000),
+                planWithDailyCap("business", "Business", 2500, 5, 2, 800, 30_000),
+                planWithDailyCap("growth", "Growth", 5000, 10, 3, 1500, 60_000));
+
+        SubscriptionPlanFit.Result result = SubscriptionPlanFit.evaluate(
+                new SubscriptionPlanFit.Usage(500, 2, new BigDecimal("20000")),
+                catalogue.get(0),
+                catalogue);
+
+        assertThat(result.overDailyRevenueLimit()).isTrue();
+        assertThat(result.needsUpgrade()).isTrue();
+        assertThat(result.recommended().tierCode()).isEqualTo("business");
+        assertThat(result.reasons()).anyMatch(r -> r.contains("daily revenue cap"));
+    }
+
+    @Test
+    void dailyRevenueCapIsInclusive() {
+        SubscriptionPlanFit.PlanSnapshot free =
+                planWithDailyCap("free", "Free", 300, 1, 0, 0, 5_000);
+
+        assertThat(SubscriptionPlanFit.fits(
+                new SubscriptionPlanFit.Usage(300, 1, new BigDecimal("5000")),
+                free)).isTrue();
+        assertThat(SubscriptionPlanFit.fits(
+                new SubscriptionPlanFit.Usage(300, 1, new BigDecimal("5000.01")),
+                free)).isFalse();
     }
 
     @Test
@@ -120,5 +151,24 @@ class SubscriptionPlanFitTest {
     ) {
         return new SubscriptionPlanFit.PlanSnapshot(
                 code, name, products, users, sort, BigDecimal.valueOf(price));
+    }
+
+    private static SubscriptionPlanFit.PlanSnapshot planWithDailyCap(
+            String code,
+            String name,
+            Integer products,
+            Integer users,
+            int sort,
+            int price,
+            int dailyRevenueCap
+    ) {
+        return new SubscriptionPlanFit.PlanSnapshot(
+                code,
+                name,
+                products,
+                users,
+                sort,
+                BigDecimal.valueOf(price),
+                BigDecimal.valueOf(dailyRevenueCap));
     }
 }

@@ -38,7 +38,7 @@ class SubscriptionPlanLimitExperienceTest {
 
     @Test
     void deferredPlanFitViewKeepsCountsButClearsUpgradeSignals() {
-        SubscriptionPlanFitService service = new SubscriptionPlanFitService(null, null, null, null);
+        SubscriptionPlanFitService service = new SubscriptionPlanFitService(null, null, null, null, null);
         SubscriptionPlanFit.Result overStarter = SubscriptionPlanFit.evaluate(
                 new SubscriptionPlanFit.Usage(3142, 2),
                 new SubscriptionPlanFit.PlanSnapshot(

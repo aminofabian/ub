@@ -122,10 +122,19 @@ public class SubscriptionBillingSettingsService {
             row.setGraceDays(body.graceDays());
         }
         if (body.productLimit() != null) {
-            row.setProductLimit(body.productLimit());
+            // -1 clears the cap back to unlimited (the admin editor sends it
+            // when the field is blank).
+            row.setProductLimit(body.productLimit() < 0 ? null : body.productLimit());
         }
         if (body.cashierLimit() != null) {
-            row.setCashierLimit(body.cashierLimit());
+            row.setCashierLimit(body.cashierLimit() < 0 ? null : body.cashierLimit());
+        }
+        if (body.dailyRevenueLimitKes() != null) {
+            if (body.dailyRevenueLimitKes().signum() < 0) {
+                row.setDailyRevenueLimitKes(null);
+            } else {
+                row.setDailyRevenueLimitKes(body.dailyRevenueLimitKes());
+            }
         }
         if (body.active() != null) {
             row.setActive(body.active());
@@ -198,6 +207,7 @@ public class SubscriptionBillingSettingsService {
                 row.getGraceDays(),
                 row.getProductLimit(),
                 row.getCashierLimit(),
+                row.getDailyRevenueLimitKes(),
                 row.isActive(),
                 row.getSortOrder());
     }

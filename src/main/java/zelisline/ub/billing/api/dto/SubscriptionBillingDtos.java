@@ -30,8 +30,11 @@ public final class SubscriptionBillingDtos {
             long userCount,
             Integer productLimit,
             Integer userLimit,
+            BigDecimal dailyRevenueKes,
+            BigDecimal dailyRevenueLimit,
             boolean overProductLimit,
             boolean overUserLimit,
+            boolean overDailyRevenueLimit,
             boolean needsUpgrade,
             boolean negotiable,
             boolean talkToUs,
@@ -49,6 +52,7 @@ public final class SubscriptionBillingDtos {
             int graceDays,
             Integer productLimit,
             Integer cashierLimit,
+            BigDecimal dailyRevenueLimitKes,
             boolean active,
             int sortOrder
     ) {}
@@ -79,6 +83,7 @@ public final class SubscriptionBillingDtos {
             Integer graceDays,
             Integer productLimit,
             Integer cashierLimit,
+            BigDecimal dailyRevenueLimitKes,
             Boolean active,
             Integer sortOrder
     ) {}

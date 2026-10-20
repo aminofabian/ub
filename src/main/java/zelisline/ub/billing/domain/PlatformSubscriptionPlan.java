@@ -40,6 +40,14 @@ public class PlatformSubscriptionPlan {
     @Column(name = "cashier_limit")
     private Integer cashierLimit;
 
+    /**
+     * Ceiling for average daily gross sales, in the platform currency (KES).
+     * {@code null} means unlimited (Enterprise). Recomputed over a trailing
+     * 30-day window so one quiet day does not change a shop's package.
+     */
+    @Column(name = "daily_revenue_limit_kes", precision = 12, scale = 2)
+    private BigDecimal dailyRevenueLimitKes;
+
     @Column(name = "active", nullable = false)
     private boolean active = true;
 

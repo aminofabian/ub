@@ -1,6 +1,9 @@
 package zelisline.ub.billing.application;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
@@ -12,20 +15,26 @@ import zelisline.ub.billing.domain.PlatformSubscriptionPlan;
 import zelisline.ub.billing.repository.PlatformSubscriptionPlanRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
- * Live catalog + staff seats against the published plan catalogue.
+ * Live catalog, staff seats, and trailing daily sales against the published
+ * plan catalogue.
  */
 @Service
 @RequiredArgsConstructor
 public class SubscriptionPlanFitService {
 
+    /** Trading days used to smooth daily sales into a plan-limit figure. */
+    public static final int DAILY_REVENUE_WINDOW_DAYS = 30;
+
     private final BusinessRepository businessRepository;
     private final PlatformSubscriptionPlanRepository planRepository;
     private final ItemRepository itemRepository;
     private final UserRepository userRepository;
+    private final SaleRepository saleRepository;
 
     /**
      * {@code true} while plan product/seat caps and upgrade notices are
@@ -77,7 +86,38 @@ public class SubscriptionPlanFitService {
     public SubscriptionPlanFit.Usage usage(String businessId) {
         long products = itemRepository.countByBusinessIdAndDeletedAtIsNullAndActiveTrue(businessId);
         long users = userRepository.countStaffByBusinessIdExcludingBuyers(businessId);
-        return new SubscriptionPlanFit.Usage(products, users);
+        return new SubscriptionPlanFit.Usage(products, users, averageDailyRevenue(businessId));
+    }
+
+    /** Average gross sales per trading day over the trailing window. */
+    @Transactional(readOnly = true)
+    public BigDecimal averageDailyRevenue(String businessId) {
+        Instant until = Instant.now();
+        Instant since = until.minus(DAILY_REVENUE_WINDOW_DAYS, ChronoUnit.DAYS);
+        List<Object[]> rows = saleRepository.aggregateSalesBetween(businessId, since, until);
+        if (rows == null || rows.isEmpty() || rows.get(0) == null || rows.get(0).length < 2) {
+            return BigDecimal.ZERO;
+        }
+        Object rawTotal = rows.get(0)[1];
+        if (rawTotal == null) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal total = rawTotal instanceof BigDecimal value
+                ? value
+                : new BigDecimal(rawTotal.toString());
+        if (total.signum() <= 0) {
+            return BigDecimal.ZERO;
+        }
+        return total.divide(
+                BigDecimal.valueOf(DAILY_REVENUE_WINDOW_DAYS),
+                2,
+                RoundingMode.HALF_UP);
+    }
+
+    /** Does this published package cover the shop right now? */
+    @Transactional(readOnly = true)
+    public boolean planCovers(PlatformSubscriptionPlan plan, SubscriptionPlanFit.Usage usage) {
+        return SubscriptionPlanFit.fits(usage, toSnapshot(plan));
     }
 
     @Transactional(readOnly = true)
@@ -104,6 +144,7 @@ public class SubscriptionPlanFitService {
         SubscriptionPlanFit.PlanSnapshot recommended = result.recommended();
         boolean overProduct = enforceLimits && result.overProductLimit();
         boolean overUser = enforceLimits && result.overUserLimit();
+        boolean overRevenue = enforceLimits && result.overDailyRevenueLimit();
         boolean needsUpgrade = enforceLimits && result.needsUpgrade();
         boolean negotiable = enforceLimits && result.negotiable();
         boolean talkToUs = enforceLimits && result.talkToUs();
@@ -112,8 +153,11 @@ public class SubscriptionPlanFitService {
                 result.usage().userCount(),
                 current != null ? current.productLimit() : null,
                 current != null ? current.cashierLimit() : null,
+                result.usage().dailyRevenueKes(),
+                current != null ? current.dailyRevenueLimitKes() : null,
                 overProduct,
                 overUser,
+                overRevenue,
                 needsUpgrade,
                 negotiable,
                 talkToUs,
@@ -139,7 +183,8 @@ public class SubscriptionPlanFitService {
                 row.getProductLimit(),
                 row.getCashierLimit(),
                 row.getSortOrder(),
-                row.getMonthlyPriceKes());
+                row.getMonthlyPriceKes(),
+                row.getDailyRevenueLimitKes());
     }
 
     private SubscriptionBillingDtos.PlanResponse toPlanResponse(PlatformSubscriptionPlan row) {
@@ -151,6 +196,7 @@ public class SubscriptionPlanFitService {
                 row.getGraceDays(),
                 row.getProductLimit(),
                 row.getCashierLimit(),
+                row.getDailyRevenueLimitKes(),
                 row.isActive(),
                 row.getSortOrder());
     }

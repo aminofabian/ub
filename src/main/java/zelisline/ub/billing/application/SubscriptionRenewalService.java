@@ -45,6 +45,7 @@ public class SubscriptionRenewalService {
     private final SubscriptionBillingSettingsService settingsService;
     private final SubscriptionBillingService billingService;
     private final SubscriptionPricingService pricingService;
+    private final SubscriptionPlanFitService planFitService;
     private final BusinessRepository businessRepository;
     private final PaymentGatewayStkService paymentGatewayStkService;
     private final GatewayStkPushService gatewayStkPushService;
@@ -65,6 +66,7 @@ public class SubscriptionRenewalService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Free tier does not require renewal payment");
         }
         PlatformSubscriptionPlan plan = settingsService.requireActivePlan(tierCode);
+        assertPackageChangeAllowed(business, plan);
         BigDecimal amount = pricingService.resolveRenewalAmount(plan, periodMonths);
         BigDecimal listPrice = periodMonths == SubscriptionPricingService.ANNUAL_PERIOD_MONTHS
                 ? pricingService.annualListPrice(plan)
@@ -241,6 +243,38 @@ public class SubscriptionRenewalService {
     private Business requireBusiness(String businessId) {
         return businessRepository.findByIdAndDeletedAtIsNull(businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
+    }
+
+    /**
+     * Self-serve packages are a ladder: keep the current tier for a renewal,
+     * move up to a bigger one, never down. A higher tier must also cover what
+     * the shop already runs (catalog, seats, trailing daily sales).
+     */
+    private void assertPackageChangeAllowed(Business business, PlatformSubscriptionPlan target) {
+        PlatformSubscriptionPlan current = settingsService.planOrNull(business.getSubscriptionTier());
+        if (current == null) {
+            return;
+        }
+        boolean sameTier = current.getTierCode().equalsIgnoreCase(target.getTierCode());
+        if (target.getSortOrder() < current.getSortOrder()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Packages only move up. You are on "
+                            + current.getDisplayName()
+                            + " — choose a higher package or contact support.");
+        }
+        if (sameTier) {
+            // Renewing the current plan is always allowed, even when live usage
+            // has outgrown it; the upgrade banner still nudges a bigger tier.
+            return;
+        }
+        SubscriptionPlanFit.Usage usage = planFitService.usage(business.getId());
+        if (!planFitService.planCovers(target, usage)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    target.getDisplayName()
+                            + " is too small for this shop's catalog, team, or daily sales. Choose a bigger package.");
+        }
     }
 
     private static String resolveTier(Business business, String tierOverride) {

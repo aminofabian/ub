@@ -15,6 +15,7 @@ import zelisline.ub.messages.domain.ContactReplyChannel;
 import zelisline.ub.messages.repository.ContactMessageReplyRepository;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
+import zelisline.ub.marketplace.application.SupplierPortalMessagesService;
 
 /**
  * Cloud implementation of {@link ContactReplySender}: sends the reply through
@@ -32,6 +33,7 @@ public class DirectContactReplySender implements ContactReplySender {
     private final NotificationService notificationService;
     private final CustomerMessageDispatcher customerMessageDispatcher;
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
+    private final SupplierPortalMessagesService supplierPortalMessagesService;
 
     @Override
     public ContactMessageReply send(
@@ -52,11 +54,23 @@ public class DirectContactReplySender implements ContactReplySender {
                 if (message.getEmail() == null || message.getEmail().isBlank()) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Message has no email address");
                 }
-                String subject = "Re: your message to " + fromDisplayName;
-                notificationService.sendContactReplyEmail(
-                        message.getEmail(), subject, body, fromDisplayName);
-                outcome = "sent";
-                detail = "email";
+                // Supplier portal messages arrive with a synthetic .local address.
+                // Sending email there bounces; route the shop's reply into the
+                // supplier's portal thread instead.
+                boolean supplierPortal = (message.getEmail().startsWith("supplier-portal@")
+                        || message.getEmail().startsWith("supplier-hub@"))
+                        && supplierPortalMessagesService.recordShopReplyForContact(
+                                message.getId(), fromDisplayName, body);
+                if (supplierPortal) {
+                    outcome = "sent";
+                    detail = "supplier-portal";
+                } else {
+                    String subject = "Re: your message to " + fromDisplayName;
+                    notificationService.sendContactReplyEmail(
+                            message.getEmail(), subject, body, fromDisplayName);
+                    outcome = "sent";
+                    detail = "email";
+                }
             }
             case WHATSAPP -> {
                 String phone = requirePhone(message);

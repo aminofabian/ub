@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import zelisline.ub.billing.application.SubscriptionAccessPolicy;
 import zelisline.ub.tenancy.api.dto.OnboardingSettingsResponse;
 import zelisline.ub.tenancy.api.dto.MetaPixelPublicConfig;
 import zelisline.ub.tenancy.api.dto.PublicHostResolveResponse;
@@ -56,6 +57,7 @@ public class PublicHostResolverService {
     private final UserRepository userRepository;
     private final RegionDefaults regionDefaults;
     private final RegionCatalogAuditService regionCatalogAuditService;
+    private final SubscriptionAccessPolicy subscriptionAccessPolicy;
 
     public PublicHostResolverService(
             DomainMappingRepository domainMappingRepository,
@@ -69,7 +71,8 @@ public class PublicHostResolverService {
             BusinessMobileSettingsService businessMobileSettingsService,
             UserRepository userRepository,
             RegionDefaults regionDefaults,
-            RegionCatalogAuditService regionCatalogAuditService) {
+            RegionCatalogAuditService regionCatalogAuditService,
+            SubscriptionAccessPolicy subscriptionAccessPolicy) {
         this.domainMappingRepository = domainMappingRepository;
         this.businessRepository = businessRepository;
         this.branchRepository = branchRepository;
@@ -82,6 +85,7 @@ public class PublicHostResolverService {
         this.userRepository = userRepository;
         this.regionDefaults = regionDefaults;
         this.regionCatalogAuditService = regionCatalogAuditService;
+        this.subscriptionAccessPolicy = subscriptionAccessPolicy;
     }
 
     /**
@@ -285,6 +289,12 @@ public class PublicHostResolverService {
         TenantStatus status = business.getTenantStatus() != null
                 ? business.getTenantStatus()
                 : TenantStatus.ACTIVE;
+        // Super Admin can switch automatic subscription blocking off. Keep the
+        // public storefront online when the only reason for SUSPENDED is billing.
+        if (status == TenantStatus.SUSPENDED
+                && !subscriptionAccessPolicy.isAccessBlockingEnabled()) {
+            status = TenantStatus.ACTIVE;
+        }
         OnboardingSettingsResponse onboarding =
                 businessOnboardingSettingsService.readFromSettingsJson(business.getSettings());
         List<Branch> branches =

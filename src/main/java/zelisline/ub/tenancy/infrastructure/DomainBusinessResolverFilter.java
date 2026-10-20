@@ -22,6 +22,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import zelisline.ub.billing.application.SubscriptionAccessPolicy;
 import zelisline.ub.tenancy.domain.TenantStatus;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
@@ -53,6 +54,7 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
 
     private static final String PROBLEM_TYPE = "urn:problem:tenant-not-found";
     private static final String PROBLEM_TYPE_NOT_ACTIVE = "urn:problem:tenant-not-active";
+    private static final String PROBLEM_TYPE_SUBSCRIPTION_BLOCKED = "urn:problem:subscription-blocked";
 
     private static final String X_TENANT_ID_HEADER = "X-Tenant-Id";
 
@@ -77,12 +79,13 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
     private final BusinessRepository businessRepository;
     private final ObjectMapper objectMapper;
     private final Set<String> hostsWithoutMapping;
+    private final SubscriptionAccessPolicy accessPolicy;
 
     public DomainBusinessResolverFilter(
             DomainMappingRepository domainMappingRepository,
             BusinessRepository businessRepository
     ) {
-        this(domainMappingRepository, businessRepository, new ObjectMapper(), List.of());
+        this(domainMappingRepository, businessRepository, new ObjectMapper(), List.of(), null);
     }
 
     public DomainBusinessResolverFilter(
@@ -90,7 +93,7 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
             BusinessRepository businessRepository,
             ObjectMapper objectMapper
     ) {
-        this(domainMappingRepository, businessRepository, objectMapper, List.of());
+        this(domainMappingRepository, businessRepository, objectMapper, List.of(), null);
     }
 
     /**
@@ -104,11 +107,13 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
             DomainMappingRepository domainMappingRepository,
             BusinessRepository businessRepository,
             ObjectMapper objectMapper,
-            Collection<String> platformHosts
+            Collection<String> platformHosts,
+            SubscriptionAccessPolicy accessPolicy
     ) {
         this.domainMappingRepository = domainMappingRepository;
         this.businessRepository = businessRepository;
         this.objectMapper = objectMapper;
+        this.accessPolicy = accessPolicy;
         Set<String> merged = new HashSet<>(BUILTIN_HOSTS_WITHOUT_MAPPING);
         if (platformHosts != null) {
             for (String h : platformHosts) {
@@ -173,11 +178,19 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
             TenantStatus status = businessRepository.findTenantStatusById(businessId)
                     .orElse(TenantStatus.ACTIVE);
             if (status != TenantStatus.ACTIVE) {
-                // Billing SUSPENDED may still hit auth / subscription / me to pay.
                 // SA INACTIVE is a hard lock — no recovery path.
-                if (status == TenantStatus.SUSPENDED && isBillingRecoveryPath(request)) {
-                    request.setAttribute(TenantRequestAttributes.BUSINESS_ID, businessId);
-                    filterChain.doFilter(request, response);
+                if (status == TenantStatus.SUSPENDED) {
+                    boolean blocking = accessPolicy == null || accessPolicy.isAccessBlockingEnabled();
+                    if (!blocking || isBillingRecoveryPath(request)) {
+                        request.setAttribute(TenantRequestAttributes.BUSINESS_ID, businessId);
+                        filterChain.doFilter(request, response);
+                        return;
+                    }
+                    logger.warn(
+                            "[DomainResolver] billing subscription blocked: host={} businessId={}",
+                            lookupHost,
+                            businessId);
+                    writeSubscriptionBlocked(response);
                     return;
                 }
                 logger.warn("[DomainResolver] tenant not active: host={} businessId={} status={}", lookupHost, businessId, status);
@@ -247,6 +260,17 @@ public class DomainBusinessResolverFilter extends OncePerRequestFilter {
         Map<String, Object> body = problemBody(HttpStatus.LOCKED, PROBLEM_TYPE_NOT_ACTIVE, "Tenant not active",
                 "Tenant is " + status.name().toLowerCase() + " and cannot accept authenticated traffic");
         body.put("tenantStatus", status.name());
+        writeProblem(response, HttpStatus.LOCKED, body);
+    }
+
+    /** Subscription lock — recovery paths and the renewal wall stay reachable. */
+    private void writeSubscriptionBlocked(HttpServletResponse response) throws IOException {
+        Map<String, Object> body = problemBody(
+                HttpStatus.LOCKED,
+                PROBLEM_TYPE_SUBSCRIPTION_BLOCKED,
+                "Subscription blocked",
+                "Renew this shop's subscription to continue. Your data is safe.");
+        body.put("tenantStatus", TenantStatus.SUSPENDED.name());
         writeProblem(response, HttpStatus.LOCKED, body);
     }
 

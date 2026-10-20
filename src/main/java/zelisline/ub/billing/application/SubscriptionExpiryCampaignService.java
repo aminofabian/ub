@@ -173,12 +173,15 @@ public class SubscriptionExpiryCampaignService {
         PlatformSubscriptionPlan plan = billingSettingsService.planOrNull(business.getSubscriptionTier());
         int graceDays = billingSettingsService.resolveGraceDays(plan);
         String renewalUrl = settings.getRenewalBaseUrl();
-        String body = stepDay >= 15
-                ? emailRenderer.renderDayFifteenSms(renewalUrl)
-                : emailRenderer.renderDayZeroSms(
-                        business.getName() != null ? business.getName() : "Your shop",
-                        graceDays,
-                        renewalUrl);
+        String businessName = business.getName() != null ? business.getName() : "Your shop";
+        String body;
+        if (!billingSettingsService.isAutoBlockEnabled()) {
+            body = emailRenderer.renderAutoBlockOffSms(businessName, renewalUrl);
+        } else if (stepDay >= 15) {
+            body = emailRenderer.renderDayFifteenSms(renewalUrl);
+        } else {
+            body = emailRenderer.renderDayZeroSms(businessName, graceDays, renewalUrl);
+        }
         try {
             SmsMessagingClient.SendResult result = smsMessagingClient.sendText(
                     messaging, phone, body, SmsSendReason.OPS_ALERT, "subscription-expiry:" + campaign.getId());
@@ -224,7 +227,8 @@ public class SubscriptionExpiryCampaignService {
                 graceDays,
                 campaign.getGraceStartedAt(),
                 business.getGraceEndsAt(),
-                settings.getRenewalBaseUrl());
+                settings.getRenewalBaseUrl(),
+                billingSettingsService.isAutoBlockEnabled());
         int sent = 0;
         String lastError = null;
         for (String email : emails) {

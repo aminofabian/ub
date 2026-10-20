@@ -122,12 +122,22 @@ public class PathAPurchaseService {
     }
 
     @Transactional(readOnly = true)
-    public List<PathAPurchaseOrderListRow> listPurchaseOrders(String businessId, String supplierId, String status) {
-        String effectiveStatus = status != null && !status.isBlank() ? status.trim() : PurchasingConstants.PO_SENT;
+    public List<PathAPurchaseOrderListRow> listPurchaseOrders(String businessId, String supplierId, List<String> statuses) {
+        List<String> effectiveStatuses = statuses == null
+                ? List.<String>of()
+                : statuses.stream()
+                        .filter(status -> status != null && !status.isBlank())
+                        .map(String::trim)
+                        .distinct()
+                        .toList();
+        if (effectiveStatuses.isEmpty()) {
+            effectiveStatuses = List.of(PurchasingConstants.PO_SENT);
+        }
         List<PurchaseOrder> orders = supplierId != null && !supplierId.isBlank()
-                ? purchaseOrderRepository.findByBusinessIdAndSupplierIdAndStatusOrderByCreatedAtDesc(
-                        businessId, supplierId.trim(), effectiveStatus)
-                : purchaseOrderRepository.findByBusinessIdAndStatusOrderByCreatedAtDesc(businessId, effectiveStatus);
+                ? purchaseOrderRepository.findByBusinessIdAndSupplierIdAndStatusInOrderByCreatedAtDesc(
+                        businessId, supplierId.trim(), effectiveStatuses)
+                : purchaseOrderRepository.findByBusinessIdAndStatusInOrderByCreatedAtDesc(
+                        businessId, effectiveStatuses);
         return orders.stream().map(this::toListRow).toList();
     }
 

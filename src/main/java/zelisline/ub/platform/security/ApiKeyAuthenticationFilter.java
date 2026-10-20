@@ -28,8 +28,11 @@ import zelisline.ub.audit.application.AuditEventPublisher;
 import zelisline.ub.audit.domain.AuditEventActorType;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
+import zelisline.ub.billing.application.SubscriptionAccessPolicy;
 import zelisline.ub.identity.application.ApiKeyAuthService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.tenancy.domain.TenantStatus;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
  * Authenticates {@code X-API-Key} or {@code Authorization: Bearer kpos_*} integration tokens.
@@ -49,6 +52,8 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
     private final InvalidApiKeyIpRateLimiter invalidApiKeyIpRateLimiter;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final BusinessRepository businessRepository;
+    private final SubscriptionAccessPolicy accessPolicy;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
@@ -102,6 +107,21 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
         TenantRequestIds.bindBusinessId(request, principal.businessId());
+
+        // Integration keys are subject to the same central subscription policy
+        // as human sessions. INACTIVE (manual) always blocks; billing SUSPENDED
+        // blocks only while auto-block is on.
+        TenantStatus tenantStatus = businessRepository
+                .findTenantStatusById(principal.businessId())
+                .orElse(TenantStatus.ACTIVE);
+        if (tenantStatus == TenantStatus.INACTIVE) {
+            writeProblem(response, HttpStatus.LOCKED, "Tenant is inactive", "tenant-not-active");
+            return;
+        }
+        if (tenantStatus == TenantStatus.SUSPENDED && accessPolicy.isAccessBlockingEnabled()) {
+            writeProblem(response, HttpStatus.LOCKED, "Subscription blocked", "subscription-blocked");
+            return;
+        }
 
         invalidApiKeyIpRateLimiter.clear(clientIp);
         maybeTouchLastUsed(principal.apiKeyId());

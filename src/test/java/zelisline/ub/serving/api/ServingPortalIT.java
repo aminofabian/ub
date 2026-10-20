@@ -47,6 +47,8 @@ class ServingPortalIT {
 
     private static final String TENANT_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01";
     private static final String ROLE_OWNER = "22222222-aaaa-bbbb-cccc-000000000001";
+    /** Unique, unseeded role id so other test classes cannot grant it permissions. */
+    private static final String ROLE_NO_SUPPORT = "22222222-aaaa-bbbb-cccc-000000000099";
 
     @Autowired
     private MockMvc mockMvc;
@@ -303,6 +305,15 @@ class ServingPortalIT {
                         .contentType(APPLICATION_JSON)
                         .content("{\"status\":\"CLOSED\"}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void storefrontBuyerListRequiresMessagesRead() throws Exception {
+        mockMvc.perform(get("/api/v1/support/storefront/conversations")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header("X-Test-User-Id", userIdFor())
+                        .header("X-Test-Role-Id", ROLE_NO_SUPPORT))
+                .andExpect(status().isForbidden());
     }
 
     @Test

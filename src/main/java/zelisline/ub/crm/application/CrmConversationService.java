@@ -72,8 +72,17 @@ public class CrmConversationService {
                 businessId, blankToNull(status), blankToNull(assigneeId), PageRequest.of(p, s));
         Map<String, CrmContact> contacts = contactsByIds(
                 result.getContent().stream().map(CrmConversation::getContactId).toList());
+        Map<String, CrmMessage> latest = new HashMap<>();
+        List<String> conversationIds = result.getContent().stream()
+                .map(CrmConversation::getId)
+                .toList();
+        if (!conversationIds.isEmpty()) {
+            for (CrmMessage message : messageRepository.findLatestForConversations(conversationIds)) {
+                latest.put(message.getConversationId(), message);
+            }
+        }
         List<CrmDtos.ConversationRow> items = result.getContent().stream()
-                .map(c -> toRow(c, contacts.get(c.getContactId())))
+                .map(c -> toRow(c, contacts.get(c.getContactId()), latest.get(c.getId())))
                 .toList();
         return new CrmDtos.ConversationsPage(items, p, s, result.getTotalElements());
     }
@@ -83,11 +92,13 @@ public class CrmConversationService {
         CrmConversation conversation = requireConversation(businessId, conversationId);
         markRead(conversation);
         CrmContact contact = contactOrNull(conversation.getContactId());
-        List<CrmDtos.MessageRow> messages =
-                messageRepository.findByConversationIdOrderByCreatedAtAsc(conversationId).stream()
-                        .map(CrmConversationService::toMessageRow)
-                        .toList();
-        return new CrmDtos.ConversationDetail(toRow(conversation, contact), messages);
+        List<CrmMessage> entities =
+                messageRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+        List<CrmDtos.MessageRow> messages = entities.stream()
+                .map(CrmConversationService::toMessageRow)
+                .toList();
+        CrmMessage last = entities.isEmpty() ? null : entities.get(entities.size() - 1);
+        return new CrmDtos.ConversationDetail(toRow(conversation, contact, last), messages);
     }
 
     /** Enqueue a reply; the outbox drain performs the actual send. */
@@ -269,17 +280,44 @@ public class CrmConversationService {
     }
 
     private CrmDtos.ConversationRow toRow(CrmConversation c, CrmContact contact) {
+        return toRow(c, contact, null);
+    }
+
+    private CrmDtos.ConversationRow toRow(
+            CrmConversation c, CrmContact contact, CrmMessage lastMessage) {
         return new CrmDtos.ConversationRow(
                 c.getId(),
                 c.getStatus(),
                 c.getAssignedUserId(),
                 c.getUnreadCount(),
                 c.getLastMessageAt(),
+                lastMessage == null ? null : previewOf(lastMessage),
+                lastMessage == null ? null : lastMessage.getType(),
+                lastMessage == null ? null : lastMessage.getDirection(),
                 c.getWindowExpiresAt(),
                 c.getContactId(),
                 contact == null ? null : contact.getName(),
                 contact == null ? null : contact.getPhoneE164(),
                 readTags(contact));
+    }
+
+    private static String previewOf(CrmMessage message) {
+        String type = message.getType() == null ? "text" : message.getType().toLowerCase();
+        String body = message.getBody() == null ? "" : message.getBody().trim();
+        String text = switch (type) {
+            case "image" -> body.isEmpty() ? "Photo" : "Photo · " + body;
+            case "audio" -> "Voice note";
+            case "video" -> body.isEmpty() ? "Video" : "Video · " + body;
+            case "document" -> body.isEmpty() ? "Document" : body;
+            case "sticker" -> "Sticker";
+            case "location" -> "Location";
+            case "reaction" -> body.isEmpty() ? "Reaction" : body;
+            default -> body;
+        };
+        if (text.isEmpty()) {
+            return "No messages yet";
+        }
+        return text.length() > 120 ? text.substring(0, 120) + "…" : text;
     }
 
     private static CrmDtos.MessageRow toMessageRow(CrmMessage m) {

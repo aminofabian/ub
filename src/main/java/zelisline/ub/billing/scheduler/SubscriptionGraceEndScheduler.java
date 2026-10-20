@@ -16,7 +16,11 @@ import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
- * Daily 09:00 EAT: GRACE tenants past {@code grace_ends_at} are suspended.
+ * Hourly: GRACE tenants past {@code grace_ends_at} are suspended.
+ *
+ * <p>Runs hourly rather than once a day so the lock lands close to the moment
+ * the grace window actually ends; auto-block can still be switched off
+ * globally from Super Admin.
  */
 @Component
 @RequiredArgsConstructor
@@ -28,7 +32,7 @@ public class SubscriptionGraceEndScheduler {
     private final SubscriptionBillingService billingService;
     private final SubscriptionBillingSettingsService settingsService;
 
-    @Scheduled(cron = "${app.subscription.grace-end-cron:0 0 9 * * *}", zone = "Africa/Nairobi")
+    @Scheduled(cron = "${app.subscription.grace-end-cron:0 5 * * * *}", zone = "Africa/Nairobi")
     public void processGraceEnd() {
         if (!settingsService.isBillingEnabled()) {
             return;

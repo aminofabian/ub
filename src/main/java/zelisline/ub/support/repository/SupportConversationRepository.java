@@ -21,8 +21,12 @@ public interface SupportConversationRepository extends JpaRepository<SupportConv
     Optional<SupportConversation> findByConversationTypeAndBusinessIdAndGuestId(
             String conversationType, String businessId, String guestId);
 
-    /** The thread a returning visitor claims via their phone. */
-    Optional<SupportConversation> findByConversationTypeAndBusinessIdAndGuestPhone(
+    /**
+     * The most recently active thread for a phone. Phones are not unique (a
+     * family can share one), so this is intentionally a "first" lookup rather
+     * than a single-result query that would throw on duplicates.
+     */
+    Optional<SupportConversation> findFirstByConversationTypeAndBusinessIdAndGuestPhoneOrderByLastMessageAtDescCreatedAtDesc(
             String conversationType, String businessId, String guestPhone);
 
     /** Every thread a guest owns across businesses (token check on ticket mint). */

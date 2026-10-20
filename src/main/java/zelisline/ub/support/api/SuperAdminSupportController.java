@@ -57,9 +57,8 @@ public class SuperAdminSupportController {
 
     @GetMapping("/conversations/{id}")
     public SupportConversationDetailDto conversation(@PathVariable String id) {
-        SupportConversationDetailDto detail = supportService.adminDetail(id);
-        supportService.markAdminRead(id);
-        return detail;
+        // Read is an explicit POST; a GET must not mutate state.
+        return supportService.adminDetail(id);
     }
 
     /**

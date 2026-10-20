@@ -23,6 +23,11 @@ public interface ContactMessageRepository extends JpaRepository<ContactMessage, 
 
     Page<ContactMessage> findByScopeOrderByCreatedAtDesc(ContactMessageScope scope, Pageable pageable);
 
+    long countByScopeAndBusinessIdAndStatus(
+            ContactMessageScope scope, String businessId, ContactMessageStatus status);
+
+    long countByScopeAndStatus(ContactMessageScope scope, ContactMessageStatus status);
+
     Page<ContactMessage> findByScopeAndStatusOrderByCreatedAtDesc(
             ContactMessageScope scope, ContactMessageStatus status, Pageable pageable);
 

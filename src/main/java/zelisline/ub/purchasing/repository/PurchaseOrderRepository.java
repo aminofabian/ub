@@ -18,6 +18,13 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
     List<PurchaseOrder> findByBusinessIdAndSupplierIdAndStatusOrderByCreatedAtDesc(
             String businessId, String supplierId, String status);
 
+    /** Several board columns in one query — the buy desk reads sent + drafts together. */
+    List<PurchaseOrder> findByBusinessIdAndStatusInOrderByCreatedAtDesc(
+            String businessId, List<String> statuses);
+
+    List<PurchaseOrder> findByBusinessIdAndSupplierIdAndStatusInOrderByCreatedAtDesc(
+            String businessId, String supplierId, List<String> statuses);
+
     @Query("""
             SELECT po FROM PurchaseOrder po
             JOIN Supplier s ON s.id = po.supplierId

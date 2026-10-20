@@ -43,6 +43,7 @@ import zelisline.ub.marketplace.repository.SupplierUserRepository;
 import zelisline.ub.marketplace.repository.SupplierUserSessionRepository;
 import zelisline.ub.marketplace.application.SupplierPortalSessionService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
+import zelisline.ub.billing.application.SubscriptionAccessPolicy;
 
 /**
  * Validates {@code Authorization: Bearer} access tokens: tenant JWTs require host
@@ -67,6 +68,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final AuditEventBuilder auditEventBuilder;
     private final UserSessionActivity userSessionActivity;
     private final zelisline.ub.tenancy.repository.BusinessRepository businessRepository;
+    private final SubscriptionAccessPolicy accessPolicy;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -267,6 +269,23 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     HttpStatus.LOCKED,
                     "Tenant is inactive",
                     "tenant-not-active");
+            return;
+        }
+        if (tenantStatus == zelisline.ub.tenancy.domain.TenantStatus.SUSPENDED
+                && accessPolicy.isAccessBlockingEnabled()
+                && !accessPolicy.isBillingRecoveryRequest(request)) {
+            publishSecurityEvent(
+                    request,
+                    resolvedTenant,
+                    AuditEventTypes.SESSION_ACCESS_DENIED,
+                    AuditEventSeverity.WARN,
+                    "Subscription blocked");
+            writeProblem(
+                    request,
+                    response,
+                    HttpStatus.LOCKED,
+                    "Subscription blocked",
+                    "subscription-blocked");
             return;
         }
 

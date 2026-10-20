@@ -38,6 +38,11 @@ public class SubscriptionBillingSettingsService {
     }
 
     @Transactional(readOnly = true)
+    public boolean isAutoBlockEnabled() {
+        return loadSingleton().isAutoBlockEnabled();
+    }
+
+    @Transactional(readOnly = true)
     public int defaultGraceDays() {
         return loadSingleton().getDefaultGraceDays();
     }
@@ -54,6 +59,9 @@ public class SubscriptionBillingSettingsService {
         PlatformSubscriptionBillingSettings row = loadSingleton();
         if (body.billingEnabled() != null) {
             row.setBillingEnabled(body.billingEnabled());
+        }
+        if (body.autoBlockEnabled() != null) {
+            row.setAutoBlockEnabled(body.autoBlockEnabled());
         }
         if (body.defaultGraceDays() != null) {
             if (body.defaultGraceDays() < 1) {
@@ -164,6 +172,15 @@ public class SubscriptionBillingSettingsService {
         return planRepository.findByTierCodeAndActiveTrue(tierCode.trim().toLowerCase()).orElse(null);
     }
 
+    /** Current plan row even if Super Admin has unpublished it; used for downgrade guards. */
+    @Transactional(readOnly = true)
+    public PlatformSubscriptionPlan planEvenIfInactive(String tierCode) {
+        if (tierCode == null || tierCode.isBlank()) {
+            return null;
+        }
+        return planRepository.findById(tierCode.trim().toLowerCase()).orElse(null);
+    }
+
     public int resolveGraceDays(PlatformSubscriptionPlan plan) {
         if (plan != null && plan.getGraceDays() > 0) {
             return plan.getGraceDays();
@@ -174,6 +191,7 @@ public class SubscriptionBillingSettingsService {
     private SubscriptionBillingDtos.SettingsResponse toSettingsResponse(PlatformSubscriptionBillingSettings row) {
         return new SubscriptionBillingDtos.SettingsResponse(
                 row.isBillingEnabled(),
+                row.isAutoBlockEnabled(),
                 row.getDefaultGraceDays(),
                 row.getRenewalBaseUrl(),
                 row.getNotificationCadenceDays(),

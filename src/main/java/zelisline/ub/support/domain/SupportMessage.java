@@ -75,6 +75,10 @@ public class SupportMessage {
     @Column(name = "reply_to_message_id", length = 36)
     private String replyToMessageId;
 
+    /** Client-generated idempotency key for retrying a send without duplicating it. */
+    @Column(name = "client_message_id", length = 64)
+    private String clientMessageId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

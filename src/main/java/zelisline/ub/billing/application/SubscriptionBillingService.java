@@ -21,6 +21,7 @@ import zelisline.ub.billing.domain.PlatformSubscriptionPlan;
 import zelisline.ub.billing.domain.SubscriptionBillingStatus;
 import zelisline.ub.billing.domain.SubscriptionRenewalOrder;
 import zelisline.ub.billing.domain.SuspensionReason;
+import zelisline.ub.billing.repository.SubscriptionRenewalOrderRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.domain.TenantStatus;
@@ -36,6 +37,8 @@ public class SubscriptionBillingService {
 
     private final BusinessRepository businessRepository;
     private final SubscriptionBillingSettingsService settingsService;
+    private final SubscriptionAccessPolicy accessPolicy;
+    private final SubscriptionRenewalOrderRepository renewalOrderRepository;
     private final UserSessionRepository userSessionRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
@@ -107,6 +110,11 @@ public class SubscriptionBillingService {
         if (!settingsService.isBillingEnabled()) {
             return false;
         }
+        if (!accessPolicy.isAccessBlockingEnabled()) {
+            // Super Admin has switched automatic subscription blocking off.
+            // The shop stays in GRACE (with warnings) so it can renew later.
+            return false;
+        }
         if (business.getDeletedAt() != null) {
             return false;
         }
@@ -117,12 +125,24 @@ public class SubscriptionBillingService {
             return false;
         }
 
-        business.setSubscriptionBillingStatus(SubscriptionBillingStatus.SUSPENDED);
-        business.setBillingSuspendedAt(now);
-        business.syncAccessGate();
-        businessRepository.save(business);
-        userSessionRepository.revokeAllActiveForBusiness(business.getId(), now);
-        publishAudit(business.getId(), AuditEventTypes.SUBSCRIPTION_SUSPENDED, null);
+        // Re-read under a write lock: a payment may have landed between the
+        // scheduler's list query and this update.
+        Business locked = businessRepository
+                .findByIdAndDeletedAtIsNullForUpdate(business.getId())
+                .orElse(null);
+        if (locked == null
+                || locked.getSubscriptionBillingStatus() != SubscriptionBillingStatus.GRACE
+                || locked.getGraceEndsAt() == null
+                || now.isBefore(locked.getGraceEndsAt())) {
+            return false;
+        }
+
+        locked.setSubscriptionBillingStatus(SubscriptionBillingStatus.SUSPENDED);
+        locked.setBillingSuspendedAt(now);
+        locked.syncAccessGate();
+        businessRepository.save(locked);
+        userSessionRepository.revokeAllActiveForBusiness(locked.getId(), now);
+        publishAudit(locked.getId(), AuditEventTypes.SUBSCRIPTION_SUSPENDED, null);
         return true;
     }
 
@@ -139,7 +159,7 @@ public class SubscriptionBillingService {
         if (months < 1) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "months must be at least 1");
         }
-        Business business = requireBusiness(businessId);
+        Business business = requireBusinessForUpdate(businessId);
         Instant now = Instant.now();
         Instant base = business.getCurrentPeriodEnd() != null && business.getCurrentPeriodEnd().isAfter(now)
                 ? business.getCurrentPeriodEnd()
@@ -170,7 +190,7 @@ public class SubscriptionBillingService {
         if (days < 1) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "days must be at least 1");
         }
-        Business business = requireBusiness(businessId);
+        Business business = requireBusinessForUpdate(businessId);
         Instant now = Instant.now();
         Instant periodEnd = business.getCurrentPeriodEnd();
         boolean periodStillRunning = periodEnd != null && periodEnd.isAfter(now);
@@ -213,7 +233,7 @@ public class SubscriptionBillingService {
         if (!isFreeTierStatic(code) && settingsService.planOrNull(code) == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown subscription plan");
         }
-        Business business = requireBusiness(businessId);
+        Business business = requireBusinessForUpdate(businessId);
         business.setSubscriptionTier(code);
         businessRepository.save(business);
         publishAudit(business.getId(), AuditEventTypes.SUBSCRIPTION_PLAN_ASSIGNED, actorUserId);
@@ -229,7 +249,7 @@ public class SubscriptionBillingService {
             SubscriptionBillingDtos.OverrideSubscriptionRequest body,
             String actorUserId
     ) {
-        Business business = requireBusiness(businessId);
+        Business business = requireBusinessForUpdate(businessId);
         Instant now = Instant.now();
 
         if (body.tierCode() != null && !body.tierCode().isBlank()) {
@@ -302,7 +322,7 @@ public class SubscriptionBillingService {
 
     @Transactional
     public SubscriptionBillingDtos.AdminSubscriptionSnapshot reactivate(String businessId, String actorUserId) {
-        Business business = requireBusiness(businessId);
+        Business business = requireBusinessForUpdate(businessId);
         if (business.getSubscriptionBillingStatus() != SubscriptionBillingStatus.SUSPENDED) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -326,7 +346,9 @@ public class SubscriptionBillingService {
      */
     @Transactional
     public void activateRenewal(SubscriptionRenewalOrder order) {
-        Business business = requireBusiness(order.getBusinessId());
+        Business business = businessRepository
+                .findByIdAndDeletedAtIsNullForUpdate(order.getBusinessId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
         if (order.getTierCode() != null && !order.getTierCode().isBlank()) {
             business.setSubscriptionTier(order.getTierCode().trim().toLowerCase());
         }
@@ -401,6 +423,9 @@ public class SubscriptionBillingService {
         }
 
         var settings = settingsService.loadSingleton();
+        var lastRenewal = renewalOrderRepository
+                .findFirstByBusinessIdOrderByCreatedAtDesc(business.getId())
+                .orElse(null);
         SubscriptionBillingDtos.PlanFitView planFit = null;
         SubscriptionPlanFitService fit = planFitService.getIfAvailable();
         if (fit != null) {
@@ -424,7 +449,12 @@ public class SubscriptionBillingService {
                 daysRemaining,
                 settings.getRenewalBaseUrl(),
                 settings.isBillingEnabled(),
-                planFit);
+                settings.isAutoBlockEnabled(),
+                accessPolicy.isAccessBlocked(business, now),
+                lastRenewal != null && lastRenewal.getStatus() != null
+                        ? lastRenewal.getStatus().name()
+                        : null,
+                lastRenewal != null ? lastRenewal.getCreatedAt() : null,                planFit);
     }
 
     private static BigDecimal amountDue(PlatformSubscriptionPlan plan) {
@@ -446,6 +476,12 @@ public class SubscriptionBillingService {
 
     private Business requireBusiness(String businessId) {
         return businessRepository.findByIdAndDeletedAtIsNull(businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
+    }
+
+    /** Mutations take the business row lock so settlement, admin actions, and schedulers serialize. */
+    private Business requireBusinessForUpdate(String businessId) {
+        return businessRepository.findByIdAndDeletedAtIsNullForUpdate(businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Business not found"));
     }
 

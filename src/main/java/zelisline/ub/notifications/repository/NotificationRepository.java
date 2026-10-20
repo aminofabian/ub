@@ -62,4 +62,18 @@ public interface NotificationRepository extends JpaRepository<Notification, Stri
             @Param("businessId") String businessId,
             @Param("userId") String userId,
             @Param("readAt") Instant readAt);
+
+    /** Clear the staff bell in one statement — business-wide rows plus the user's own. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update Notification n
+           set n.readAt = :readAt
+         where n.businessId = :businessId
+           and (n.userId is null or n.userId = :userId)
+           and n.readAt is null
+        """)
+    int markAllReadForStaffInbox(
+            @Param("businessId") String businessId,
+            @Param("userId") String userId,
+            @Param("readAt") Instant readAt);
 }

@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -33,12 +34,20 @@ public class NotificationsController {
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'reports.notifications.read')")
-    public List<NotificationResponse> list(HttpServletRequest request) {
+    public List<NotificationResponse> list(
+            HttpServletRequest request,
+            @RequestParam(name = "limit", required = false) Integer limit) {
         CurrentTenantUser.require(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         List<Notification> rows = CurrentTenantUser.optionalHuman(request)
                 .map(tp -> notificationService.listStaffInbox(businessId, tp.userId()))
                 .orElseGet(() -> notificationService.list(businessId));
+        // The bell only reads the newest slice; don't stream an unbounded inbox
+        // full of payloadJson just to fill a badge.
+        if (limit != null) {
+            int cap = Math.min(Math.max(limit, 1), 500);
+            rows = rows.stream().limit(cap).toList();
+        }
         return rows.stream().map(NotificationsController::toDto).toList();
     }
 
@@ -51,6 +60,16 @@ public class NotificationsController {
         notificationService.markRead(businessId, id);
         eventPublisher.publishEvent(
                 new RealtimeBridge.NotificationReadEvent(businessId, principal.userId(), id));
+    }
+
+    /** Clears the staff bell: business-wide rows plus this user's own. */
+    @PostMapping("/read-all")
+    @PreAuthorize("hasPermission(null, 'reports.notifications.write')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void markAllRead(HttpServletRequest request) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        notificationService.markAllReadForStaffInbox(businessId, principal.userId());
     }
 
     private static NotificationResponse toDto(Notification n) {

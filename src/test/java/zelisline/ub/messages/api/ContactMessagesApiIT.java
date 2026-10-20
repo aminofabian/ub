@@ -181,6 +181,37 @@ class ContactMessagesApiIT {
     }
 
     @Test
+    void unreadCountsAreServerWideAndPermissionGated() throws Exception {
+        mockMvc.perform(post("/api/v1/public/contact-messages")
+                        .contentType(APPLICATION_JSON)
+                        .content(submitBody("Ada", "ada@example.com", null, "Need a demo")))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/super-admin/contact-messages/unread-count")
+                        .header("Authorization", "Bearer " + saToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.count").value(1));
+
+        mockMvc.perform(post("/api/v1/public/businesses/" + SLUG_A + "/contact-messages")
+                        .contentType(APPLICATION_JSON)
+                        .content(submitBody("Ben", "ben@example.com", "0712345678", "Where is my order?")))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/contact-messages/unread-count")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.count").value(1));
+
+        mockMvc.perform(get("/api/v1/contact-messages/unread-count")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, viewerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_VIEWER))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void tenantSubmitVisibleOnlyToThatTenant() throws Exception {
         MvcResult created = mockMvc.perform(post("/api/v1/public/businesses/" + SLUG_A + "/contact-messages")
                         .contentType(APPLICATION_JSON)

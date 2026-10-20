@@ -2,6 +2,7 @@ package zelisline.ub.support.repository;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -13,6 +14,9 @@ import zelisline.ub.support.domain.SupportMessage;
 public interface SupportMessageRepository extends JpaRepository<SupportMessage, String> {
 
     List<SupportMessage> findByConversationIdOrderByCreatedAtAsc(String conversationId);
+
+    Optional<SupportMessage> findByConversationIdAndClientMessageId(
+            String conversationId, String clientMessageId);
 
     long countByConversationId(String conversationId);
 

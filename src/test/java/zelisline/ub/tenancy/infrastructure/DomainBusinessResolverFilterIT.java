@@ -23,6 +23,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import zelisline.ub.billing.application.SubscriptionAccessPolicy;
 import zelisline.ub.tenancy.domain.DomainMapping;
 import zelisline.ub.tenancy.domain.TenantStatus;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -50,9 +51,13 @@ class DomainBusinessResolverFilterIT {
     @MockitoBean
     private BusinessRepository businessRepository;
 
+    @MockitoBean
+    private SubscriptionAccessPolicy accessPolicy;
+
     @BeforeEach
     void resetRepositoryMock() {
-        org.mockito.Mockito.reset(domainMappingRepository, businessRepository);
+        org.mockito.Mockito.reset(domainMappingRepository, businessRepository, accessPolicy);
+        org.mockito.BDDMockito.given(accessPolicy.isAccessBlockingEnabled()).willReturn(true);
     }
 
     @Test
@@ -167,8 +172,31 @@ class DomainBusinessResolverFilterIT {
                         }))
                 .andExpect(status().isLocked())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
-                .andExpect(jsonPath("$.type").value("urn:problem:tenant-not-active"))
+                .andExpect(jsonPath("$.type").value("urn:problem:subscription-blocked"))
                 .andExpect(jsonPath("$.tenantStatus").value("SUSPENDED"));
+    }
+
+    @Test
+    void suspendedTenantWithAutoBlockOffPassesThrough() throws Exception {
+        DomainMapping mapping = Mockito.mock(DomainMapping.class);
+        org.mockito.BDDMockito.given(mapping.getBusinessId()).willReturn("biz-suspended");
+        org.mockito.BDDMockito.given(domainMappingRepository.findByDomainAndActiveTrue("acme.palmart.co.ke"))
+                .willReturn(Optional.of(mapping));
+        org.mockito.BDDMockito.given(businessRepository.findTenantStatusById("biz-suspended"))
+                .willReturn(Optional.of(TenantStatus.SUSPENDED));
+        org.mockito.BDDMockito.given(accessPolicy.isAccessBlockingEnabled()).willReturn(false);
+
+        mockMvc.perform(get("/api/v1/businesses/me")
+                        .with(request -> {
+                            request.setServerName("acme.palmart.co.ke");
+                            return request;
+                        }))
+                .andExpect(result -> {
+                    if (result.getResponse().getStatus() == HttpStatus.LOCKED.value()) {
+                        throw new AssertionError(
+                                "auto-block off must not reject a billing-suspended tenant");
+                    }
+                });
     }
 
     @Test

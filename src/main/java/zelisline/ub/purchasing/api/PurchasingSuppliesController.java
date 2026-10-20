@@ -47,12 +47,20 @@ public class PurchasingSuppliesController {
     @PreAuthorize("hasPermission(null, 'purchasing.path_b.read') or hasPermission(null, 'purchasing.payment.read')")
     public List<PathBSupplyListRow> list(
             @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) Integer limit,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        return supplyReceiptQueryService.listPathBSupplies(
+        List<PathBSupplyListRow> rows = supplyReceiptQueryService.listPathBSupplies(
                 TenantRequestIds.resolveBusinessId(request),
                 branchId);
+        // Rows are newest-first; the hub bill strip only needs the tail of the
+        // board, not every posted invoice the shop has ever received.
+        if (limit != null) {
+            int cap = Math.min(Math.max(limit, 1), 1000);
+            rows = rows.stream().limit(cap).toList();
+        }
+        return rows;
     }
 
     @GetMapping("/{invoiceId}")

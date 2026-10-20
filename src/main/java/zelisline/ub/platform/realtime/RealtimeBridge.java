@@ -129,6 +129,17 @@ public class RealtimeBridge {
         }
     }
 
+    /** The bell was cleared wholesale — tell the user's other sessions. */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onNotificationsAllRead(NotificationsAllReadEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        String payloadJson = "{\"all\":true}";
+        Set<String> sessionIds = sessionRegistry.findSessionsByUser(event.businessId(), event.userId());
+        for (String sid : sessionIds) {
+            handler.sendFrame(sid, "notification.read", eventId, "LOW", Instant.now(), payloadJson);
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // Slice 2 — POS-critical events (ephemeral, no notification row)
     // ═══════════════════════════════════════════════════════════════
@@ -892,6 +903,8 @@ public class RealtimeBridge {
 
     public record NotificationCreatedEvent(Notification notification) {}
     public record NotificationReadEvent(String businessId, String userId, String notificationId) {}
+
+    public record NotificationsAllReadEvent(String businessId, String userId) {}
 
     // ═══════════════════════════════════════════════════════════════
     // Event records — Slice 2 (POS-critical, ephemeral)

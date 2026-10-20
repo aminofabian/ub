@@ -45,6 +45,14 @@ public class ContactMessagesController {
         return contactMessageService.listTenant(businessId, status, pageable);
     }
 
+    @GetMapping("/unread-count")
+    @PreAuthorize("hasPermission(null, 'messages.read')")
+    public java.util.Map<String, Object> unreadCount(HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return java.util.Map.of("count", contactMessageService.countTenantUnread(businessId));
+    }
+
     @GetMapping("/{id}")
     @PreAuthorize("hasPermission(null, 'messages.read')")
     public ContactMessageDetailResponse get(

@@ -25,6 +25,7 @@ import org.springframework.web.server.ResponseStatusException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.media.AttachmentStore;
 import zelisline.ub.platform.media.CloudinarySignatureService;
@@ -82,14 +83,15 @@ public class PublicSupportController {
     ) {
         String businessId = resolveBusinessId(body.type(), body.businessSlug());
         return supportService.guestStartOrResume(
-                body.type(), businessId, body.guestId(), body.guestName(), guestPhone, body.body(), token);
+                body.type(), businessId, body.guestId(), body.guestName(), guestPhone,
+                body.body(), body.clientMessageId(), token);
     }
 
     @GetMapping("/threads/me")
     public GuestThreadDto resume(
-            @RequestParam String type,
-            @RequestParam(required = false) String businessSlug,
-            @RequestParam String guestId,
+            @RequestParam @Size(max = 16) String type,
+            @RequestParam(required = false) @Size(max = 191) String businessSlug,
+            @RequestParam @Size(max = 36) String guestId,
             @RequestHeader(value = HEADER_GUEST_TOKEN, required = false) String token,
             @RequestHeader(value = HEADER_GUEST_PHONE, required = false) String guestPhone
     ) {
@@ -102,8 +104,8 @@ public class PublicSupportController {
     public SupportMessageDto send(
             @PathVariable String id,
             @Valid @RequestBody SendSupportMessageRequest body,
-            @RequestHeader(HEADER_GUEST_ID) String guestId,
-            @RequestHeader(HEADER_GUEST_TOKEN) String token
+            @RequestHeader(HEADER_GUEST_ID) @Size(max = 36) String guestId,
+            @RequestHeader(HEADER_GUEST_TOKEN) @Size(max = 256) String token
     ) {
         return supportService.sendGuestMessage(id, guestId, token, body);
     }
@@ -115,8 +117,8 @@ public class PublicSupportController {
     @PostMapping("/threads/{id}/cloudinary-signature")
     public Map<String, Object> cloudinarySignature(
             @PathVariable String id,
-            @RequestHeader(HEADER_GUEST_ID) String guestId,
-            @RequestHeader(HEADER_GUEST_TOKEN) String token
+            @RequestHeader(HEADER_GUEST_ID) @Size(max = 36) String guestId,
+            @RequestHeader(HEADER_GUEST_TOKEN) @Size(max = 256) String token
     ) {
         supportService.requireGuestThreadAccess(id, guestId, token);
         String folder = supportFolder(id);
@@ -180,8 +182,8 @@ public class PublicSupportController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void markRead(
             @PathVariable String id,
-            @RequestHeader(HEADER_GUEST_ID) String guestId,
-            @RequestHeader(HEADER_GUEST_TOKEN) String token
+            @RequestHeader(HEADER_GUEST_ID) @Size(max = 36) String guestId,
+            @RequestHeader(HEADER_GUEST_TOKEN) @Size(max = 256) String token
     ) {
         supportService.markGuestRead(id, guestId, token);
     }
@@ -229,10 +231,11 @@ public class PublicSupportController {
 
     /** Start (or resume) a guest thread. {@code token} is a header, not a body field. */
     public record StartGuestThreadRequest(
-            @NotBlank String type,
-            String businessSlug,
-            @NotBlank String guestId,
-            String guestName,
-            String body
+            @NotBlank @Size(max = 16) String type,
+            @Size(max = 191) String businessSlug,
+            @NotBlank @Size(max = 36) String guestId,
+            @Size(max = 120) String guestName,
+            @Size(max = 4000) String body,
+            @Size(max = 64) String clientMessageId
     ) {}
 }

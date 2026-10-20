@@ -63,11 +63,15 @@ public class PathAPurchasingController {
         return pathAPurchaseService.createPurchaseOrder(TenantRequestIds.resolveBusinessId(request), safe);
     }
 
+    /**
+     * `status` accepts one value or a comma-separated list (`status=sent,draft`)
+     * so a board that shows several columns costs one round trip.
+     */
     @GetMapping("/purchase-orders")
     @PreAuthorize("hasPermission(null, 'purchasing.path_a.read')")
     public List<PathAPurchaseOrderListRow> listPurchaseOrders(
             @RequestParam(required = false) String supplierId,
-            @RequestParam(required = false) String status,
+            @RequestParam(required = false) List<String> status,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);

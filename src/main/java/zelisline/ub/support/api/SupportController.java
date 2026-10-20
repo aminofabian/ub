@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -108,6 +109,7 @@ public class SupportController {
     // ── Storefront buyer threads (staff answers shoppers here) ─────────────
 
     @GetMapping("/storefront/conversations")
+    @PreAuthorize("hasPermission(null, 'messages.read')")
     public Map<String, Object> storefrontConversations(
             @RequestParam(required = false) String status,
             HttpServletRequest request
@@ -122,18 +124,20 @@ public class SupportController {
     }
 
     @GetMapping("/storefront/conversations/{id}")
+    @PreAuthorize("hasPermission(null, 'messages.read')")
     public SupportConversationDetailDto storefrontConversation(
             @PathVariable String id,
             HttpServletRequest request
     ) {
         CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
-        SupportConversationDetailDto detail = supportService.storefrontDetail(id, businessId);
-        supportService.markStorefrontStaffRead(id, businessId);
-        return detail;
+        // Read is an explicit POST; a GET must not mutate state (prefetch/proxy
+        // calls were flipping receipts and writing on every 5 s poll).
+        return supportService.storefrontDetail(id, businessId);
     }
 
     @PostMapping("/storefront/conversations/{id}/messages")
+    @PreAuthorize("hasPermission(null, 'messages.reply')")
     @ResponseStatus(HttpStatus.CREATED)
     public SupportMessageDto storefrontSend(
             @PathVariable String id,
@@ -146,6 +150,7 @@ public class SupportController {
     }
 
     @PostMapping("/storefront/conversations/{id}/read")
+    @PreAuthorize("hasPermission(null, 'messages.read')")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void storefrontMarkRead(@PathVariable String id, HttpServletRequest request) {
         CurrentTenantUser.requireHuman(request);
@@ -154,6 +159,7 @@ public class SupportController {
     }
 
     @GetMapping("/storefront/unread-count")
+    @PreAuthorize("hasPermission(null, 'messages.read')")
     public Map<String, Object> storefrontUnreadCount(HttpServletRequest request) {
         CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);

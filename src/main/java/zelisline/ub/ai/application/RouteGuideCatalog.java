@@ -42,6 +42,31 @@ public class RouteGuideCatalog {
                             "Which branch powers the public catalog?",
                             "Where do I set delivery areas?"));
         }
+        if (matches(path, surf, "/business/themes", "business.storefront")
+                || matches(path, surf, "/business/branding", "business.storefront")
+                || matches(path, surf, "/business/design", "business.storefront")
+                || matches(path, surf, "/business/mobile", "business.storefront")
+                || matches(path, surf, "/business/domains", "business.storefront")) {
+            return guide(
+                    "business.storefront",
+                    "Shop look & presence",
+                    "How the customer website looks and where it lives: store theme and landing template, logo and colours, "
+                            + "the installable shopper app, and the domain that serves the shop. None of it changes the till.",
+                    List.of(
+                            "Themes picks the store theme or landing template; the phone beside the gallery is a try-on "
+                                    + "painted with your own products, so you see your shelf, not sample stock.",
+                            "Branding holds the logo, colours and the name shoppers see. Logo uploads go live immediately; "
+                                    + "name, colours and SEO save together.",
+                            "Design edits the shop's front window — the hero, poster and shelf the landing page opens with.",
+                            "Store app publishes the installable shopper app (QR and app profile) for phones.",
+                            "Domains is where a shop gets its own address: buy a .ke address, connect one you already own, "
+                                    + "or hire a developer to do it."),
+                    List.of(
+                            "Which theme suits a kiosk?",
+                            "How do I change my logo?",
+                            "How do I connect my own domain?",
+                            "What does the store app publish?"));
+        }
         if (matches(path, surf, "/business", "business", "hub")) {
             return guide(
                     "business.hub",

@@ -87,6 +87,18 @@ public class ContactMessageService {
         return page.map(this::toListItem);
     }
 
+    @Transactional(readOnly = true)
+    public long countTenantUnread(String businessId) {
+        return contactMessageRepository.countByScopeAndBusinessIdAndStatus(
+                ContactMessageScope.TENANT, businessId, ContactMessageStatus.UNREAD);
+    }
+
+    @Transactional(readOnly = true)
+    public long countPlatformUnread() {
+        return contactMessageRepository.countByScopeAndStatus(
+                ContactMessageScope.PLATFORM, ContactMessageStatus.UNREAD);
+    }
+
     @Transactional
     public ContactMessageDetailResponse getTenantAndMarkRead(String businessId, String id) {
         ContactMessage message = requireTenantMessage(businessId, id);

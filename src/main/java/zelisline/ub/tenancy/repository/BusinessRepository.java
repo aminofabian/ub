@@ -5,9 +5,11 @@ import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import jakarta.persistence.LockModeType;
 import zelisline.ub.billing.domain.SubscriptionBillingStatus;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.domain.TenantStatus;
@@ -42,6 +44,15 @@ public interface BusinessRepository extends JpaRepository<Business, String> {
     java.util.List<Business> findTop8ByDeletedAtIsNullAndSlugStartingWithOrderBySlugAsc(String slugPrefix);
 
     Optional<Business> findByIdAndDeletedAtIsNull(String id);
+
+    /**
+     * Serializes billing lifecycle mutations (settlement vs. grace-end
+     * suspension) so a payment landing at the same moment as the daily job
+     * cannot be overwritten by a stale SUSPENDED write.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select b from Business b where b.id = :id and b.deletedAt is null")
+    Optional<Business> findByIdAndDeletedAtIsNullForUpdate(@Param("id") String id);
 
     java.util.List<Business> findByDeletedAtIsNull();
 

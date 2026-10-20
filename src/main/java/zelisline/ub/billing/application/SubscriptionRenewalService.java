@@ -2,6 +2,7 @@ package zelisline.ub.billing.application;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -46,6 +47,7 @@ public class SubscriptionRenewalService {
     private final SubscriptionBillingService billingService;
     private final SubscriptionPricingService pricingService;
     private final SubscriptionPlanFitService planFitService;
+    private final SubscriptionAccessPolicy accessPolicy;
     private final BusinessRepository businessRepository;
     private final PaymentGatewayStkService paymentGatewayStkService;
     private final GatewayStkPushService gatewayStkPushService;
@@ -168,7 +170,7 @@ public class SubscriptionRenewalService {
     /** STK callback — idempotent via order status + receipt guard. */
     @Transactional
     public void markPaid(String orderId, String checkoutId, String txnId) {
-        SubscriptionRenewalOrder order = orderRepository.findById(orderId).orElse(null);
+        SubscriptionRenewalOrder order = orderRepository.findByIdForUpdate(orderId).orElse(null);
         if (order == null) {
             log.warn("Subscription renewal order not found for STK settle orderId={}", orderId);
             return;
@@ -176,8 +178,10 @@ public class SubscriptionRenewalService {
         if (order.getStatus() == SubscriptionRenewalOrderStatus.PAID) {
             return;
         }
-        if (order.getStatus() != SubscriptionRenewalOrderStatus.PENDING) {
-            log.warn("Subscription renewal not PENDING — ignoring STK settle orderId={} status={}",
+        if (order.getStatus() != SubscriptionRenewalOrderStatus.PENDING
+                && order.getStatus() != SubscriptionRenewalOrderStatus.EXPIRED
+                && order.getStatus() != SubscriptionRenewalOrderStatus.FAILED) {
+            log.warn("Subscription renewal not settleable — ignoring STK settle orderId={} status={}",
                     orderId, order.getStatus());
             return;
         }
@@ -198,7 +202,9 @@ public class SubscriptionRenewalService {
 
     @Transactional
     public void markFailed(String businessId, String orderId, String reason) {
-        SubscriptionRenewalOrder order = orderRepository.findByIdAndBusinessId(orderId, businessId).orElse(null);
+        SubscriptionRenewalOrder order = orderRepository
+                .findByIdAndBusinessIdForUpdate(orderId, businessId)
+                .orElse(null);
         if (order == null || order.getStatus() != SubscriptionRenewalOrderStatus.PENDING) {
             return;
         }
@@ -207,10 +213,20 @@ public class SubscriptionRenewalService {
         log.info("Subscription renewal failed business={} orderId={} reason={}", businessId, orderId, reason);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public SubscriptionBillingDtos.RenewalOrderStatusResponse status(String businessId, String orderId) {
-        SubscriptionRenewalOrder order = orderRepository.findByIdAndBusinessId(orderId, businessId)
+        SubscriptionRenewalOrder order = orderRepository
+                .findByIdAndBusinessIdForUpdate(orderId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Renewal order not found"));
+        // No callback ever arrived (phone ignored the prompt, network died, …).
+        // Close the loop after 15 minutes so the UI can offer a retry instead
+        // of polling a PENDING row forever.
+        if (order.getStatus() == SubscriptionRenewalOrderStatus.PENDING
+                && order.getCreatedAt() != null
+                && order.getCreatedAt().plus(15, ChronoUnit.MINUTES).isBefore(Instant.now())) {
+            order.setStatus(SubscriptionRenewalOrderStatus.EXPIRED);
+            orderRepository.save(order);
+        }
         boolean needsRetry = order.getStatus() == SubscriptionRenewalOrderStatus.FAILED
                 || order.getStatus() == SubscriptionRenewalOrderStatus.EXPIRED;
         return new SubscriptionBillingDtos.RenewalOrderStatusResponse(
@@ -225,6 +241,9 @@ public class SubscriptionRenewalService {
     /** Login payload when tenant is billing-suspended — drives renewal wall. */
     @Transactional(readOnly = true)
     public AuthBillingGateResponse authGate(String businessId) {
+        if (!accessPolicy.isAccessBlockingEnabled()) {
+            return null;
+        }
         Business business = businessRepository.findByIdAndDeletedAtIsNull(businessId).orElse(null);
         if (business == null) {
             return null;
@@ -251,7 +270,7 @@ public class SubscriptionRenewalService {
      * the shop already runs (catalog, seats, trailing daily sales).
      */
     private void assertPackageChangeAllowed(Business business, PlatformSubscriptionPlan target) {
-        PlatformSubscriptionPlan current = settingsService.planOrNull(business.getSubscriptionTier());
+        PlatformSubscriptionPlan current = settingsService.planEvenIfInactive(business.getSubscriptionTier());
         if (current == null) {
             return;
         }

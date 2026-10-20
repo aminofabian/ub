@@ -124,9 +124,14 @@ public class SalesIntelligenceController {
             @RequestParam(required = false) String branchId,
             @RequestParam(required = false) String itemTypeId,
             @RequestParam(required = false) String itemId,
+            @RequestParam(required = false) Integer limit,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
+        // The hub tape renders the newest ~30 sales; it must not download a
+        // week of line rows just to slice them. Callers that need the full
+        // board keep the 500-row default.
+        int rowLimit = limit == null ? 500 : limit;
         return salesIntelligenceService.recentSales(
                 TenantRequestIds.resolveBusinessId(request),
                 from,
@@ -134,7 +139,7 @@ public class SalesIntelligenceController {
                 branchId,
                 itemTypeId,
                 itemId,
-                500);
+                rowLimit);
     }
 
     @GetMapping("/payments-by-method")

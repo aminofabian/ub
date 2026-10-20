@@ -59,6 +59,8 @@ class WhatsAppInboundIngestIT {
     private CrmMessageRepository messageRepository;
     @Autowired
     private CrmContactRepository contactRepository;
+    @Autowired
+    private CrmConversationService conversationService;
 
     @Test
     void signedInboundMessageCreatesConversationAndMessage() throws Exception {
@@ -78,6 +80,12 @@ class WhatsAppInboundIngestIT {
         assertThat(conversationRepository.findAll()).hasSize(1);
         assertThat(messageRepository.findAll()).hasSize(1);
         assertThat(conversationRepository.findAll().get(0).getBusinessId()).isEqualTo(TENANT);
+
+        var list = conversationService.list(TENANT, null, null, 0, 20);
+        assertThat(list.items()).hasSize(1);
+        assertThat(list.items().get(0).lastMessagePreview()).isEqualTo("Hello shop");
+        assertThat(list.items().get(0).lastMessageType()).isEqualTo("text");
+        assertThat(list.items().get(0).lastMessageDirection()).isEqualTo("inbound");
     }
 
     @Test

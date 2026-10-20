@@ -65,6 +65,7 @@ public class SubscriptionDunningAnalyticsService {
 
         return new SubscriptionBillingDtos.DunningAnalyticsResponse(
                 settingsService.isBillingEnabled(),
+                settingsService.isAutoBlockEnabled(),
                 graceCount,
                 suspendedCount,
                 revenueAtRisk,

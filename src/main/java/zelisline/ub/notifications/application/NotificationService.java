@@ -69,6 +69,17 @@ public class NotificationService {
         return notificationRepository.markAllReadForUser(businessId, userId, Instant.now());
     }
 
+    /** The staff bell's "mark all read": one statement instead of one POST per row. */
+    @Transactional
+    public int markAllReadForStaffInbox(String businessId, String userId) {
+        int cleared = notificationRepository.markAllReadForStaffInbox(businessId, userId, Instant.now());
+        // Published inside the transaction so AFTER_COMMIT fan-out actually runs.
+        eventPublisher.publishEvent(
+                new zelisline.ub.platform.realtime.RealtimeBridge.NotificationsAllReadEvent(
+                        businessId, userId));
+        return cleared;
+    }
+
     /**
      * Idempotent insert for scanners — duplicates ignored via {@code dedupe_key} unique constraint.
      */

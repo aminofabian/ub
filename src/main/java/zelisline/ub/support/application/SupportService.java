@@ -365,7 +365,7 @@ public class SupportService {
         SupportConversation conversation = null;
         if (phone != null) {
             conversation = conversationRepository
-                    .findByConversationTypeAndBusinessIdAndGuestPhone(
+                    .findFirstByConversationTypeAndBusinessIdAndGuestPhoneOrderByLastMessageAtDescCreatedAtDesc(
                             SupportConversation.TYPE_STOREFRONT, businessId, phone)
                     .orElse(null);
         }
@@ -380,12 +380,12 @@ public class SupportService {
             return conversationRepository.save(conversation);
         }
 
+        // Must fit support_conversations.created_by / support_messages.sender_user_id
+        // (CHAR(36)). Prefixing the order id made it 48 characters and could
+        // fail the insert under strict MySQL.
         String guestId = phone != null
                 ? ("buyer-phone-" + phone.replaceAll("[^0-9]", ""))
-                : ("buyer-order-" + order.getId());
-        if (guestId.length() > 64) {
-            guestId = guestId.substring(0, 64);
-        }
+                : order.getId();
 
         conversation = conversationRepository
                 .findByConversationTypeAndBusinessIdAndGuestId(
@@ -420,7 +420,7 @@ public class SupportService {
             // Race — reload by phone/guest id.
             if (phone != null) {
                 return conversationRepository
-                        .findByConversationTypeAndBusinessIdAndGuestPhone(
+                        .findFirstByConversationTypeAndBusinessIdAndGuestPhoneOrderByLastMessageAtDescCreatedAtDesc(
                                 SupportConversation.TYPE_STOREFRONT, businessId, phone)
                         .orElseThrow(() -> ex);
             }
@@ -711,6 +711,11 @@ public class SupportService {
             if (SupportConversation.TYPE_STOREFRONT.equals(conversation.getConversationType())) {
                 continue; // storefront buyers belong to the tenant's staff inbox
             }
+            // Match the list's filter: standalone ticket threads are not shown
+            // in the inbox and must not keep its badge above zero forever.
+            if (!visibleInAdminInbox(conversation)) {
+                continue;
+            }
             total += staffUnread(conversation);
         }
         return total;
@@ -736,53 +741,31 @@ public class SupportService {
     @Transactional
     public GuestThreadDto guestStartOrResume(
             String type, String businessId, String guestId, String guestName,
-            String guestPhone, String body, String presentedToken
+            String guestPhone, String body, String clientMessageId, String presentedToken
     ) {
         requireGuestType(type);
         String phone = normalizePhone(guestPhone);
 
-        SupportConversation conversation = null;
-        boolean foundByPhone = false;
-        String adoptedToken = null;
-
-        if (phone != null) {
-            conversation = conversationRepository
-                    .findByConversationTypeAndBusinessIdAndGuestPhone(type, businessId, phone)
-                    .orElse(null);
-            foundByPhone = conversation != null;
-        }
-        if (conversation == null) {
-            conversation = conversationRepository
-                    .findByConversationTypeAndBusinessIdAndGuestId(type, businessId, guestId)
-                    .orElse(null);
-        }
+        // The guest token is the only credential that opens an existing thread.
+        // A phone number is contact metadata, never proof of ownership: treating
+        // it as a credential let anyone who knew a buyer's number read and
+        // impersonate their transcript (and rotate the real device out).
+        SupportConversation conversation = conversationRepository
+                .findByConversationTypeAndBusinessIdAndGuestId(type, businessId, guestId)
+                .orElse(null);
 
         if (conversation != null) {
-            if (foundByPhone) {
-                // The phone is the credential: a returning visitor (or a device
-                // with a rotated-out secret) always gets back in; the secret
-                // rotates so only the active device holds a working token.
-                adoptedToken = adoptOrRefresh(conversation, guestId, guestName, phone, presentedToken);
-            } else if (guestId.equals(conversation.getGuestId())) {
-                if (guestTokens.matches(presentedToken, conversation.getGuestTokenHash())) {
-                    refreshGuestIdentity(conversation, guestName, phone);
-                } else if (phone != null) {
-                    // Stale or lost token, but the visitor presents their phone:
-                    // attach it and hand back a fresh secret (recovers pre-phone
-                    // threads and rotated-out devices without fragmenting).
-                    adoptedToken = adoptConversation(conversation, guestId, guestName, phone);
-                } else {
-                    throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
-                            "Guest token missing or no longer valid — please start a fresh conversation");
-                }
-            } else {
-                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No conversation yet");
+            if (!guestTokens.matches(presentedToken, conversation.getGuestTokenHash())) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
+                        "Guest token missing or no longer valid — start a fresh conversation");
             }
+            refreshGuestIdentity(conversation, guestName, phone);
             if (body != null && !body.isBlank()) {
                 reopenIfResolved(conversation);
-                persistMessage(conversation, SupportMessage.SENDER_GUEST, guestId, guestName, body);
+                persistMessage(conversation, SupportMessage.SENDER_GUEST, guestId, guestName,
+                        new SendSupportMessageRequest(body, null, null, null, clientMessageId));
             }
-            return guestPayload(conversation, adoptedToken);
+            return guestPayload(conversation, null);
         }
 
         SupportConversation fresh = new SupportConversation();
@@ -799,11 +782,23 @@ public class SupportService {
         try {
             conversationRepository.saveAndFlush(fresh);
         } catch (DataIntegrityViolationException ex) {
-            // Two tabs raced to create — the unique guest-thread key wins.
-            return guestStartOrResume(type, businessId, guestId, guestName, guestPhone, body, presentedToken);
+            // A concurrent request won the unique (type, business, guestId) key.
+            // Recursing here was unbounded and turned a length error into a
+            // stack overflow. Only report a conflict when the row actually
+            // exists; otherwise surface a normal 400.
+            boolean exists = conversationRepository
+                    .findByConversationTypeAndBusinessIdAndGuestId(type, businessId, guestId)
+                    .isPresent();
+            if (exists) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Conversation was created in another tab — retry");
+            }
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Could not start the conversation", ex);
         }
         if (body != null && !body.isBlank()) {
-            persistMessage(fresh, SupportMessage.SENDER_GUEST, guestId, guestName, body);
+            persistMessage(fresh, SupportMessage.SENDER_GUEST, guestId, guestName,
+                    new SendSupportMessageRequest(body, null, null, null, clientMessageId));
         }
         log.debug("Support guest thread created: type={} business={} guest={}", type, businessId, guestId);
         return guestPayload(fresh, token);
@@ -820,42 +815,17 @@ public class SupportService {
         requireGuestType(type);
         String phone = normalizePhone(guestPhone);
 
-        SupportConversation conversation = null;
-        boolean foundByPhone = false;
-        if (phone != null) {
-            conversation = conversationRepository
-                    .findByConversationTypeAndBusinessIdAndGuestPhone(type, businessId, phone)
-                    .orElse(null);
-            foundByPhone = conversation != null;
-        }
-        if (conversation == null) {
-            conversation = conversationRepository
-                    .findByConversationTypeAndBusinessIdAndGuestId(type, businessId, guestId)
-                    .orElse(null);
-        }
-        if (conversation == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No conversation yet");
-        }
+        SupportConversation conversation = conversationRepository
+                .findByConversationTypeAndBusinessIdAndGuestId(type, businessId, guestId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No conversation yet"));
 
-        if (foundByPhone) {
-            // Phone re-validates the visitor even when their token was rotated
-            // out by another device — hand back a fresh secret.
-            return guestPayload(conversation,
-                    adoptOrRefresh(conversation, guestId, null, phone, token));
+        if (!guestTokens.matches(token, conversation.getGuestTokenHash())) {
+            // Do not fall back to the phone here either: a bare phone number is
+            // not proof that this device owns the thread.
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid guest token");
         }
-        if (!guestId.equals(conversation.getGuestId())) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No conversation yet");
-        }
-        if (guestTokens.matches(token, conversation.getGuestTokenHash())) {
-            refreshGuestIdentity(conversation, null, phone);
-            return guestPayload(conversation, null);
-        }
-        if (phone != null) {
-            // Same device, rotated-out secret — the phone re-identifies and
-            // the server hands back a fresh token.
-            return guestPayload(conversation, adoptConversation(conversation, guestId, null, phone));
-        }
-        throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid guest token");
+        refreshGuestIdentity(conversation, null, phone);
+        return guestPayload(conversation, null);
     }
 
     /** Whether the token opens at least one thread owned by this guest (ticket mint). */
@@ -962,40 +932,6 @@ public class SupportService {
         }
     }
 
-    /**
-     * Resolve a thread that was found via the visitor's phone. A valid token on
-     * the owning device is a no-op; anything else (new device, rotated-out
-     * token) re-claims the thread and rotates the secret.
-     */
-    private String adoptOrRefresh(
-            SupportConversation conversation, String guestId,
-            String guestName, String phone, String presentedToken
-    ) {
-        if (guestId.equals(conversation.getGuestId())
-                && guestTokens.matches(presentedToken, conversation.getGuestTokenHash())) {
-            refreshGuestIdentity(conversation, guestName, phone);
-            return null; // same device, token still valid — nothing to rotate
-        }
-        return adoptConversation(conversation, guestId, guestName, phone);
-    }
-
-    /** A new device claims this thread via its phone — adopt it and rotate the secret. */
-    private String adoptConversation(SupportConversation conversation, String guestId, String guestName, String phone) {
-        conversation.setGuestId(guestId);
-        if (guestName != null && !guestName.isBlank()) {
-            conversation.setGuestName(trimTo(guestName, 120));
-        }
-        if (phone != null && !phone.equals(conversation.getGuestPhone())) {
-            conversation.setGuestPhone(phone);
-        }
-        String token = guestTokens.mintToken();
-        conversation.setGuestTokenHash(guestTokens.hash(token));
-        conversationRepository.save(conversation);
-        log.debug("Support guest thread adopted by new device: conversation={} guest={}",
-                conversation.getId(), guestId);
-        return token;
-    }
-
     private static String normalizePhone(String phone) {
         if (phone == null) {
             return null;
@@ -1031,6 +967,26 @@ public class SupportService {
             SupportConversation conversation, String senderType,
             String senderUserId, String senderName, SendSupportMessageRequest request
     ) {
+        String clientMessageId = blankToNull(request == null ? null : request.clientMessageId());
+        if (clientMessageId != null) {
+            // Retrying the same logical message after a lost response must return
+            // the original row, not create a duplicate. The unique index is the
+            // final guard for concurrent attempts.
+            return messageRepository
+                    .findByConversationIdAndClientMessageId(conversation.getId(), clientMessageId)
+                    .map(this::toMessageDto)
+                    .orElseGet(() -> persistNewMessage(
+                            conversation, senderType, senderUserId, senderName, request,
+                            clientMessageId));
+        }
+        return persistNewMessage(conversation, senderType, senderUserId, senderName, request, null);
+    }
+
+    private SupportMessageDto persistNewMessage(
+            SupportConversation conversation, String senderType,
+            String senderUserId, String senderName, SendSupportMessageRequest request,
+            String clientMessageId
+    ) {
         SupportAttachmentDto attachment = normalizeAttachment(request == null ? null : request.attachment());
         String body = normalizeBody(request == null ? null : request.body(), attachment);
         String replyToMessageId = blankToNull(request == null ? null : request.replyToMessageId());
@@ -1054,6 +1010,7 @@ public class SupportService {
         message.setSenderName(senderName);
         message.setBody(body);
         message.setReplyToMessageId(replyToMessageId);
+        message.setClientMessageId(clientMessageId);
         if (attachment != null) {
             message.setAttachmentUrl(attachment.url());
             message.setAttachmentPublicId(blankToNull(attachment.publicId()));

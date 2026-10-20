@@ -22,6 +22,12 @@ public final class SubscriptionBillingDtos {
             int daysRemainingInGrace,
             String renewalUrl,
             boolean billingEnabled,
+            boolean autoBlockEnabled,
+            /** Effective access decision from the central policy. */
+            boolean accessBlocked,
+            /** Latest renewal attempt status, or null when there has never been one. */
+            String lastRenewalStatus,
+            Instant lastRenewalAt,
             PlanFitView planFit
     ) {}
 
@@ -61,6 +67,7 @@ public final class SubscriptionBillingDtos {
 
     public record SettingsResponse(
             boolean billingEnabled,
+            boolean autoBlockEnabled,
             int defaultGraceDays,
             String renewalBaseUrl,
             String notificationCadenceDays,
@@ -70,6 +77,7 @@ public final class SubscriptionBillingDtos {
 
     public record UpdateSettingsRequest(
             Boolean billingEnabled,
+            Boolean autoBlockEnabled,
             Integer defaultGraceDays,
             String renewalBaseUrl,
             String notificationCadenceDays,
@@ -161,6 +169,7 @@ public final class SubscriptionBillingDtos {
 
     public record DunningAnalyticsResponse(
             boolean billingEnabled,
+            boolean autoBlockEnabled,
             long tenantsInGrace,
             long tenantsSuspended,
             BigDecimal monthlyRevenueAtRiskKes,

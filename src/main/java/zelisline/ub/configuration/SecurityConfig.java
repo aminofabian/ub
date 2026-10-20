@@ -303,12 +303,14 @@ public class SecurityConfig {
             zelisline.ub.audit.application.AuditEventPublisher auditEventPublisher,
             zelisline.ub.audit.application.AuditEventBuilder auditEventBuilder,
             zelisline.ub.identity.application.UserSessionActivity userSessionActivity,
-            zelisline.ub.tenancy.repository.BusinessRepository businessRepository
+            zelisline.ub.tenancy.repository.BusinessRepository businessRepository,
+            zelisline.ub.billing.application.SubscriptionAccessPolicy accessPolicy
     ) {
         return new JwtAuthenticationFilter(
                 jwtTokenService, userRepository, superAdminRepository,
                 supplierUserRepository, supplierUserSessionRepository, supplierPortalSessionService,
-                auditEventPublisher, auditEventBuilder, userSessionActivity, businessRepository);
+                auditEventPublisher, auditEventBuilder, userSessionActivity, businessRepository,
+                accessPolicy);
     }
 
     @Bean
@@ -316,9 +318,11 @@ public class SecurityConfig {
             ApiKeyAuthService apiKeyAuthService,
             InvalidApiKeyIpRateLimiter invalidApiKeyIpRateLimiter,
             zelisline.ub.audit.application.AuditEventPublisher auditEventPublisher,
-            zelisline.ub.audit.application.AuditEventBuilder auditEventBuilder) {
+            zelisline.ub.audit.application.AuditEventBuilder auditEventBuilder,
+            zelisline.ub.tenancy.repository.BusinessRepository businessRepository,
+            zelisline.ub.billing.application.SubscriptionAccessPolicy accessPolicy) {
         return new ApiKeyAuthenticationFilter(apiKeyAuthService, invalidApiKeyIpRateLimiter,
-                auditEventPublisher, auditEventBuilder);
+                auditEventPublisher, auditEventBuilder, businessRepository, accessPolicy);
     }
 
     @Bean
@@ -384,10 +388,11 @@ public class SecurityConfig {
             DomainMappingRepository domainMappingRepository,
             zelisline.ub.tenancy.repository.BusinessRepository businessRepository,
             com.fasterxml.jackson.databind.ObjectMapper objectMapper,
-            @Value("${app.tenancy.platform-hosts:}") List<String> platformHosts
+            @Value("${app.tenancy.platform-hosts:}") List<String> platformHosts,
+            zelisline.ub.billing.application.SubscriptionAccessPolicy accessPolicy
     ) {
         return new DomainBusinessResolverFilter(
-                domainMappingRepository, businessRepository, objectMapper, platformHosts);
+                domainMappingRepository, businessRepository, objectMapper, platformHosts, accessPolicy);
     }
 
     @Bean

@@ -39,6 +39,11 @@ public class SuperAdminContactMessagesController {
         return contactMessageService.listPlatform(status, pageable);
     }
 
+    @GetMapping("/unread-count")
+    public java.util.Map<String, Object> unreadCount() {
+        return java.util.Map.of("count", contactMessageService.countPlatformUnread());
+    }
+
     @GetMapping("/{id}")
     public ContactMessageDetailResponse get(@PathVariable String id) {
         return contactMessageService.getPlatformAndMarkRead(id);

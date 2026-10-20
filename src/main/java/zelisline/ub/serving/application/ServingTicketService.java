@@ -13,6 +13,7 @@ import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -278,7 +279,7 @@ public class ServingTicketService {
         return openFromContact(message);
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public ServingDtos.TicketSummary openFromContact(ContactMessage message) {
         if (message == null || message.getScope() != ContactMessageScope.PLATFORM) {
             return null;
@@ -293,7 +294,7 @@ public class ServingTicketService {
                 SupportService.PLATFORM_BOT_USER_ID,
                 message.getName(),
                 trimSubject(message.getBody()),
-                "contact-" + message.getId(),
+                message.getId(),
                 message.getName(),
                 message.getPhone()
         );

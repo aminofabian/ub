@@ -93,6 +93,31 @@ public class SupplierPortalMessagesService {
         return toRow(messageRepository.save(msg));
     }
 
+    /**
+     * Routes a shop's reply on the synthetic supplier-portal contact message
+     * back into the supplier's portal thread. Returns false when the contact
+     * message was not created by a supplier portal message (then the caller
+     * should fall back to email/WhatsApp/SMS).
+     */
+    @Transactional
+    public boolean recordShopReplyForContact(String contactMessageId, String authorName, String body) {
+        if (contactMessageId == null || contactMessageId.isBlank()) {
+            return false;
+        }
+        return messageRepository.findByContactMessageId(contactMessageId)
+                .map(parent -> {
+                    recordFromShop(
+                            parent.getMarketplaceSupplierId(),
+                            parent.getBusinessId(),
+                            parent.getLocalSupplierId(),
+                            authorName,
+                            body,
+                            contactMessageId);
+                    return true;
+                })
+                .orElse(false);
+    }
+
     @Transactional
     public void recordFromShop(
             String marketplaceSupplierId,

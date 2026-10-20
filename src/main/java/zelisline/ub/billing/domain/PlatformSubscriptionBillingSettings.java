@@ -26,6 +26,14 @@ public class PlatformSubscriptionBillingSettings {
     @Column(name = "billing_enabled", nullable = false)
     private boolean billingEnabled = true;
 
+    /**
+     * Master switch for subscription-driven access blocking. When off, expiry
+     * still moves a shop through grace and raises warnings, but it never
+     * suspends the tenant or revokes sessions.
+     */
+    @Column(name = "auto_block_enabled", nullable = false)
+    private boolean autoBlockEnabled = true;
+
     @Column(name = "default_grace_days", nullable = false)
     private int defaultGraceDays = 15;
 

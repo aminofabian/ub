@@ -38,7 +38,8 @@ public class SubscriptionExpiryEmailRenderer {
             int graceDays,
             Instant graceStartedAt,
             Instant graceEndsAt,
-            String renewalUrl
+            String renewalUrl,
+            boolean autoBlockEnabled
     ) {
         String businessName = business.getName() != null ? business.getName().trim() : "Your shop";
         BigDecimal amount = plan != null ? plan.getMonthlyPriceKes() : BigDecimal.ZERO;
@@ -48,6 +49,9 @@ public class SubscriptionExpiryEmailRenderer {
         String amountLabel = currency + " " + amount.stripTrailingZeros().toPlainString();
         String link = renewalUrl != null && !renewalUrl.isBlank() ? renewalUrl.trim() : renewUrl();
 
+        if (!autoBlockEnabled) {
+            return autoBlockOffReminder(businessName, amountLabel, link);
+        }
         if (stepDay == 2) {
             return detailed(businessName, plan, amountLabel, graceStartedAt, graceEndsAt, link);
         }
@@ -55,6 +59,54 @@ public class SubscriptionExpiryEmailRenderer {
             return finalNotice(businessName, amountLabel, link);
         }
         return shortReminder(businessName, daysAgo, daysRemaining, amountLabel, link);
+    }
+
+    /**
+     * Auto-block is off: the shop keeps working after grace, so the copy must
+     * not promise a suspension that will never happen.
+     */
+    private RenderedEmail autoBlockOffReminder(
+            String businessName,
+            String amountLabel,
+            String link
+    ) {
+        String subject = "Renew your Kiosk subscription when you can";
+        String text = """
+                Hi,
+
+                %s's subscription has expired, but automatic blocking is off, so your shop is still working.
+
+                Amount due: %s
+                Renew: %s
+
+                Your inventory, sales history, and settings are safe.
+                """.formatted(businessName, amountLabel, link);
+
+        String bodyHtml = """
+                <p style="font-family:%s;font-size:15px;line-height:1.65;color:%s;margin:0 0 12px;">
+                  <strong>%s</strong>&rsquo;s subscription has expired, but automatic blocking is off,
+                  so your shop is still working.
+                </p>
+                <p style="font-family:%s;font-size:14px;line-height:1.65;color:%s;margin:0 0 12px;">
+                  Amount due: <strong>%s</strong>
+                </p>
+                <p style="font-family:%s;font-size:14px;line-height:1.65;color:%s;margin:0;">
+                  Renew when you can. Your inventory, sales history, and settings are safe.
+                </p>
+                """.formatted(
+                PlatformCampaignEmailRenderer.FONT_SANS, PlatformCampaignEmailRenderer.TEXT,
+                PlatformEmailMarkdown.escape(businessName),
+                PlatformCampaignEmailRenderer.FONT_SANS, PlatformCampaignEmailRenderer.TEXT, amountLabel,
+                PlatformCampaignEmailRenderer.FONT_SANS, PlatformCampaignEmailRenderer.MUTED);
+
+        String html = cardRenderer.renderHtml(
+                subject,
+                bodyHtml,
+                "Renew subscription",
+                link,
+                frontendBaseUrl,
+                "Renew " + businessName + " when you can");
+        return new RenderedEmail(subject, text, html);
     }
 
     private RenderedEmail detailed(
@@ -181,6 +233,11 @@ public class SubscriptionExpiryEmailRenderer {
     public String renderDayZeroSms(String businessName, int graceDays, String renewalUrl) {
         return "Your %s subscription has expired. You have %d days to renew before your Kiosk services are suspended. Renew here: %s"
                 .formatted(businessName, graceDays, renewalUrl);
+    }
+
+    public String renderAutoBlockOffSms(String businessName, String renewalUrl) {
+        return "Your %s subscription has expired. Automatic blocking is off, so your shop is still working. Renew when you can: %s"
+                .formatted(businessName, renewalUrl);
     }
 
     public String renderDayFifteenSms(String renewalUrl) {

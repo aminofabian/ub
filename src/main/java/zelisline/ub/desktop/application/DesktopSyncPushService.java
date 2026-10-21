@@ -544,6 +544,7 @@ public class DesktopSyncPushService {
             item.getLineIndex(),
             item.getLineKind(),
             item.getLineLabel(),
+            item.getDisplayName(),
             item.getItemId(),
             null,
             item.getQuantity(),

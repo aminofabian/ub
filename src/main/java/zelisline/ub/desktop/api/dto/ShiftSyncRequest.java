@@ -144,6 +144,8 @@ public record ShiftSyncRequest(
         int lineIndex,
         String lineKind,
         String lineLabel,
+        /** Canonical title printed on the till receipt; null on older till builds. */
+        String displayName,
         String itemId,
         String batchId,
         @NotNull BigDecimal quantity,

@@ -783,6 +783,7 @@ public class DesktopSyncIngestService {
                     ? zelisline.ub.sales.domain.SaleLineKinds.ITEM
                     : itemData.lineKind());
                 item.setLineLabel(itemData.lineLabel());
+                item.setDisplayName(itemData.displayName());
                 // Only keep an item reference the cloud actually holds: the till
                 // can sell an item it created offline, which has no cloud row,
                 // and a raw id would trip fk_si_item and roll back the whole

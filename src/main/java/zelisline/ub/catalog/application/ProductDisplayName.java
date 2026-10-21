@@ -62,18 +62,20 @@ public final class ProductDisplayName {
         if (!option.isEmpty()) {
             return join(family, option);
         }
-        // Variant with no distinct option label: keep the denormalized stored title when it
-        // already carries more than the live family (legacy rows / partial edits), so sales
-        // lists do not collapse "CACTUS CT-PEARL/WHITE 6MM" to bare "CACTUS".
+        // Variant with no distinct option label. Legacy/imported rows can store either the
+        // composed title ("CACTUS CT-PEARL/WHITE 6MM") or only the option ("CT-PEARL/WHITE 6MM").
+        // Never collapse the row to the bare family: keep the composed title, or treat the
+        // stored value as the missing option and compose it with the live family.
         if (isVariant) {
             String stored = normalize(item.getName());
-            if (!stored.isEmpty()
-                    && !stored.equalsIgnoreCase(family)
-                    && (family.isEmpty()
-                            || containsPhrase(
-                                    stored.toLowerCase(Locale.ROOT),
-                                    family.toLowerCase(Locale.ROOT)))) {
-                return stored;
+            if (!stored.isEmpty() && !stored.equalsIgnoreCase(family)) {
+                if (family.isEmpty()
+                        || containsPhrase(
+                                stored.toLowerCase(Locale.ROOT),
+                                family.toLowerCase(Locale.ROOT))) {
+                    return stored;
+                }
+                return join(family, stored);
             }
         }
         if (!needsSkuDisambiguation(item)) {

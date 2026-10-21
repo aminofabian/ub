@@ -9,6 +9,8 @@ public record SaleItemResponse(
         String batchId,
         String lineKind,
         String lineLabel,
+        /** Canonical product title at sale time; null on pre-snapshot sales. */
+        String displayName,
         BigDecimal quantity,
         BigDecimal unitPrice,
         BigDecimal lineTotal,

@@ -241,9 +241,10 @@ public class SaleReceiptService {
             String parentName = it != null && it.getVariantOfItemId() != null
                     ? parentNameById.get(it.getVariantOfItemId())
                     : null;
-            String desc = it != null
-                    ? ProductDisplayName.forVariant(it, parentName)
-                    : "Item";
+            String snapshot = first.getDisplayName();
+            String desc = snapshot != null && !snapshot.isBlank()
+                    ? snapshot.trim()
+                    : (it != null ? ProductDisplayName.forVariant(it, parentName) : "Item");
             lines.add(new ReceiptLineRow(
                     desc,
                     qty.stripTrailingZeros().toPlainString(),

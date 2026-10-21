@@ -713,6 +713,7 @@ public class DesktopSyncController {
             item.getLineIndex(),
             item.getLineKind(),
             item.getLineLabel(),
+            item.getDisplayName(),
             item.getItemId(),
             item.getQuantity(),
             item.getUnitPrice(),

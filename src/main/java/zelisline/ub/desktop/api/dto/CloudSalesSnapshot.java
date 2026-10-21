@@ -46,6 +46,8 @@ public record CloudSalesSnapshot(
             int lineIndex,
             String lineKind,
             String lineLabel,
+            /** Canonical title printed on the receipt; null on pre-snapshot sales. */
+            String displayName,
             String itemId,
             BigDecimal quantity,
             BigDecimal unitPrice,

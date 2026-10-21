@@ -143,4 +143,37 @@ class ProductDisplayNameTest {
                 "CACTUS CT-PEARL/WHITE 6MM",
                 ProductDisplayName.forVariant(variant, "CACTUS"));
     }
+
+    @Test
+    void forVariantTreatsOptionOnlyStoredNameAsTheMissingOption() {
+        Item variant = new Item();
+        variant.setName("CT-PEARL/WHITE 6MM");
+        variant.setVariantOfItemId("parent-1");
+        variant.setSku("BC-1234567890123");
+        assertEquals(
+                "CACTUS CT-PEARL/WHITE 6MM",
+                ProductDisplayName.forVariant(variant, "CACTUS"));
+    }
+
+    @Test
+    void forVariantDoesNotCollapseToFamilyWhenVariantLabelRepeatsTheFamily() {
+        Item variant = new Item();
+        variant.setName("CT-PEARL/WHITE 10MM");
+        variant.setVariantName("CACTUS");
+        variant.setVariantOfItemId("parent-1");
+        assertEquals(
+                "CACTUS CT-PEARL/WHITE 10MM",
+                ProductDisplayName.forVariant(variant, "CACTUS"));
+    }
+
+    @Test
+    void forVariantKeepsOptionOnlyNameWhenParentIsMissing() {
+        Item variant = new Item();
+        variant.setName("CT-PEARL/WHITE 10MM");
+        variant.setVariantName("CT-PEARL/WHITE 10MM");
+        variant.setVariantOfItemId("missing-parent");
+        assertEquals(
+                "CT-PEARL/WHITE 10MM",
+                ProductDisplayName.forVariant(variant, null));
+    }
 }

@@ -619,7 +619,9 @@ public class SaleService {
             EffectiveLinePricing pricing = linePricing.get(lineIndex);
             Item sold = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(line.itemId(), businessId)
                     .orElse(null);
-            all.addAll(buildItemsForCartLine(saleId, lineIndex, line, allocations, pricing, sold));
+            String soldDisplayName = resolveSoldDisplayName(businessId, sold);
+            all.addAll(buildItemsForCartLine(
+                    saleId, lineIndex, line, allocations, pricing, sold, soldDisplayName));
             lineIndex++;
         }
         return all;
@@ -651,6 +653,30 @@ public class SaleService {
     }
 
     /**
+     * Canonical title at sale time. Mirrors what the receipt/POS show right now so a
+     * later rename or parent detach cannot rewrite history.
+     */
+    private String resolveSoldDisplayName(String businessId, Item sold) {
+        if (sold == null) {
+            return null;
+        }
+        String parentName = null;
+        String parentId = sold.getVariantOfItemId();
+        if (parentId != null && !parentId.isBlank()) {
+            parentName = itemRepository
+                    .findByIdAndBusinessIdAndDeletedAtIsNull(parentId, businessId)
+                    .map(Item::getName)
+                    .orElse(null);
+        }
+        String display = ProductDisplayName.forVariant(sold, parentName);
+        if (display.isBlank()) {
+            return null;
+        }
+        // sale_items.display_name mirrors items.name's 500-char ceiling.
+        return display.length() > 500 ? display.substring(0, 500) : display;
+    }
+
+    /**
      * Builds sale_items for one cart line. Pack/shared-stock SKUs sell in packs but pick
      * base units from the parent shelf — revenue and (when set) pack cost are split across
      * those base units so {@code quantity × unit_price} is not required to equal
@@ -662,7 +688,8 @@ public class SaleService {
             PostSaleLineRequest line,
             List<BatchAllocationLine> allocations,
             EffectiveLinePricing pricing,
-            Item sold
+            Item sold,
+            String soldDisplayName
     ) {
         BigDecimal chargedUnitPrice = pricing != null
                 ? pricing.chargedUnitPrice()
@@ -708,6 +735,7 @@ public class SaleService {
             row.setLineIndex(lineIndex);
             row.setLineKind(SaleLineKinds.ITEM);
             row.setItemId(line.itemId());
+            row.setDisplayName(soldDisplayName);
             row.setBatchId(a.batchId());
             row.setQuantity(a.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP));
             row.setUnitPrice(chargedUnitPrice);

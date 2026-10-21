@@ -305,7 +305,7 @@ class DesktopSyncIngestServiceTest {
                 new BigDecimal("30.00"), null, "owner-id", "customer-1",
                 Instant.parse("2026-08-20T10:00:00Z"), voidedAt, null, null,
                 List.of(new ShiftSyncRequest.SaleItemData(
-                    "line-1", 0, SaleLineKinds.ITEM, "Sugar", "item-1", null,
+                    "line-1", 0, SaleLineKinds.ITEM, "Sugar", null, "item-1", null,
                     new BigDecimal("3"), new BigDecimal("10.00"), new BigDecimal("30.00"),
                     new BigDecimal("6.00"), new BigDecimal("18.00"), new BigDecimal("12.00"),
                     new BigDecimal("10.00"), BigDecimal.ZERO, null, null)),

@@ -1091,6 +1091,7 @@ public class DesktopSyncPullService {
                     ? SaleLineKinds.ITEM
                     : itemData.lineKind());
                 item.setLineLabel(itemData.lineLabel());
+                item.setDisplayName(itemData.displayName());
                 item.setItemId(itemData.itemId());
                 item.setBatchId(null);
                 item.setQuantity(itemData.quantity());

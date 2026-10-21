@@ -42,6 +42,43 @@ class SaleReceiptLineConsolidateTest {
         assertThat(lines.get(1).quantity()).isEqualTo("2");
     }
 
+    @Test
+    void buildReceiptLines_prefersTheDisplayNameFrozenOnTheSaleLine() {
+        SaleItem line = allocation("item-1", 0, "1", "35.00");
+        line.setDisplayName("CACTUS CT-PEARL/WHITE 10MM");
+
+        Item renamed = new Item();
+        renamed.setId("item-1");
+        renamed.setName("Renamed after the sale");
+
+        List<ReceiptLineRow> lines = SaleReceiptService.buildReceiptLines(
+                List.of(line),
+                Map.of("item-1", renamed),
+                Map.of()
+        );
+
+        assertThat(lines.get(0).description()).isEqualTo("CACTUS CT-PEARL/WHITE 10MM");
+    }
+
+    @Test
+    void buildReceiptLines_fallsBackToTheLiveCatalogForLegacyRows() {
+        SaleItem line = allocation("item-1", 0, "1", "30.00");
+
+        Item variant = new Item();
+        variant.setId("item-1");
+        variant.setName("CT-PEARL/WHITE 6MM");
+        variant.setVariantName("CT-PEARL/WHITE 6MM");
+        variant.setVariantOfItemId("parent-1");
+
+        List<ReceiptLineRow> lines = SaleReceiptService.buildReceiptLines(
+                List.of(line),
+                Map.of("item-1", variant),
+                Map.of("parent-1", "CACTUS")
+        );
+
+        assertThat(lines.get(0).description()).isEqualTo("CACTUS CT-PEARL/WHITE 6MM");
+    }
+
     private static SaleItem allocation(String itemId, int lineIndex, String qty, String total) {
         SaleItem si = new SaleItem();
         si.setItemId(itemId);

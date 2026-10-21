@@ -127,19 +127,21 @@ public class WebOrderReceiptService {
         for (WebOrderLine ol : items) {
             Item it = itemMap.get(ol.getItemId());
             String desc;
-            if (it != null) {
+            if (ol.getItemName() != null && !ol.getItemName().isBlank()) {
+                // Snapshot from checkout — already composed for new orders; join for
+                // legacy rows. Prefer it over the live catalog so a later rename does
+                // not rewrite the customer's receipt.
+                desc = ProductDisplayName.join(ol.getItemName(), ol.getVariantName());
+                if (desc.isBlank()) {
+                    desc = ol.getItemName();
+                }
+            } else if (it != null) {
                 String parentName = it.getVariantOfItemId() != null
                         ? parentNameById.get(it.getVariantOfItemId())
                         : null;
                 desc = ProductDisplayName.forVariant(it, parentName);
                 if (desc.isBlank()) {
                     desc = it.getName() != null ? it.getName() : "Item";
-                }
-            } else if (ol.getItemName() != null && !ol.getItemName().isBlank()) {
-                // Snapshot from checkout — already composed for new orders; join for legacy rows.
-                desc = ProductDisplayName.join(ol.getItemName(), ol.getVariantName());
-                if (desc.isBlank()) {
-                    desc = ol.getItemName();
                 }
             } else {
                 desc = "Item";

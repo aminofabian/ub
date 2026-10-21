@@ -33,6 +33,14 @@ public class SaleItem {
     @Column(name = "line_label", length = 255)
     private String lineLabel;
 
+    /**
+     * Canonical product title at the moment of sale (family + option).
+     * Receipts and sales history read this snapshot so later catalog renames do not
+     * rewrite what the customer was sold. Null on pre-snapshot rows.
+     */
+    @Column(name = "display_name", length = 500)
+    private String displayName;
+
     @Column(name = "airtime_phone", length = 32)
     private String airtimePhone;
 

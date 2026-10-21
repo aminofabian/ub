@@ -541,6 +541,7 @@ public class SalesIntelligenceService {
                      WHERE sp2.sale_id = s.id) AS payment_methods,
                    sil.item_id,
                    i.name AS item_name,
+                   sil.display_name AS display_name,
                    i.sku AS item_sku,
                    i.barcode AS item_barcode,
                    i.variant_name AS variant_name,
@@ -975,7 +976,7 @@ public class SalesIntelligenceService {
                             rs.getString("payment_method"),
                             rs.getString("payment_methods"),
                             rs.getString("item_id"),
-                            composedItemName(rs),
+                            recentSaleItemName(rs),
                             rs.getString("item_sku"),
                             rs.getString("item_barcode"),
                             rs.getBigDecimal("quantity").setScale(4, RoundingMode.HALF_UP),
@@ -2419,6 +2420,18 @@ public class SalesIntelligenceService {
 
     private static String blankToNull(String value) {
         return value != null && !value.isBlank() ? value.trim() : null;
+    }
+
+    /**
+     * Sales history title: prefer the title frozen on the sale line at checkout, then fall
+     * back to the live canonical composition for rows written before the snapshot existed.
+     */
+    private static String recentSaleItemName(java.sql.ResultSet rs) throws java.sql.SQLException {
+        String snapshot = blankToNull(rs.getString("display_name"));
+        if (snapshot != null) {
+            return snapshot;
+        }
+        return composedItemName(rs);
     }
 
     /**

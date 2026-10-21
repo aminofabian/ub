@@ -180,7 +180,7 @@ class DesktopSyncPullServiceTest {
             BigDecimal.ZERO,
             receiptNo,
             List.of(new CloudSalesSnapshot.CloudSaleItemData(
-                "line-1", 0, "ITEM", "Tusker 500ml", "item-1",
+                "line-1", 0, "ITEM", "Tusker 500ml", null, "item-1",
                 new BigDecimal("1"), new BigDecimal("1500.00"), new BigDecimal("1500.00"),
                 new BigDecimal("1200.00"), new BigDecimal("1200.00"), new BigDecimal("300.00"),
                 null, null, null, null,

@@ -228,13 +228,16 @@ public class InventoryLedgerService {
         // skip GL — journals cannot be posted at $0.
         String jeId = null;
         if (value.signum() > 0) {
-            jeId = saveJournal(
+            boolean reverseEquity = InventoryConstants.isEquityFundedBatchSource(batch.getSourceType());
+            jeId = saveOutboundJournal(
                     businessId,
                     InventoryConstants.JOURNAL_ADJUSTMENT_DOWN,
                     opId,
-                    "Inventory adjustment (decrease)",
+                    reverseEquity
+                            ? "Inventory adjustment (decrease) — equity reversal"
+                            : "Inventory adjustment (decrease)",
                     value,
-                    false
+                    reverseEquity
             );
         }
         return new InventoryMutationResponse(jeId, mv.getId(), batch.getId());
@@ -381,7 +384,8 @@ public class InventoryLedgerService {
 
         // ── Decrement each batch and record its movement ─────────────
         StockMovement firstMv = null;
-        BigDecimal totalValue = BigDecimal.ZERO;
+        BigDecimal equityValue = BigDecimal.ZERO;
+        BigDecimal shrinkValue = BigDecimal.ZERO;
         String firstBatchNumber = null;
         Set<String> supplyBatchIds = new LinkedHashSet<>();
         for (BatchAllocationLine slice : slices) {
@@ -415,7 +419,12 @@ public class InventoryLedgerService {
                 firstMv = mv;
                 firstBatchNumber = batch.getBatchNumber();
             }
-            totalValue = totalValue.add(extensionMoney(slice.quantity(), batch.getUnitCost()));
+            BigDecimal sliceValue = extensionMoney(slice.quantity(), batch.getUnitCost());
+            if (InventoryConstants.isEquityFundedBatchSource(batch.getSourceType())) {
+                equityValue = equityValue.add(sliceValue);
+            } else {
+                shrinkValue = shrinkValue.add(sliceValue);
+            }
         }
         // Close supply headers only after every line decrement — calling this
         // mid-loop can mark sibling lots depleted before they are written off.
@@ -426,14 +435,14 @@ public class InventoryLedgerService {
         applyStockDelta(item, qty.negate(), true);
 
         String jeId = null;
-        if (totalValue.signum() > 0) {
-            jeId = saveJournal(
+        if (equityValue.signum() > 0 || shrinkValue.signum() > 0) {
+            jeId = saveMixedOutboundJournal(
                     businessId,
                     InventoryConstants.JOURNAL_STANDALONE_WASTAGE,
                     opId,
                     "Inventory wastage — batch " + firstBatchNumber,
-                    totalValue,
-                    false
+                    equityValue,
+                    shrinkValue
             );
         }
         String itemName = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(req.itemId(), businessId)
@@ -683,7 +692,7 @@ public class InventoryLedgerService {
         return sm;
     }
 
-    /** When increase: Dr inventory, Cr equity. When decrease class: Dr shrinkage, Cr inventory. */
+    /** When increase: Dr inventory, Cr equity. */
     private String saveJournal(
             String businessId,
             String sourceType,
@@ -695,6 +704,9 @@ public class InventoryLedgerService {
         if (extensionValue.signum() <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Journal amount must be positive");
         }
+        if (!isInboundInventory) {
+            return saveOutboundJournal(businessId, sourceType, sourceId, memo, extensionValue, false);
+        }
         JournalEntry entry = new JournalEntry();
         entry.setBusinessId(businessId);
         entry.setEntryDate(LocalDate.ofInstant(Instant.now(), ZoneOffset.UTC));
@@ -702,13 +714,67 @@ public class InventoryLedgerService {
         entry.setSourceId(sourceId);
         entry.setMemo(memo);
         BigDecimal v = extensionValue.setScale(2, RoundingMode.HALF_UP);
-        if (isInboundInventory) {
-            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), v);
-            entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.OPENING_BALANCE_EQUITY), v);
-        } else {
-            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE), v);
-            entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), v);
+        entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), v);
+        entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.OPENING_BALANCE_EQUITY), v);
+        return ledgerPostingPort.post(entry);
+    }
+
+    /**
+     * Outbound inventory write-off. Equity-funded lots reverse opening-balance equity
+     * (no P&amp;L hit); purchased lots debit shrinkage expense.
+     */
+    private String saveOutboundJournal(
+            String businessId,
+            String sourceType,
+            String sourceId,
+            String memo,
+            BigDecimal extensionValue,
+            boolean reverseEquity
+    ) {
+        if (extensionValue.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Journal amount must be positive");
         }
+        return saveMixedOutboundJournal(
+                businessId,
+                sourceType,
+                sourceId,
+                memo,
+                reverseEquity ? extensionValue : BigDecimal.ZERO,
+                reverseEquity ? BigDecimal.ZERO : extensionValue
+        );
+    }
+
+    private String saveMixedOutboundJournal(
+            String businessId,
+            String sourceType,
+            String sourceId,
+            String memo,
+            BigDecimal equityValue,
+            BigDecimal shrinkValue
+    ) {
+        BigDecimal equity = equityValue == null ? BigDecimal.ZERO : equityValue;
+        BigDecimal shrink = shrinkValue == null ? BigDecimal.ZERO : shrinkValue;
+        BigDecimal total = equity.add(shrink).setScale(2, RoundingMode.HALF_UP);
+        if (total.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Journal amount must be positive");
+        }
+        JournalEntry entry = new JournalEntry();
+        entry.setBusinessId(businessId);
+        entry.setEntryDate(LocalDate.ofInstant(Instant.now(), ZoneOffset.UTC));
+        entry.setSourceType(sourceType);
+        entry.setSourceId(sourceId);
+        entry.setMemo(memo);
+        if (equity.signum() > 0) {
+            entry.debit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.OPENING_BALANCE_EQUITY),
+                    equity.setScale(2, RoundingMode.HALF_UP));
+        }
+        if (shrink.signum() > 0) {
+            entry.debit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE),
+                    shrink.setScale(2, RoundingMode.HALF_UP));
+        }
+        entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY), total);
         return ledgerPostingPort.post(entry);
     }
 

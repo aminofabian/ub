@@ -129,7 +129,10 @@ public class SupplyBatchClearanceService {
             inventoryBatchRepository.save(line);
         }
 
-        // Post journal entry if anything was written off
+        // Post journal entry if anything was written off.
+        // Equity-funded lots (opening / stock-count gain) reverse equity —
+        // they never went through P&L as a purchase, so shrinkage would invent
+        // a fake operating loss. Purchased lots still hit shrinkage OpEx.
         String journalEntryId = null;
         if (hadRemaining && totalWriteOffValue.signum() > 0) {
             JournalEntry entry = new JournalEntry();
@@ -137,11 +140,20 @@ public class SupplyBatchClearanceService {
             entry.setEntryDate(LocalDate.now(ZoneOffset.UTC));
             entry.setSourceType(InventoryConstants.JOURNAL_BATCH_CLEARANCE);
             entry.setSourceId(supplyBatchId);
+            boolean equityFunded = InventoryConstants.isEquityFundedBatchSource(sb.getSourceType());
             entry.setMemo("Batch clearance: " + sb.getBatchNumber() + " — " + reason.name()
+                    + (equityFunded ? " (equity reversal)" : "")
                     + (notes != null && !notes.isBlank() ? " — " + notes : ""));
 
-            entry.debit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE),
-                    totalWriteOffValue);
+            if (equityFunded) {
+                entry.debit(ledgerAccountResolver.resolveId(
+                                businessId, LedgerAccountCodes.OPENING_BALANCE_EQUITY),
+                        totalWriteOffValue);
+            } else {
+                entry.debit(ledgerAccountResolver.resolveId(
+                                businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE),
+                        totalWriteOffValue);
+            }
             entry.credit(ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.INVENTORY),
                     totalWriteOffValue);
 

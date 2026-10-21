@@ -29,10 +29,15 @@ import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
 import zelisline.ub.finance.LedgerAccountCodes;
+import zelisline.ub.finance.application.LedgerAccountResolver;
+import zelisline.ub.finance.application.LedgerPostingPort;
+import zelisline.ub.finance.domain.JournalEntry;
 import zelisline.ub.finance.domain.JournalLine;
 import zelisline.ub.finance.repository.JournalEntryRepository;
 import zelisline.ub.finance.repository.JournalLineRepository;
 import zelisline.ub.finance.repository.LedgerAccountRepository;
+import zelisline.ub.inventory.InventoryConstants;
+import zelisline.ub.inventory.application.EquityFundedClearanceCorrectionService;
 import zelisline.ub.identity.domain.Permission;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.domain.RolePermission;
@@ -98,6 +103,12 @@ class InventorySlice1IT {
     private StockMovementRepository stockMovementRepository;
     @Autowired
     private InventoryBatchRepository inventoryBatchRepository;
+    @Autowired
+    private LedgerPostingPort ledgerPostingPort;
+    @Autowired
+    private LedgerAccountResolver ledgerAccountResolver;
+    @Autowired
+    private EquityFundedClearanceCorrectionService equityFundedClearanceCorrectionService;
 
     @MockitoBean
     @SuppressWarnings("unused")
@@ -203,7 +214,7 @@ class InventorySlice1IT {
 
         String batchId = inventoryBatchRepository.findAll().getFirst().getId();
 
-        mockMvc.perform(post("/api/v1/inventory/batch-decrease")
+        MvcResult decR = mockMvc.perform(post("/api/v1/inventory/batch-decrease")
                         .contentType(APPLICATION_JSON)
                         .content(
                                 """
@@ -212,7 +223,8 @@ class InventorySlice1IT {
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
-                .andExpect(status().isCreated());
+                .andExpect(status().isCreated())
+                .andReturn();
 
         var batchAfter = inventoryBatchRepository.findById(batchId).orElseThrow();
         assertThat(batchAfter.getQuantityRemaining().setScale(2, RoundingMode.HALF_UP))
@@ -222,7 +234,13 @@ class InventorySlice1IT {
         assertThat(itemAfterDec.getCurrentStock().setScale(2, RoundingMode.HALF_UP))
                 .isEqualByComparingTo("7.00");
 
-        mockMvc.perform(post("/api/v1/inventory/wastage")
+        // Opening lots reverse equity — must not invent shrinkage OpEx.
+        String decJe = objectMapper.readTree(decR.getResponse().getContentAsString())
+                .get("journalEntryId").asText();
+        assertDebitsAccount(decJe, LedgerAccountCodes.OPENING_BALANCE_EQUITY, "7.50");
+        assertNoDebitTo(decJe, LedgerAccountCodes.INVENTORY_SHRINKAGE);
+
+        MvcResult wasteR = mockMvc.perform(post("/api/v1/inventory/wastage")
                         .contentType(APPLICATION_JSON)
                         .content("""
                                 {"branchId":"%s","itemId":"%s","quantity":2,"unitCost":2.50,"reason":"spoil"}
@@ -230,13 +248,115 @@ class InventorySlice1IT {
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
-                .andExpect(status().isCreated());
+                .andExpect(status().isCreated())
+                .andReturn();
 
         var itemFinal = itemRepository.findById(itemId).orElseThrow();
         assertThat(itemFinal.getCurrentStock().setScale(2, RoundingMode.HALF_UP))
                 .isEqualByComparingTo("5.00");
 
+        String wasteJe = objectMapper.readTree(wasteR.getResponse().getContentAsString())
+                .get("journalEntryId").asText();
+        assertDebitsAccount(wasteJe, LedgerAccountCodes.OPENING_BALANCE_EQUITY, "5.00");
+        assertNoDebitTo(wasteJe, LedgerAccountCodes.INVENTORY_SHRINKAGE);
+
         assertThat(stockMovementRepository.count()).isEqualTo(3);
+    }
+
+    @Test
+    void clearingStockGainBatch_reversesEquityNotShrinkage() throws Exception {
+        MvcResult gainR = mockMvc.perform(post("/api/v1/inventory/stock-increase")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"branchId":"%s","itemId":"%s","quantity":8,"unitCost":10.00,"notes":"count gain"}
+                                """.formatted(branchId, itemId))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String gainJe = objectMapper.readTree(gainR.getResponse().getContentAsString())
+                .get("journalEntryId").asText();
+        assertDebitsAccount(gainJe, LedgerAccountCodes.INVENTORY, "80.00");
+
+        var batch = inventoryBatchRepository.findAll().getFirst();
+        String supplyBatchId = batch.getSupplyBatchId();
+        assertThat(supplyBatchId).isNotBlank();
+
+        MvcResult clearR = mockMvc.perform(post("/api/v1/inventory/supply-batches/" + supplyBatchId + "/clear")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"reason":"EXPIRED","notes":"cleanup"}
+                                """)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode clearJson = objectMapper.readTree(clearR.getResponse().getContentAsString());
+        assertThat(clearJson.get("totalWriteOffValue").decimalValue())
+                .isEqualByComparingTo("80.00");
+        String clearJe = clearJson.get("journalEntryId").asText();
+        assertDebitsAccount(clearJe, LedgerAccountCodes.OPENING_BALANCE_EQUITY, "80.00");
+        assertNoDebitTo(clearJe, LedgerAccountCodes.INVENTORY_SHRINKAGE);
+
+        var itemFinal = itemRepository.findById(itemId).orElseThrow();
+        assertThat(itemFinal.getCurrentStock().setScale(2, RoundingMode.HALF_UP))
+                .isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void equityClearanceCorrection_reversesHistoricalShrinkageMispost() throws Exception {
+        mockMvc.perform(post("/api/v1/inventory/stock-increase")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"branchId":"%s","itemId":"%s","quantity":5,"unitCost":20.00,"notes":"gain"}
+                                """.formatted(branchId, itemId))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated());
+
+        var batch = inventoryBatchRepository.findAll().getFirst();
+        String supplyBatchId = batch.getSupplyBatchId();
+
+        // Simulate the pre-fix clearance journal: Dr Shrinkage / Cr Inventory.
+        JournalEntry bad = new JournalEntry();
+        bad.setBusinessId(TENANT);
+        bad.setBranchId(branchId);
+        bad.setEntryDate(java.time.LocalDate.of(2026, 10, 3));
+        bad.setSourceType(InventoryConstants.JOURNAL_BATCH_CLEARANCE);
+        bad.setSourceId(supplyBatchId);
+        bad.setMemo("Batch clearance: historical mispost");
+        BigDecimal amount = new BigDecimal("100.00");
+        bad.debit(ledgerAccountResolver.resolveId(TENANT, LedgerAccountCodes.INVENTORY_SHRINKAGE), amount);
+        bad.credit(ledgerAccountResolver.resolveId(TENANT, LedgerAccountCodes.INVENTORY), amount);
+        String badJeId = ledgerPostingPort.post(bad);
+
+        var preview = equityFundedClearanceCorrectionService.preview(TENANT);
+        assertThat(preview.dryRun()).isTrue();
+        assertThat(preview.corrected()).isEqualTo(1);
+        assertThat(preview.totalAmount()).isEqualByComparingTo("100.00");
+        assertThat(journalEntryRepository.existsByBusinessIdAndSourceTypeAndSourceId(
+                TENANT, InventoryConstants.JOURNAL_EQUITY_CLEARANCE_CORRECTION, badJeId))
+                .isFalse();
+
+        var applied = equityFundedClearanceCorrectionService.apply(TENANT);
+        assertThat(applied.dryRun()).isFalse();
+        assertThat(applied.corrected()).isEqualTo(1);
+        assertThat(applied.totalAmount()).isEqualByComparingTo("100.00");
+        assertThat(applied.lines().getFirst().correctionJournalEntryId()).isNotBlank();
+
+        String corrJe = applied.lines().getFirst().correctionJournalEntryId();
+        assertDebitsAccount(corrJe, LedgerAccountCodes.OPENING_BALANCE_EQUITY, "100.00");
+        // Credit side is shrinkage — no further debit to 5210 on the correction.
+        assertNoDebitTo(corrJe, LedgerAccountCodes.INVENTORY_SHRINKAGE);
+
+        var again = equityFundedClearanceCorrectionService.apply(TENANT);
+        assertThat(again.corrected()).isZero();
+        assertThat(again.totalAmount()).isEqualByComparingTo("0.00");
     }
 
     private void seedLedger(String businessId) {
@@ -283,5 +403,27 @@ class InventorySlice1IT {
             dr = dr.add(jl.getDebit());
         }
         return dr;
+    }
+
+    private void assertDebitsAccount(String journalEntryId, String accountCode, String expected) {
+        String accountId = ledgerAccountRepository.findByBusinessIdAndCode(TENANT, accountCode)
+                .orElseThrow()
+                .getId();
+        BigDecimal debit = journalLineRepository.findByJournalEntryId(journalEntryId).stream()
+                .filter(jl -> accountId.equals(jl.getLedgerAccountId()))
+                .map(JournalLine::getDebit)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(debit).isEqualByComparingTo(new BigDecimal(expected));
+    }
+
+    private void assertNoDebitTo(String journalEntryId, String accountCode) {
+        String accountId = ledgerAccountRepository.findByBusinessIdAndCode(TENANT, accountCode)
+                .orElseThrow()
+                .getId();
+        BigDecimal debit = journalLineRepository.findByJournalEntryId(journalEntryId).stream()
+                .filter(jl -> accountId.equals(jl.getLedgerAccountId()))
+                .map(JournalLine::getDebit)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(debit).isEqualByComparingTo(BigDecimal.ZERO);
     }
 }

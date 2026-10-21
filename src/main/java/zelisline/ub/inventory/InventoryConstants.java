@@ -18,6 +18,17 @@ public final class InventoryConstants {
     public static final String MOVEMENT_WEB_ORDER_VOID = "web_order_void";
     public static final String BATCH_SOURCE_OPENING = "opening_balance";
     public static final String BATCH_SOURCE_STOCK_GAIN = "stock_count_gain";
+
+    /**
+     * Opening-balance and stock-count-gain lots were funded by equity
+     * ({@code Dr Inventory / Cr Opening balance equity}), not by a purchase.
+     * Writing them off must reverse that equity credit — never hit shrinkage
+     * OpEx — or the books invent a fake operating loss.
+     */
+    public static boolean isEquityFundedBatchSource(String sourceType) {
+        return BATCH_SOURCE_OPENING.equals(sourceType)
+                || BATCH_SOURCE_STOCK_GAIN.equals(sourceType);
+    }
     public static final String REF_OPERATION = "inventory_operation";
     public static final String REF_STOCK_TRANSFER_LINE = "stock_transfer_line";
     public static final String BATCH_SOURCE_STOCK_TRANSFER = "stock_transfer";
@@ -106,6 +117,12 @@ public final class InventoryConstants {
 
     public static final String MOVEMENT_BATCH_CLEARANCE = "batch_clearance";
     public static final String JOURNAL_BATCH_CLEARANCE = "batch_clearance";
+    /**
+     * Correcting journal for historical equity-funded batch clearances that
+     * wrongly debited shrinkage ({@code 5210}). {@code source_id} is the
+     * original {@link #JOURNAL_BATCH_CLEARANCE} journal entry id.
+     */
+    public static final String JOURNAL_EQUITY_CLEARANCE_CORRECTION = "equity_clearance_correction";
 
     private InventoryConstants() {
     }

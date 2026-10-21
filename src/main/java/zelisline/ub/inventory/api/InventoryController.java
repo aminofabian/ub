@@ -37,7 +37,9 @@ import zelisline.ub.inventory.api.dto.PostStockIncreaseRequest;
 import zelisline.ub.inventory.api.dto.PostStockTransferRequest;
 import zelisline.ub.inventory.api.dto.StockTransferCreatedResponse;
 import zelisline.ub.inventory.api.dto.StockTransferSummaryResponse;
+import zelisline.ub.inventory.api.dto.EquityClearanceCorrectionResponse;
 import zelisline.ub.inventory.api.dto.StockDriftResponse;
+import zelisline.ub.inventory.application.EquityFundedClearanceCorrectionService;
 import zelisline.ub.inventory.application.InventoryBatchPickerService;
 import zelisline.ub.inventory.application.InventoryDriftService;
 import zelisline.ub.inventory.application.InventoryLedgerService;
@@ -61,6 +63,7 @@ public class InventoryController {
     private final InventoryTransferService inventoryTransferService;
     private final InventoryValuationService inventoryValuationService;
     private final InventoryDriftService inventoryDriftService;
+    private final EquityFundedClearanceCorrectionService equityFundedClearanceCorrectionService;
     private final ItemStockThresholdsService itemStockThresholdsService;
     private final InventoryRoleAccessService inventoryRoleAccessService;
     private final RequestPermissionService requestPermissionService;
@@ -247,6 +250,56 @@ public class InventoryController {
                 user.userId(),
                 user.branchId()
         );
+    }
+
+    /**
+     * Preview correcting journals for equity-funded batch clearances that wrongly
+     * hit shrinkage OpEx. Does not write.
+     */
+    @GetMapping("/repairs/equity-clearance-correction")
+    @PreAuthorize("hasPermission(null, 'inventory.write')")
+    public EquityClearanceCorrectionResponse previewEquityClearanceCorrection(
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return toCorrectionResponse(equityFundedClearanceCorrectionService.preview(
+                TenantRequestIds.resolveBusinessId(request)));
+    }
+
+    /**
+     * Post correcting journals ({@code Dr Opening equity / Cr Shrinkage}) for
+     * historical equity-funded clearances. Idempotent.
+     */
+    @PostMapping("/repairs/equity-clearance-correction")
+    @PreAuthorize("hasPermission(null, 'inventory.write')")
+    public EquityClearanceCorrectionResponse applyEquityClearanceCorrection(
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return toCorrectionResponse(equityFundedClearanceCorrectionService.apply(
+                TenantRequestIds.resolveBusinessId(request)));
+    }
+
+    private static EquityClearanceCorrectionResponse toCorrectionResponse(
+            EquityFundedClearanceCorrectionService.CorrectionSummary summary
+    ) {
+        return new EquityClearanceCorrectionResponse(
+                summary.dryRun(),
+                summary.candidates(),
+                summary.corrected(),
+                summary.skipped(),
+                summary.totalAmount(),
+                summary.lines().stream()
+                        .map(l -> new EquityClearanceCorrectionResponse.Line(
+                                l.originalJournalEntryId(),
+                                l.correctionJournalEntryId(),
+                                l.branchId(),
+                                l.entryDate(),
+                                l.supplyBatchId(),
+                                l.batchNumber(),
+                                l.batchSourceType(),
+                                l.amount()))
+                        .toList());
     }
 
     /**

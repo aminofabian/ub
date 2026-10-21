@@ -12,9 +12,15 @@ public record BranchReceiptSettingsResponse(
          * When true, cashiers can open a presentable WhatsApp receipt for the
          * customer after a sale.
          */
-        boolean whatsappReceiptEnabled
+        boolean whatsappReceiptEnabled,
+        /**
+         * When true, cash / M-Pesa checkout keeps the optional customer-name
+         * field visible so the name can print on the receipt.
+         */
+        boolean customerNameOnReceipt
 ) {
     public static BranchReceiptSettingsResponse empty() {
-        return new BranchReceiptSettingsResponse(null, null, null, null, null, null, false);
+        return new BranchReceiptSettingsResponse(
+                null, null, null, null, null, null, false, false);
     }
 }

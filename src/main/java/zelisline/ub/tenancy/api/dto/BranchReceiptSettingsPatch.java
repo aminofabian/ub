@@ -10,6 +10,8 @@ public record BranchReceiptSettingsPatch(
         @Size(max = 500) String footerNote,
         @Size(max = 120) String printerCupsName,
         /** Null = leave unchanged; true/false persists the WhatsApp receipt toggle. */
-        Boolean whatsappReceiptEnabled
+        Boolean whatsappReceiptEnabled,
+        /** Null = leave unchanged; true/false persists the customer-name-on-receipt toggle. */
+        Boolean customerNameOnReceipt
 ) {
 }

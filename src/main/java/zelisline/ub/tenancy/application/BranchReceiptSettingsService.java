@@ -21,6 +21,7 @@ public class BranchReceiptSettingsService {
     private static final String KEY_FOOTER_NOTE = "footerNote";
     private static final String KEY_PRINTER_CUPS_NAME = "printerCupsName";
     private static final String KEY_WHATSAPP_RECEIPT_ENABLED = "whatsappReceiptEnabled";
+    private static final String KEY_CUSTOMER_NAME_ON_RECEIPT = "customerNameOnReceipt";
 
     private final ObjectMapper objectMapper;
 
@@ -40,7 +41,8 @@ public class BranchReceiptSettingsService {
                     textOrNull(root.get(KEY_TILL_NUMBER)),
                     textOrNull(root.get(KEY_FOOTER_NOTE)),
                     textOrNull(root.get(KEY_PRINTER_CUPS_NAME)),
-                    booleanOrFalse(root.get(KEY_WHATSAPP_RECEIPT_ENABLED))
+                    booleanOrFalse(root.get(KEY_WHATSAPP_RECEIPT_ENABLED)),
+                    booleanOrFalse(root.get(KEY_CUSTOMER_NAME_ON_RECEIPT))
             );
         } catch (Exception e) {
             return BranchReceiptSettingsResponse.empty();
@@ -75,6 +77,13 @@ public class BranchReceiptSettingsService {
                 root.put(KEY_WHATSAPP_RECEIPT_ENABLED, true);
             } else {
                 root.remove(KEY_WHATSAPP_RECEIPT_ENABLED);
+            }
+        }
+        if (patch.customerNameOnReceipt() != null) {
+            if (Boolean.TRUE.equals(patch.customerNameOnReceipt())) {
+                root.put(KEY_CUSTOMER_NAME_ON_RECEIPT, true);
+            } else {
+                root.remove(KEY_CUSTOMER_NAME_ON_RECEIPT);
             }
         }
         if (root.isEmpty()) {

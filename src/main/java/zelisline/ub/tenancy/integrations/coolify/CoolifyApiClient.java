@@ -146,13 +146,18 @@ public class CoolifyApiClient {
      */
     private void patchFqdn(String fqdn) throws Exception {
         HttpResponse<String> response = patchDomainList("fqdn", fqdn);
-        if (response.getStatus() == 422 && mentionsDomainsField(response.getBody())) {
-            log.info("Coolify rejected `fqdn`; retrying PATCH with `domains`.");
+        if (response.getStatus() == 422) {
+            // Current Coolify removed `fqdn` from the writable fields and answers
+            // {"errors":{"fqdn":["This field is not allowed."]}}; `domains` is the
+            // comma-separated replacement (it also accepts a plain string).
+            log.info(
+                    "Coolify rejected `fqdn` ({}); retrying PATCH with `domains`.",
+                    truncate(response.getBody()));
             response = patchDomainList("domains", fqdn);
         }
         if (response.getStatus() < 200 || response.getStatus() >= 300) {
             throw new CoolifyApiException(
-                    "Coolify PATCH fqdn HTTP " + response.getStatus() + suffix(response.getBody()),
+                    "Coolify PATCH domains HTTP " + response.getStatus() + suffix(response.getBody()),
                     response.getStatus());
         }
     }
@@ -166,10 +171,6 @@ public class CoolifyApiClient {
                 .header("Accept", "application/json")
                 .body(objectMapper.writeValueAsString(body))
                 .asString();
-    }
-
-    private static boolean mentionsDomainsField(String body) {
-        return body != null && body.toLowerCase(Locale.ROOT).contains("domains");
     }
 
     /**

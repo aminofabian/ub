@@ -21,7 +21,7 @@ import zelisline.ub.tenancy.integrations.storefront.StorefrontDomainsProperties;
  * public DNS matches (protects Let's Encrypt rate limits), then await cert.
  */
 @Component
-@ConditionalOnProperty(name = "app.domains.provider", havingValue = "coolify")
+@ConditionalOnProperty(name = "app.domains.provider", havingValue = "coolify", matchIfMissing = true)
 public class CoolifyStorefrontDomainProvider implements StorefrontDomainProvider {
 
     private final StorefrontDomainsProperties properties;

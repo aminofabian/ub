@@ -11,10 +11,10 @@ import zelisline.ub.tenancy.integrations.storefront.StorefrontDomainsProperties;
 
 /**
  * Adapts {@link VercelProjectDomainClient} to {@link StorefrontDomainProvider}.
- * Active when {@code app.domains.provider=vercel} (the pre-cutover default).
+ * Active when {@code app.domains.provider=vercel}.
  */
 @Component
-@ConditionalOnProperty(name = "app.domains.provider", havingValue = "vercel", matchIfMissing = true)
+@ConditionalOnProperty(name = "app.domains.provider", havingValue = "vercel")
 public class VercelStorefrontDomainProvider implements StorefrontDomainProvider {
 
     private final VercelProjectDomainClient vercelProjectDomainClient;

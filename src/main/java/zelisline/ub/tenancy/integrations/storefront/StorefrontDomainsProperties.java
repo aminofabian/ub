@@ -6,18 +6,18 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * Storefront custom-domain hosting: which provider attaches hostnames, where
  * tenants should point DNS, and whether domain purchase is open.
  *
- * <p>Pre-cutover default is {@code vercel}. After the Coolify DNS flip, set
- * {@code APP_DOMAINS_PROVIDER=coolify} and clear the Vercel token.
+ * <p>Post-cutover default is {@code coolify}. Set {@code APP_DOMAINS_PROVIDER=vercel}
+ * only if you temporarily need the old Vercel attach path.
  */
 @ConfigurationProperties(prefix = "app.domains")
 public class StorefrontDomainsProperties {
 
     /** {@code vercel} or {@code coolify}. */
-    private String provider = "vercel";
+    private String provider = "coolify";
 
     /**
      * Apex A-record target shown to tenants (and checked by {@link DnsTargetChecker}).
-     * Empty keeps the provider's built-in default (Vercel IP or Coolify server).
+     * Empty keeps the provider's built-in default (Coolify server or Vercel IP).
      */
     private String storefrontATarget = "";
 

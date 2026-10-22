@@ -55,7 +55,13 @@ public class TillPrintService {
     private static final Duration JOB_TTL = Duration.ofHours(3);
     private static final int MAX_RECEIPT_TILLS = 8;
     private static final int MAX_LINES = 80;
-    private static final Set<String> TILL_ROLE_KEYS = Set.of("cashier", "butcher_cashier");
+    /**
+     * Staff who never run a till / receipt printer. Everyone else (cashier,
+     * butcher, department counter, stock manager, manager, owner, custom
+     * till roles) can be a print target — matching who mounts
+     * {@code CashierTillPrintListener}.
+     */
+    private static final Set<String> NON_TILL_ROLE_KEYS = Set.of("buyer", "viewer");
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -66,20 +72,19 @@ public class TillPrintService {
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
+    /**
+     * Every active till-capable staffer in the business. Branch is kept on the
+     * API for callers/job metadata, but print targets are people (logged-in
+     * tills), not branch membership — filtering by branch hid managers and
+     * cashiers assigned to another counter.
+     */
     @Transactional(readOnly = true)
+    @SuppressWarnings("unused")
     public List<TillPrintCashierResponse> listCashiers(String businessId, String branchId) {
-        Set<String> roleIds = tillRoleIds(businessId);
-        if (roleIds.isEmpty()) {
-            return List.of();
-        }
-        String branch = blankToNull(branchId);
+        Set<String> excludedRoleIds = nonTillRoleIds(businessId);
         return userRepository.findByBusinessIdAndDeletedAtIsNull(businessId).stream()
                 .filter(user -> UserStatus.ACTIVE.wire().equalsIgnoreCase(user.getStatus()))
-                .filter(user -> roleIds.contains(user.getRoleId()))
-                .filter(user -> branch == null
-                        || branch.equals(user.getBranchId())
-                        || user.getBranchId() == null
-                        || user.getBranchId().isBlank())
+                .filter(user -> user.getRoleId() == null || !excludedRoleIds.contains(user.getRoleId()))
                 .sorted((a, b) -> a.getName().compareToIgnoreCase(b.getName()))
                 .map(user -> new TillPrintCashierResponse(user.getId(), user.getName()))
                 .toList();
@@ -196,10 +201,11 @@ public class TillPrintService {
         return new TillPrintClaimResponse(job.getId(), job.getKind(), readSlip(job.getPayloadJson()));
     }
 
-    private Set<String> tillRoleIds(String businessId) {
+    private Set<String> nonTillRoleIds(String businessId) {
         Set<String> ids = new LinkedHashSet<>();
         for (Role role : roleRepository.findVisibleForTenant(businessId)) {
-            if (role.getRoleKey() != null && TILL_ROLE_KEYS.contains(role.getRoleKey().trim().toLowerCase())) {
+            if (role.getRoleKey() != null
+                    && NON_TILL_ROLE_KEYS.contains(role.getRoleKey().trim().toLowerCase())) {
                 ids.add(role.getId());
             }
         }

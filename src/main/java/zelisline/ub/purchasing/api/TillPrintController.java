@@ -37,7 +37,9 @@ public class TillPrintController {
 
     @GetMapping("/cashiers")
     @PreAuthorize(
-            "hasPermission(null, 'purchasing.path_a.read') or hasPermission(null, 'purchasing.path_a.write')")
+            "hasPermission(null, 'purchasing.path_a.read') or hasPermission(null, 'purchasing.path_a.write')"
+                    + " or hasPermission(null, 'purchasing.path_b.read') or hasPermission(null, 'purchasing.path_b.write')"
+                    + " or hasPermission(null, 'purchasing.payment.read') or hasPermission(null, 'purchasing.payment.write')")
     public List<TillPrintCashierResponse> listCashiers(
             @RequestParam(required = false) String branchId,
             HttpServletRequest request
@@ -47,7 +49,9 @@ public class TillPrintController {
     }
 
     @PostMapping
-    @PreAuthorize("hasPermission(null, 'purchasing.path_a.write')")
+    @PreAuthorize(
+            "hasPermission(null, 'purchasing.path_a.write') or hasPermission(null, 'purchasing.path_b.write')"
+                    + " or hasPermission(null, 'purchasing.payment.write')")
     @ResponseStatus(HttpStatus.CREATED)
     public DispatchTillPrintResponse dispatch(
             @Valid @RequestBody DispatchTillPrintRequest body,

@@ -6,7 +6,6 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import lombok.RequiredArgsConstructor;
@@ -25,11 +24,9 @@ public class SubscriptionExpiryEmailRenderer {
     private static final DateTimeFormatter DATE_FMT =
             DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH)
                     .withZone(ZoneId.of("Africa/Nairobi"));
+    private static final String DEFAULT_RENEWAL_PATH = "/business/billing/renew";
 
     private final PlatformCampaignEmailRenderer cardRenderer;
-
-    @Value("${app.public.frontend-base-url:https://palmart.co.ke}")
-    private String frontendBaseUrl;
 
     public RenderedEmail render(
             Business business,
@@ -39,6 +36,7 @@ public class SubscriptionExpiryEmailRenderer {
             Instant graceStartedAt,
             Instant graceEndsAt,
             String renewalUrl,
+            String shopOrigin,
             boolean autoBlockEnabled
     ) {
         String businessName = business.getName() != null ? business.getName().trim() : "Your shop";
@@ -47,18 +45,21 @@ public class SubscriptionExpiryEmailRenderer {
         int daysAgo = Math.max(1, stepDay);
         int daysRemaining = Math.max(0, graceDays - stepDay);
         String amountLabel = currency + " " + amount.stripTrailingZeros().toPlainString();
-        String link = renewalUrl != null && !renewalUrl.isBlank() ? renewalUrl.trim() : renewUrl();
+        String shop = resolveShopOrigin(shopOrigin, renewalUrl);
+        String link = renewalUrl != null && !renewalUrl.isBlank()
+                ? renewalUrl.trim()
+                : shop + DEFAULT_RENEWAL_PATH;
 
         if (!autoBlockEnabled) {
-            return autoBlockOffReminder(businessName, amountLabel, link);
+            return autoBlockOffReminder(businessName, amountLabel, link, shop);
         }
         if (stepDay == 2) {
-            return detailed(businessName, plan, amountLabel, graceStartedAt, graceEndsAt, link);
+            return detailed(businessName, plan, amountLabel, graceStartedAt, graceEndsAt, link, shop);
         }
         if (stepDay >= 15) {
-            return finalNotice(businessName, amountLabel, link);
+            return finalNotice(businessName, amountLabel, link, shop);
         }
-        return shortReminder(businessName, daysAgo, daysRemaining, amountLabel, link);
+        return shortReminder(businessName, daysAgo, daysRemaining, amountLabel, link, shop);
     }
 
     /**
@@ -68,7 +69,8 @@ public class SubscriptionExpiryEmailRenderer {
     private RenderedEmail autoBlockOffReminder(
             String businessName,
             String amountLabel,
-            String link
+            String link,
+            String shopOrigin
     ) {
         String subject = "Renew your Kiosk subscription when you can";
         String text = """
@@ -104,7 +106,7 @@ public class SubscriptionExpiryEmailRenderer {
                 bodyHtml,
                 "Renew subscription",
                 link,
-                frontendBaseUrl,
+                shopOrigin,
                 "Renew " + businessName + " when you can");
         return new RenderedEmail(subject, text, html);
     }
@@ -115,7 +117,8 @@ public class SubscriptionExpiryEmailRenderer {
             String amountLabel,
             Instant expiredAt,
             Instant graceEndsAt,
-            String link
+            String link,
+            String shopOrigin
     ) {
         String tier = plan != null ? plan.getDisplayName() : "Current plan";
         String subject = "Your Kiosk subscription has expired — renew to keep your shop running";
@@ -165,7 +168,7 @@ public class SubscriptionExpiryEmailRenderer {
                 bodyHtml,
                 "Renew subscription",
                 link,
-                frontendBaseUrl,
+                shopOrigin,
                 "Renew " + businessName + " before services are suspended");
         return new RenderedEmail(subject, text, html);
     }
@@ -175,7 +178,8 @@ public class SubscriptionExpiryEmailRenderer {
             int daysAgo,
             int daysRemaining,
             String amountLabel,
-            String link
+            String link,
+            String shopOrigin
     ) {
         String subject = daysRemaining <= 2
                 ? "Last days to renew your Kiosk subscription"
@@ -200,11 +204,11 @@ public class SubscriptionExpiryEmailRenderer {
                 PlatformEmailMarkdown.escape(businessName), daysAgo, Math.max(1, daysRemaining),
                 PlatformCampaignEmailRenderer.FONT_SANS, PlatformCampaignEmailRenderer.TEXT, amountLabel);
 
-        String html = cardRenderer.renderHtml(subject, bodyHtml, "Renew subscription", link, frontendBaseUrl, subject);
+        String html = cardRenderer.renderHtml(subject, bodyHtml, "Renew subscription", link, shopOrigin, subject);
         return new RenderedEmail(subject, text, html);
     }
 
-    private RenderedEmail finalNotice(String businessName, String amountLabel, String link) {
+    private RenderedEmail finalNotice(String businessName, String amountLabel, String link, String shopOrigin) {
         String subject = "Final notice: your Kiosk services will be suspended today";
         String text = """
                 Final notice: Your Kiosk subscription has been expired for 15 days. Your services will be suspended today unless you renew.
@@ -226,7 +230,7 @@ public class SubscriptionExpiryEmailRenderer {
                 PlatformEmailMarkdown.escape(businessName),
                 PlatformCampaignEmailRenderer.FONT_SANS, PlatformCampaignEmailRenderer.TEXT, amountLabel);
 
-        String html = cardRenderer.renderHtml(subject, bodyHtml, "Renew now", link, frontendBaseUrl, subject);
+        String html = cardRenderer.renderHtml(subject, bodyHtml, "Renew now", link, shopOrigin, subject);
         return new RenderedEmail(subject, text, html);
     }
 
@@ -245,12 +249,25 @@ public class SubscriptionExpiryEmailRenderer {
                 + renewalUrl;
     }
 
-    private String renewUrl() {
-        String base = frontendBaseUrl != null ? frontendBaseUrl.trim() : "";
-        if (base.endsWith("/")) {
-            base = base.substring(0, base.length() - 1);
+    private static String resolveShopOrigin(String shopOrigin, String renewalUrl) {
+        if (shopOrigin != null && !shopOrigin.isBlank()) {
+            String trimmed = shopOrigin.trim();
+            return trimmed.endsWith("/") ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
         }
-        return base.isBlank() ? "https://palmart.co.ke/business/billing/renew" : base + "/business/billing/renew";
+        if (renewalUrl != null && !renewalUrl.isBlank()) {
+            try {
+                java.net.URI uri = java.net.URI.create(renewalUrl.trim());
+                if (uri.getScheme() != null && uri.getHost() != null) {
+                    int port = uri.getPort();
+                    return port > 0
+                            ? uri.getScheme() + "://" + uri.getHost() + ":" + port
+                            : uri.getScheme() + "://" + uri.getHost();
+                }
+            } catch (RuntimeException ignored) {
+                // Fall through.
+            }
+        }
+        return "https://kiosk.ke";
     }
 
     public record RenderedEmail(String subject, String text, String html) {

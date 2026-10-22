@@ -447,7 +447,7 @@ public class SubscriptionBillingService {
                 business.getGraceEndsAt(),
                 daysSinceExpiry,
                 daysRemaining,
-                settings.getRenewalBaseUrl(),
+                settingsService.resolveRenewalUrl(business.getId()),
                 settings.isBillingEnabled(),
                 settings.isAutoBlockEnabled(),
                 accessPolicy.isAccessBlocked(business, now),

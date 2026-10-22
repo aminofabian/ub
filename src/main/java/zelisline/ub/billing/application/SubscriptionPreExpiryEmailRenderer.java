@@ -6,7 +6,6 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import lombok.RequiredArgsConstructor;
@@ -22,18 +21,17 @@ public class SubscriptionPreExpiryEmailRenderer {
     private static final DateTimeFormatter DATE_FMT =
             DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH)
                     .withZone(ZoneId.of("Africa/Nairobi"));
+    private static final String DEFAULT_RENEWAL_PATH = "/business/billing/renew";
 
     private final PlatformCampaignEmailRenderer cardRenderer;
-
-    @Value("${app.public.frontend-base-url:https://palmart.co.ke}")
-    private String frontendBaseUrl;
 
     public RenderedEmail render(
             Business business,
             PlatformSubscriptionPlan plan,
             Instant periodEndAt,
             int daysUntilExpiry,
-            String renewalUrl
+            String renewalUrl,
+            String shopOrigin
     ) {
         String businessName = business.getName() != null ? business.getName().trim() : "Your shop";
         String tier = plan != null ? plan.getDisplayName() : "Current plan";
@@ -41,7 +39,10 @@ public class SubscriptionPreExpiryEmailRenderer {
         BigDecimal monthly = plan != null ? plan.getMonthlyPriceKes() : BigDecimal.ZERO;
         String amountLabel = currency + " " + monthly.stripTrailingZeros().toPlainString();
         String renewsOn = periodEndAt != null ? DATE_FMT.format(periodEndAt) : "soon";
-        String link = renewalUrl != null && !renewalUrl.isBlank() ? renewalUrl.trim() : renewUrl();
+        String shop = resolveShopOrigin(shopOrigin, renewalUrl);
+        String link = renewalUrl != null && !renewalUrl.isBlank()
+                ? renewalUrl.trim()
+                : shop + DEFAULT_RENEWAL_PATH;
 
         String subject = "Your Kiosk subscription renews in " + daysUntilExpiry + " days";
         String text = """
@@ -84,17 +85,30 @@ public class SubscriptionPreExpiryEmailRenderer {
                 bodyHtml,
                 "Renew subscription",
                 link,
-                frontendBaseUrl,
+                shop,
                 "Renew " + businessName + " before " + renewsOn);
         return new RenderedEmail(subject, text, html);
     }
 
-    private String renewUrl() {
-        String base = frontendBaseUrl != null ? frontendBaseUrl.trim() : "";
-        if (base.endsWith("/")) {
-            base = base.substring(0, base.length() - 1);
+    private static String resolveShopOrigin(String shopOrigin, String renewalUrl) {
+        if (shopOrigin != null && !shopOrigin.isBlank()) {
+            String trimmed = shopOrigin.trim();
+            return trimmed.endsWith("/") ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
         }
-        return base.isBlank() ? "https://palmart.co.ke/business/billing/renew" : base + "/business/billing/renew";
+        if (renewalUrl != null && !renewalUrl.isBlank()) {
+            try {
+                java.net.URI uri = java.net.URI.create(renewalUrl.trim());
+                if (uri.getScheme() != null && uri.getHost() != null) {
+                    int port = uri.getPort();
+                    return port > 0
+                            ? uri.getScheme() + "://" + uri.getHost() + ":" + port
+                            : uri.getScheme() + "://" + uri.getHost();
+                }
+            } catch (RuntimeException ignored) {
+                // Fall through.
+            }
+        }
+        return "https://kiosk.ke";
     }
 
     public record RenderedEmail(String subject, String text, String html) {

@@ -69,7 +69,7 @@ public class SubscriptionPreExpiryReminderService {
         int sent = 0;
         for (Business business : due) {
             try {
-                if (sendReminder(business, reminderDays, settings.getRenewalBaseUrl())) {
+                if (sendReminder(business, reminderDays)) {
                     sent++;
                 }
             } catch (RuntimeException ex) {
@@ -79,7 +79,7 @@ public class SubscriptionPreExpiryReminderService {
         return sent;
     }
 
-    private boolean sendReminder(Business business, int daysUntilExpiry, String renewalUrl) {
+    private boolean sendReminder(Business business, int daysUntilExpiry) {
         Instant periodEnd = business.getCurrentPeriodEnd();
         if (periodEnd == null) {
             return false;
@@ -98,7 +98,12 @@ public class SubscriptionPreExpiryReminderService {
             return false;
         }
         SubscriptionPreExpiryEmailRenderer.RenderedEmail mail = emailRenderer.render(
-                business, plan, periodEnd, daysUntilExpiry, renewalUrl);
+                business,
+                plan,
+                periodEnd,
+                daysUntilExpiry,
+                billingSettingsService.resolveRenewalUrl(business.getId()),
+                billingSettingsService.resolveShopOrigin(business.getId()));
         int delivered = 0;
         String lastError = null;
         for (String email : emails) {

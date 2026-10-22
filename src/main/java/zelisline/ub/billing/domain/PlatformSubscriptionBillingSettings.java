@@ -37,8 +37,13 @@ public class PlatformSubscriptionBillingSettings {
     @Column(name = "default_grace_days", nullable = false)
     private int defaultGraceDays = 15;
 
+    /**
+     * Path template (or legacy absolute URL) for renew CTAs. Outbound emails/SMS
+     * rewrite the host to each tenant's slug subdomain via
+     * {@link zelisline.ub.billing.application.SubscriptionBillingSettingsService#resolveRenewalUrl}.
+     */
     @Column(name = "renewal_base_url", nullable = false, length = 512)
-    private String renewalBaseUrl = "https://palmart.co.ke/business/billing/renew";
+    private String renewalBaseUrl = "https://kiosk.ke/business/billing/renew";
 
     @Column(name = "notification_cadence_days", nullable = false, length = 128)
     private String notificationCadenceDays = "0,2,5,8,11,13,14,15";

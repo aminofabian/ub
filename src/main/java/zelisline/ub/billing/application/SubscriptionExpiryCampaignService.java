@@ -22,7 +22,6 @@ import zelisline.ub.audit.application.AuditEventPublisher;
 import zelisline.ub.audit.domain.AuditEventActorType;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
-import zelisline.ub.billing.domain.PlatformSubscriptionBillingSettings;
 import zelisline.ub.billing.domain.PlatformSubscriptionPlan;
 import zelisline.ub.billing.domain.SubscriptionExpiryCampaign;
 import zelisline.ub.billing.domain.SubscriptionExpiryCampaignDelivery;
@@ -169,10 +168,9 @@ public class SubscriptionExpiryCampaignService {
                     SubscriptionExpiryDeliveryStatus.SKIPPED, "SMS not configured");
             return false;
         }
-        PlatformSubscriptionBillingSettings settings = billingSettingsService.loadSingleton();
         PlatformSubscriptionPlan plan = billingSettingsService.planOrNull(business.getSubscriptionTier());
         int graceDays = billingSettingsService.resolveGraceDays(plan);
-        String renewalUrl = settings.getRenewalBaseUrl();
+        String renewalUrl = billingSettingsService.resolveRenewalUrl(business.getId());
         String businessName = business.getName() != null ? business.getName() : "Your shop";
         String body;
         if (!billingSettingsService.isAutoBlockEnabled()) {
@@ -217,7 +215,6 @@ public class SubscriptionExpiryCampaignService {
                     SubscriptionExpiryDeliveryStatus.SKIPPED, "no recipients");
             return false;
         }
-        PlatformSubscriptionBillingSettings settings = billingSettingsService.loadSingleton();
         PlatformSubscriptionPlan plan = billingSettingsService.planOrNull(business.getSubscriptionTier());
         int graceDays = billingSettingsService.resolveGraceDays(plan);
         SubscriptionExpiryEmailRenderer.RenderedEmail mail = emailRenderer.render(
@@ -227,7 +224,8 @@ public class SubscriptionExpiryCampaignService {
                 graceDays,
                 campaign.getGraceStartedAt(),
                 business.getGraceEndsAt(),
-                settings.getRenewalBaseUrl(),
+                billingSettingsService.resolveRenewalUrl(business.getId()),
+                billingSettingsService.resolveShopOrigin(business.getId()),
                 billingSettingsService.isAutoBlockEnabled());
         int sent = 0;
         String lastError = null;

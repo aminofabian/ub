@@ -1,5 +1,6 @@
 package zelisline.ub.billing.application;
 
+import java.net.URI;
 import java.time.Instant;
 import java.util.List;
 
@@ -14,13 +15,17 @@ import zelisline.ub.billing.domain.PlatformSubscriptionBillingSettings;
 import zelisline.ub.billing.domain.PlatformSubscriptionPlan;
 import zelisline.ub.billing.repository.PlatformSubscriptionBillingSettingsRepository;
 import zelisline.ub.billing.repository.PlatformSubscriptionPlanRepository;
+import zelisline.ub.identity.application.FrontendAuthLinkBuilder;
 
 @Service
 @RequiredArgsConstructor
 public class SubscriptionBillingSettingsService {
 
+    private static final String DEFAULT_RENEWAL_PATH = "/business/billing/renew";
+
     private final PlatformSubscriptionBillingSettingsRepository settingsRepository;
     private final PlatformSubscriptionPlanRepository planRepository;
+    private final FrontendAuthLinkBuilder frontendAuthLinkBuilder;
 
     @Transactional
     public PlatformSubscriptionBillingSettings loadSingleton() {
@@ -186,6 +191,62 @@ public class SubscriptionBillingSettingsService {
             return plan.getGraceDays();
         }
         return defaultGraceDays();
+    }
+
+    /**
+     * Shop origin for a tenant ({@code https://{slug}.kiosk.ke}). Used as the
+     * email chrome "open shop" link so campaigns never point every tenant at
+     * a single hardcoded host.
+     */
+    @Transactional(readOnly = true)
+    public String resolveShopOrigin(String businessId) {
+        return frontendAuthLinkBuilder.tenantOrigin(businessId);
+    }
+
+    /**
+     * Per-tenant renew link. Host is the shop's slug subdomain; path comes from
+     * platform {@code renewalBaseUrl} (default {@code /business/billing/renew}).
+     * The stored absolute URL is only a path template / last-resort fallback —
+     * never send every tenant to {@code palmart.co.ke}.
+     */
+    @Transactional(readOnly = true)
+    public String resolveRenewalUrl(String businessId) {
+        String origin = resolveShopOrigin(businessId);
+        String path = renewalPath(loadSingleton().getRenewalBaseUrl());
+        if (origin == null || origin.isBlank()) {
+            String fallback = loadSingleton().getRenewalBaseUrl();
+            return fallback == null || fallback.isBlank()
+                    ? "https://kiosk.ke" + DEFAULT_RENEWAL_PATH
+                    : fallback.trim();
+        }
+        return trimTrailingSlash(origin.trim()) + path;
+    }
+
+    private static String renewalPath(String configured) {
+        if (configured == null || configured.isBlank()) {
+            return DEFAULT_RENEWAL_PATH;
+        }
+        String trimmed = configured.trim();
+        try {
+            URI uri = URI.create(trimmed);
+            if (uri.getHost() != null) {
+                String path = uri.getPath();
+                if (path == null || path.isBlank() || "/".equals(path)) {
+                    return DEFAULT_RENEWAL_PATH;
+                }
+                return path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
+            }
+        } catch (RuntimeException ignored) {
+            // Treat as a relative path below.
+        }
+        return trimmed.startsWith("/") ? trimTrailingSlash(trimmed) : "/" + trimTrailingSlash(trimmed);
+    }
+
+    private static String trimTrailingSlash(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
     }
 
     private SubscriptionBillingDtos.SettingsResponse toSettingsResponse(PlatformSubscriptionBillingSettings row) {

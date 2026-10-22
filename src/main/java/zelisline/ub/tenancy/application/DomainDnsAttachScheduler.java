@@ -1,5 +1,8 @@
 package zelisline.ub.tenancy.application;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -18,7 +21,8 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
 /**
  * Picks up every custom domain left PENDING after Connect — once public DNS
  * matches the Coolify targets, attaches the hostname and moves it to VERIFYING.
- * Merchants should not need to babysit Check connection for each shop.
+ * Also retries FAILED domains after a cool-off so a fixed Coolify token or a
+ * provider outage heals itself instead of needing a manual "Check connection".
  */
 @Component
 public class DomainDnsAttachScheduler {
@@ -51,20 +55,26 @@ public class DomainDnsAttachScheduler {
         if (!properties.isCoolifyProvider() || !storefrontDomainProvider.configured()) {
             return;
         }
-        List<DomainMapping> pending = domainMappingRepository.findByStatusAndDeletedAtIsNull(DomainStatus.PENDING);
-        if (pending.isEmpty()) {
+        List<DomainMapping> candidates = new ArrayList<>(
+                domainMappingRepository.findByStatusAndDeletedAtIsNull(DomainStatus.PENDING));
+        candidates.addAll(retryableFailedDomains());
+        if (candidates.isEmpty()) {
             return;
         }
         int verifying = 0;
         int activated = 0;
         int waiting = 0;
-        for (DomainMapping domain : pending) {
+        int retried = 0;
+        for (DomainMapping domain : candidates) {
             if (domain.getSource() == DomainSource.PLATFORM_SUBDOMAIN) {
                 continue;
             }
             if (domain.getSource() != DomainSource.MANUAL_CONNECT
                     && domain.getSource() != DomainSource.HOSTAFRICA_PURCHASE) {
                 continue;
+            }
+            if (domain.getStatus() == DomainStatus.FAILED) {
+                retried++;
             }
             try {
                 var result = tenancyService.advanceStorefrontDomain(domain);
@@ -80,13 +90,29 @@ public class DomainDnsAttachScheduler {
                 log.warn("Auto-attach failed for {}: {}", domain.getDomain(), ex.getMessage());
             }
         }
-        if (verifying > 0 || activated > 0) {
+        if (verifying > 0 || activated > 0 || retried > 0) {
             log.info(
-                    "Domain DNS attach: verifying={}, activated={}, still_waiting={}",
+                    "Domain DNS attach: verifying={}, activated={}, still_waiting={}, retried_failed={}",
                     verifying,
                     activated,
-                    waiting
+                    waiting,
+                    retried
             );
         }
+    }
+
+    /**
+     * FAILED domains that are safe to retry: provider errors cool off for
+     * {@code app.domains.failed-retry-minutes}; certificate timeouts are left
+     * alone because they usually mean DNS still points elsewhere.
+     */
+    private List<DomainMapping> retryableFailedDomains() {
+        Instant cutoff = Instant.now().minus(
+                Duration.ofMinutes(Math.max(1, properties.getFailedRetryMinutes())));
+        return domainMappingRepository.findByStatusAndDeletedAtIsNull(DomainStatus.FAILED).stream()
+                .filter(domain -> domain.getUpdatedAt() == null || domain.getUpdatedAt().isBefore(cutoff))
+                .filter(domain -> domain.getLastError() == null
+                        || !domain.getLastError().startsWith("certificate_timeout_after_"))
+                .toList();
     }
 }

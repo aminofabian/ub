@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.api.dto.PlatformDomainSettingsResponse;
 import zelisline.ub.platform.api.dto.UpdatePlatformDomainSettingsRequest;
 import zelisline.ub.platform.application.PlatformDomainSettingsService;
+import zelisline.ub.tenancy.integrations.coolify.CoolifyDiagnosticsService;
 
 @Validated
 @RestController
@@ -21,10 +22,21 @@ import zelisline.ub.platform.application.PlatformDomainSettingsService;
 public class SuperAdminPlatformDomainSettingsController {
 
     private final PlatformDomainSettingsService platformDomainSettingsService;
+    private final CoolifyDiagnosticsService coolifyDiagnosticsService;
 
     @GetMapping
     public PlatformDomainSettingsResponse get() {
         return platformDomainSettingsService.getForSuperAdmin();
+    }
+
+    /**
+     * "Test connection" for the custom-domain host. Read-only: probes
+     * {@code /version} and {@code /applications/{uuid}} and explains a 401/403
+     * instead of showing a bare status code.
+     */
+    @GetMapping("/coolify/diagnose")
+    public CoolifyDiagnosticsService.CoolifyDiagnostic diagnoseCoolify() {
+        return coolifyDiagnosticsService.diagnose();
     }
 
     @PutMapping

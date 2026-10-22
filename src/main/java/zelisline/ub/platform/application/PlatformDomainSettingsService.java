@@ -20,6 +20,7 @@ import zelisline.ub.platform.api.dto.UpdatePlatformDomainSettingsRequest;
 import zelisline.ub.platform.domain.PlatformDomainSettings;
 import zelisline.ub.platform.repository.PlatformDomainSettingsRepository;
 import zelisline.ub.tenancy.integrations.hostafrica.HostAfricaProperties;
+import zelisline.ub.tenancy.integrations.storefront.StorefrontDomainsProperties;
 import zelisline.ub.tenancy.integrations.vercel.VercelProperties;
 
 @Service
@@ -44,6 +45,7 @@ public class PlatformDomainSettingsService {
     private final CredentialEncryptionService encryptionService;
     private final HostAfricaProperties hostAfricaEnv;
     private final VercelProperties vercelEnv;
+    private final StorefrontDomainsProperties storefrontDomainsProperties;
     private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
@@ -331,6 +333,7 @@ public class PlatformDomainSettingsService {
         boolean resellerReady = !isBlank(resellerEmail)
                 && resellerKey
                 && whoisComplete(whois);
+        CoolifySummary coolify = coolifySummary();
         return new PlatformDomainSettingsResponse(
                 secrets.hasHostafricaApiKey,
                 firstNonBlank(
@@ -366,12 +369,48 @@ public class PlatformDomainSettingsService {
                 row.getDomainOrderSyncInitialDelayMs(),
                 hostAfricaEnv.configured(),
                 vercelEnv.configured(),
+                coolify.configured(),
+                coolify.apiUrl(),
+                coolify.appUuid(),
+                coolify.hasToken(),
+                coolify.tokenFingerprint(),
                 secrets.readable,
                 secrets.errorMessage,
                 encryptionService.usesEphemeralKey(),
                 row.getUpdatedAt()
         );
     }
+
+    /**
+     * Read-only view of the Coolify env config. Custom domains are hosted by the
+     * external Coolify instance, so credentials stay in the API environment
+     * (COOLIFY_*) rather than in this row. The Super Admin UI shows them here so
+     * a mis-scoped token or wrong app UUID is visible before a merchant hits it.
+     */
+    private CoolifySummary coolifySummary() {
+        var coolify = storefrontDomainsProperties.getCoolify();
+        String apiUrl = trimToNull(coolify.getApiUrl());
+        String appUuid = trimToNull(coolify.getAppUuid());
+        String token = coolify.getApiToken() == null ? "" : coolify.getApiToken().trim();
+        String fingerprint = token.isEmpty()
+                ? null
+                : "…" + token.substring(Math.max(0, token.length() - 4))
+                        + " (" + token.length() + " chars)";
+        return new CoolifySummary(
+                apiUrl != null && appUuid != null && !token.isEmpty(),
+                apiUrl,
+                appUuid,
+                !token.isEmpty(),
+                fingerprint);
+    }
+
+    private record CoolifySummary(
+            boolean configured,
+            String apiUrl,
+            String appUuid,
+            boolean hasToken,
+            String tokenFingerprint
+    ) {}
 
     private PlatformDomainSettings loadSingleton() {
         return repository

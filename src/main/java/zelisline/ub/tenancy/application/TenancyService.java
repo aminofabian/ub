@@ -299,57 +299,86 @@ public class TenancyService {
         if (domain.getSource() == DomainSource.PLATFORM_SUBDOMAIN) {
             return toResponse(domain);
         }
-        domain.setStatus(DomainStatus.VERIFYING);
-        domain.setLastError(null);
-
-        if (!storefrontDomainProvider.configured()) {
-            domain.setStatus(DomainStatus.PENDING);
-            domain.setLastError(storefrontDomainProvider.id() + "_not_configured");
-            writeDnsInstructions(domain, storefrontDomainProvider.recommendedDnsInstructions(domain.getDomain()));
-            domainMappingRepository.save(domain);
+        AdvanceResult advanced = advanceStorefrontDomain(domain);
+        DomainMapping saved = domainMappingRepository.save(domain);
+        if (advanced == AdvanceResult.PROVIDER_UNAVAILABLE) {
             throw new ResponseStatusException(
                 HttpStatus.SERVICE_UNAVAILABLE,
                 "Domain verification requires " + storefrontDomainProvider.id() + " configuration"
             );
         }
+        if (advanced == AdvanceResult.PROVIDER_FAILED) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "Domain verification failed: " + domain.getLastError()
+            );
+        }
+        return toResponse(saved);
+    }
+
+    /**
+     * DNS check → Coolify/Vercel attach for a pending/failed custom domain.
+     * Used by Check connection and by {@link DomainDnsAttachScheduler}.
+     */
+    @Transactional
+    public AdvanceResult advanceStorefrontDomain(DomainMapping domain) {
+        if (domain.getSource() == DomainSource.PLATFORM_SUBDOMAIN) {
+            return AdvanceResult.SKIPPED;
+        }
+        domain.setLastError(null);
+        writeDnsInstructions(
+                domain,
+                storefrontDomainProvider.recommendedDnsInstructions(domain.getDomain()));
+
+        if (!storefrontDomainProvider.configured()) {
+            domain.setStatus(DomainStatus.PENDING);
+            domain.setActive(false);
+            domain.setLastError(storefrontDomainProvider.id() + "_not_configured");
+            return AdvanceResult.PROVIDER_UNAVAILABLE;
+        }
 
         var result = storefrontDomainProvider.check(domain.getDomain());
         if (result.skipped()) {
             domain.setStatus(DomainStatus.PENDING);
+            domain.setActive(false);
             domain.setLastError(result.error());
-            domainMappingRepository.save(domain);
-            throw new ResponseStatusException(
-                HttpStatus.SERVICE_UNAVAILABLE,
-                "Domain verification unavailable"
-            );
+            return AdvanceResult.PROVIDER_UNAVAILABLE;
         }
         if (result.outcome() == StorefrontDomainProvider.Outcome.FAILED || !result.ok()) {
             domain.setStatus(DomainStatus.FAILED);
+            domain.setActive(false);
             domain.setLastError(result.error());
             writeDnsInstructions(domain, result.dnsInstructions());
-            domainMappingRepository.save(domain);
-            throw new ResponseStatusException(
-                HttpStatus.BAD_GATEWAY,
-                "Domain verification failed: " + result.error()
-            );
+            return AdvanceResult.PROVIDER_FAILED;
         }
 
         writeDnsInstructions(domain, result.dnsInstructions());
         if (result.outcome() == StorefrontDomainProvider.Outcome.VERIFIED || result.verified()) {
             activateVerified(domain);
-        } else if (result.outcome() == StorefrontDomainProvider.Outcome.AWAITING_CERTIFICATE) {
+            return AdvanceResult.ACTIVATED;
+        }
+        if (result.outcome() == StorefrontDomainProvider.Outcome.AWAITING_CERTIFICATE) {
             domain.setStatus(DomainStatus.VERIFYING);
             domain.setActive(false);
             domain.setLastError(null);
-        } else {
-            // NOT_READY — DNS not pointing here yet.
-            domain.setStatus(DomainStatus.PENDING);
-            domain.setActive(false);
-            if (result.error() != null && !result.error().isBlank()) {
-                domain.setLastError(result.error());
-            }
+            return AdvanceResult.VERIFYING;
         }
-        return toResponse(domainMappingRepository.save(domain));
+        // NOT_READY — DNS not pointing here yet (or Coolify API not ready).
+        domain.setStatus(DomainStatus.PENDING);
+        domain.setActive(false);
+        if (result.error() != null && !result.error().isBlank()) {
+            domain.setLastError(result.error());
+        }
+        return AdvanceResult.WAITING_DNS;
+    }
+
+    public enum AdvanceResult {
+        SKIPPED,
+        WAITING_DNS,
+        VERIFYING,
+        ACTIVATED,
+        PROVIDER_UNAVAILABLE,
+        PROVIDER_FAILED
     }
 
     @Transactional

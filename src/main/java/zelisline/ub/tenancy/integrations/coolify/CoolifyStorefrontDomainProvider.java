@@ -77,7 +77,8 @@ public class CoolifyStorefrontDomainProvider implements StorefrontDomainProvider
             return Result.notReady(withHint, dnsCheck.message());
         }
         if (!configured()) {
-            return Result.failed("coolify_not_configured", null, dns);
+            // Stay PENDING so the attach scheduler can retry once COOLIFY_* is set.
+            return Result.notReady(dns, "coolify_not_configured");
         }
         var mutation = coolifyApiClient.ensureHttpsHosts(hostname);
         if (!mutation.ok()) {

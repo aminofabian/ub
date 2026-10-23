@@ -24,23 +24,25 @@ import zelisline.ub.billing.repository.SubscriptionRenewalOrderRepository;
 import zelisline.ub.identity.api.dto.AuthBillingGateResponse;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
+import zelisline.ub.payments.application.PlatformStkRailService;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
-import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.StkPushContextType;
-import zelisline.ub.platform.application.PlatformDomainSettingsService;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
- * M-Pesa STK subscription renewal — mirrors {@link zelisline.ub.messaging.application.SmsCreditPurchaseService}.
+ * M-Pesa STK subscription renewal (SUBSCRIPTION_BILLING_SCOPE.md §12).
+ *
+ * <p>The STK prompt runs on whichever platform M-Pesa rail Super Admin has live
+ * ({@link PlatformStkRailService}) — the same Safaricom Daraja Express rail tenant
+ * payments collect on, with the Palmart KopoKopo till as the fallback. This service
+ * never picks a provider itself.
  */
 @Service
 @RequiredArgsConstructor
 public class SubscriptionRenewalService {
 
     private static final Logger log = LoggerFactory.getLogger(SubscriptionRenewalService.class);
-
-    public static final String SUBSCRIPTION_RENEWAL_STK_CONFIG_ID = "platform-subscription-renewal-stk";
 
     private final SubscriptionRenewalOrderRepository orderRepository;
     private final SubscriptionBillingSettingsService settingsService;
@@ -51,7 +53,7 @@ public class SubscriptionRenewalService {
     private final BusinessRepository businessRepository;
     private final PaymentGatewayStkService paymentGatewayStkService;
     private final GatewayStkPushService gatewayStkPushService;
-    private final PlatformDomainSettingsService platformDomainSettingsService;
+    private final PlatformStkRailService platformStkRailService;
 
     @Transactional(readOnly = true)
     public SubscriptionBillingDtos.RenewalQuoteResponse renewalQuote(
@@ -105,11 +107,9 @@ public class SubscriptionRenewalService {
         if (quote.amountKes().signum() <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Renewal amount must be positive");
         }
-        if (!platformDomainSettingsService.palmartStkConfigured()) {
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "Platform M-Pesa is not configured. Ask Super Admin to add Palmart STK under Platform → Domains.");
-        }
+        // Collect on the same platform M-Pesa rail tenants pay into (Custody rail →
+        // Daraja Express), never a provider hard-coded here.
+        PlatformStkRailService.Rail rail = platformStkRailService.require("package renewal");
 
         SubscriptionRenewalOrder order = new SubscriptionRenewalOrder();
         order.setBusinessId(businessId);
@@ -127,10 +127,10 @@ public class SubscriptionRenewalService {
         gatewayStkPushService.cancelPendingForPhone(businessId, phone, "Replaced by subscription renewal");
 
         PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiateWithCredentials(
-                GatewayType.KOPOKOPO.name(),
-                SUBSCRIPTION_RENEWAL_STK_CONFIG_ID,
+                rail.gatewayType().name(),
+                rail.configId(),
                 businessId,
-                platformDomainSettingsService.resolvePalmartStkCredentials(),
+                rail.credentialsFor(reference),
                 phone,
                 quote.amountKes(),
                 reference,
@@ -139,8 +139,8 @@ public class SubscriptionRenewalService {
         if (outcome.accepted() && outcome.checkoutRequestId() != null) {
             var push = gatewayStkPushService.registerPush(
                     businessId,
-                    GatewayType.KOPOKOPO,
-                    SUBSCRIPTION_RENEWAL_STK_CONFIG_ID,
+                    rail.gatewayType(),
+                    rail.configId(),
                     outcome.checkoutRequestId(),
                     reference,
                     StkPushContextType.SUBSCRIPTION_RENEWAL,

@@ -22,16 +22,17 @@ import zelisline.ub.platform.application.PlatformDomainSettingsService;
  * The platform M-Pesa rail that collects Palmart's own revenue — package renewals
  * today.
  *
- * <p>It resolves the <strong>Custody rail</strong> Super Admin selects under
- * Payments → Custody rail: the collect-and-settle provider tenant till-only shops
- * already pay into (Safaricom Daraja M-Pesa Express, or the legacy platform
- * KopoKopo till). Platform charges collect on that same account — PartyB stays the
- * platform shortcode, so there is no tenant till and no B2B settlement leg.
+ * <p>Safaricom Daraja (M-Pesa Express) wins whenever the platform Daraja app is
+ * enabled under Payments → Safaricom Daraja. That is the same rail tenant payments
+ * fall back to, and the rail the Custody toggle selects for till-only shops, so a
+ * package renewal prompts a normal M-Pesa STK against the platform shortcode
+ * (PartyB = shortcode) — no tenant till, no B2B settlement leg.
  *
- * <p>If the Custody rail is Off, the Palmart KopoKopo till under Platform → Domains
- * stays as the fallback so a deployment that never enabled Daraja still renews —
- * the same rail tenant SMS-credit purchases use. A charge is never pinned to one
- * provider in code; Super Admin owns which rail is live.
+ * <p>Only when Daraja is off does it drop to the legacy custody KopoKopo rail, then
+ * to the Palmart KopoKopo till under Platform → Domains (the rail tenant SMS-credit
+ * purchases use). A Custody rail explicitly set to Daraja never falls through to
+ * KopoKopo — that fallthrough is what produced {@code invalid_client} OAuth errors
+ * on package payments in production.
  */
 @Service
 @RequiredArgsConstructor
@@ -43,10 +44,11 @@ public class PlatformStkRailService {
     static final int DARAJA_ACCOUNT_REFERENCE_MAX = 12;
 
     static final String NOT_CONFIGURED_MESSAGE =
-            "Platform M-Pesa is not configured. Ask Super Admin to turn on the Custody rail "
-                    + "(Payments → Custody rail → Daraja), or add a Palmart KopoKopo till under "
-                    + "Platform → Domains.";
+            "Platform M-Pesa is not configured. Ask Super Admin to enable Safaricom Daraja "
+                    + "(Payments → Safaricom Daraja) or set the Custody rail to Daraja, or add a "
+                    + "Palmart KopoKopo till under Platform → Domains.";
 
+    private final ObjectProvider<PlatformDarajaSettingsService> darajaSettings;
     private final ObjectProvider<PlatformCustodySettlementService> custodySettlement;
     private final ObjectProvider<PlatformDomainSettingsService> domainSettings;
 
@@ -89,23 +91,38 @@ public class PlatformStkRailService {
     /** The configured platform rail, or empty when Super Admin has set up no rail at all. */
     public Optional<Rail> resolve() {
         PlatformCustodySettlementService custody = custodySettlement.getIfAvailable();
-        if (custody != null) {
-            String provider = custody.activeProvider();
-            boolean providerSelected = PlatformMpesaCustodyProviders.DARAJA.equals(provider)
-                    || PlatformMpesaCustodyProviders.KOPOKOPO.equals(provider);
-            if (providerSelected) {
-                Optional<PlatformCustodySettlementService.CollectRail> collect = custody.resolveCollectRail();
-                if (collect.isPresent()) {
-                    return Optional.of(fromCustodyRail(collect.get()));
-                }
-                // Do not hop rails silently: a selected-but-not-ready custody provider would
-                // otherwise charge through the very KopoKopo till that keeps failing OAuth.
+        String custodyProvider = custody != null
+                ? custody.activeProvider()
+                : PlatformMpesaCustodyProviders.OFF;
+
+        Map<String, String> darajaCreds = darajaCredentials();
+
+        if (PlatformMpesaCustodyProviders.DARAJA.equals(custodyProvider)) {
+            if (darajaCreds.isEmpty()) {
                 throw new ResponseStatusException(
                         HttpStatus.SERVICE_UNAVAILABLE,
-                        "The Custody rail is set to " + provider
-                                + " but its platform credentials are not ready. Ask Super Admin to "
-                                + "finish Payments → Custody rail setup.");
+                        "The Custody rail is set to Daraja but Safaricom Daraja is not ready. Ask "
+                                + "Super Admin to finish Payments → Safaricom Daraja.");
             }
+            return Optional.of(darajaRail(darajaCreds));
+        }
+
+        // Daraja is the platform's own M-Pesa account: use it for platform revenue even
+        // when the Custody toggle is Off, instead of falling back to a KopoKopo till.
+        if (!darajaCreds.isEmpty()) {
+            return Optional.of(darajaRail(darajaCreds));
+        }
+
+        if (PlatformMpesaCustodyProviders.KOPOKOPO.equals(custodyProvider)) {
+            Optional<PlatformCustodySettlementService.CollectRail> collect = custody.resolveCollectRail()
+                    .filter(rail -> rail.gatewayType() == GatewayType.KOPOKOPO);
+            if (collect.isPresent()) {
+                return Optional.of(fromCustodyRail(collect.get()));
+            }
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "The Custody rail is set to KopoKopo but its platform credentials are not ready. "
+                            + "Ask Super Admin to finish Payments → Custody rail setup.");
         }
 
         PlatformDomainSettingsService domains = domainSettings.getIfAvailable();
@@ -128,6 +145,22 @@ public class PlatformStkRailService {
                 () -> new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, NOT_CONFIGURED_MESSAGE));
         log.info("Platform M-Pesa rail for {}: {} ({})", purpose, rail.label(), rail.gatewayType());
         return rail;
+    }
+
+    private Map<String, String> darajaCredentials() {
+        PlatformDarajaSettingsService daraja = darajaSettings.getIfAvailable();
+        if (daraja == null || !daraja.isEnabledAndConfigured()) {
+            return Map.of();
+        }
+        return daraja.credentials().orElse(Map.of());
+    }
+
+    private static Rail darajaRail(Map<String, String> credentials) {
+        return new Rail(
+                GatewayType.DARAJA,
+                PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID,
+                "Safaricom Daraja (M-Pesa Express)",
+                Map.copyOf(credentials));
     }
 
     private static Rail fromCustodyRail(PlatformCustodySettlementService.CollectRail collect) {

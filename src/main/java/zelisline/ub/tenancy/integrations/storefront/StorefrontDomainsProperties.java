@@ -32,12 +32,6 @@ public class StorefrontDomainsProperties {
     /** Minutes a Coolify domain may stay VERIFYING before FAILED. */
     private int verifyTimeoutMinutes = 30;
 
-    /**
-     * Minutes before a FAILED domain (provider error) is retried automatically.
-     * Certificate timeouts are excluded — those need a human look at DNS.
-     */
-    private int failedRetryMinutes = 5;
-
     private final Coolify coolify = new Coolify();
 
     public String getProvider() {
@@ -78,14 +72,6 @@ public class StorefrontDomainsProperties {
 
     public void setVerifyTimeoutMinutes(int verifyTimeoutMinutes) {
         this.verifyTimeoutMinutes = verifyTimeoutMinutes;
-    }
-
-    public int getFailedRetryMinutes() {
-        return failedRetryMinutes;
-    }
-
-    public void setFailedRetryMinutes(int failedRetryMinutes) {
-        this.failedRetryMinutes = failedRetryMinutes;
     }
 
     public Coolify getCoolify() {

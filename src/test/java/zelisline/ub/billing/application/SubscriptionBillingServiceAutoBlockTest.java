@@ -26,6 +26,8 @@ class SubscriptionBillingServiceAutoBlockTest {
     private final SubscriptionAccessPolicy accessPolicy = mock(SubscriptionAccessPolicy.class);
     private final SubscriptionRenewalOrderRepository orderRepository =
             mock(SubscriptionRenewalOrderRepository.class);
+    private final SubscriptionBillingEligibilityService eligibilityService =
+            mock(SubscriptionBillingEligibilityService.class);
     private final UserSessionRepository sessionRepository = mock(UserSessionRepository.class);
     private final AuditEventPublisher auditPublisher = mock(AuditEventPublisher.class);
     private final AuditEventBuilder auditBuilder = mock(AuditEventBuilder.class);
@@ -40,11 +42,28 @@ class SubscriptionBillingServiceAutoBlockTest {
             settings,
             accessPolicy,
             orderRepository,
+            eligibilityService,
             sessionRepository,
             auditPublisher,
             auditBuilder,
             expiryCampaigns,
             planFit);
+
+    @Test
+    void doesNotEnterGraceWhenTheShopHasNotEarnedAPaidPlan() {
+        given(settings.isBillingEnabled()).willReturn(true);
+        given(eligibilityService.isBillable(org.mockito.ArgumentMatchers.any())).willReturn(false);
+
+        Business business = new Business();
+        business.setId("business-1");
+        business.setSubscriptionTier("starter");
+        business.setSubscriptionBillingStatus(SubscriptionBillingStatus.ACTIVE);
+        business.setCurrentPeriodEnd(Instant.parse("2026-10-01T00:00:00Z"));
+
+        assertThat(service.enterGraceIfDue(business, Instant.parse("2026-10-20T00:00:00Z")))
+                .isFalse();
+        verify(businessRepository, never()).save(business);
+    }
 
     @Test
     void doesNotSuspendWhenAutoBlockIsOff() {

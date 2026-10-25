@@ -39,6 +39,7 @@ public class SubscriptionBillingService {
     private final SubscriptionBillingSettingsService settingsService;
     private final SubscriptionAccessPolicy accessPolicy;
     private final SubscriptionRenewalOrderRepository renewalOrderRepository;
+    private final SubscriptionBillingEligibilityService eligibilityService;
     private final UserSessionRepository userSessionRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
@@ -85,6 +86,9 @@ public class SubscriptionBillingService {
             return false;
         }
         if (isFreeTier(business.getSubscriptionTier())) {
+            return false;
+        }
+        if (!eligibilityService.isBillable(business)) {
             return false;
         }
         if (business.getCurrentPeriodEnd() == null || now.isBefore(business.getCurrentPeriodEnd())) {
@@ -134,6 +138,16 @@ public class SubscriptionBillingService {
                 || locked.getSubscriptionBillingStatus() != SubscriptionBillingStatus.GRACE
                 || locked.getGraceEndsAt() == null
                 || now.isBefore(locked.getGraceEndsAt())) {
+            return false;
+        }
+        if (!eligibilityService.isBillable(locked)) {
+            // A shop that never outgrew the free allowance must not be
+            // suspended by a stale grace episode.
+            locked.setSubscriptionBillingStatus(SubscriptionBillingStatus.ACTIVE);
+            clearGraceFields(locked);
+            locked.syncAccessGate();
+            businessRepository.save(locked);
+            cancelExpiryCampaigns(locked.getId());
             return false;
         }
 

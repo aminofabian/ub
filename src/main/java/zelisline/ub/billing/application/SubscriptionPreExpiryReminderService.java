@@ -48,6 +48,7 @@ public class SubscriptionPreExpiryReminderService {
     private final BusinessRepository businessRepository;
     private final SubscriptionPreExpiryNotificationRepository notificationRepository;
     private final SubscriptionPreExpiryEmailRenderer emailRenderer;
+    private final SubscriptionBillingEligibilityService eligibilityService;
     private final NotificationService notificationService;
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -85,6 +86,14 @@ public class SubscriptionPreExpiryReminderService {
             return false;
         }
         if (notificationRepository.existsByBusinessIdAndPeriodEndAt(business.getId(), periodEnd)) {
+            return false;
+        }
+        if (!eligibilityService.isBillable(business)) {
+            recordNotification(
+                    business.getId(),
+                    periodEnd,
+                    SubscriptionPreExpiryNotificationStatus.SKIPPED,
+                    "not billable");
             return false;
         }
         PlatformSubscriptionPlan plan = billingSettingsService.planOrNull(business.getSubscriptionTier());

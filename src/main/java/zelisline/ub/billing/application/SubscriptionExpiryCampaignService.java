@@ -58,6 +58,7 @@ public class SubscriptionExpiryCampaignService {
     private final SubscriptionExpiryCampaignRepository campaignRepository;
     private final SubscriptionExpiryCampaignDeliveryRepository deliveryRepository;
     private final SubscriptionBillingSettingsService billingSettingsService;
+    private final SubscriptionBillingEligibilityService eligibilityService;
     private final BusinessRepository businessRepository;
     private final BusinessOpsAlertSettingsService opsAlertSettingsService;
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
@@ -77,6 +78,10 @@ public class SubscriptionExpiryCampaignService {
         }
         if (campaignRepository.findFirstByBusinessIdAndStatusOrderByCreatedAtDesc(
                 businessId, SubscriptionExpiryCampaignStatus.ACTIVE).isPresent()) {
+            return;
+        }
+        Business business = businessRepository.findByIdAndDeletedAtIsNull(businessId).orElse(null);
+        if (business == null || !eligibilityService.isBillable(business)) {
             return;
         }
         SubscriptionExpiryCampaign campaign = new SubscriptionExpiryCampaign();
@@ -108,6 +113,15 @@ public class SubscriptionExpiryCampaignService {
         int sent = 0;
         for (SubscriptionExpiryCampaign campaign : campaignRepository.findByStatus(
                 SubscriptionExpiryCampaignStatus.ACTIVE)) {
+            Business business = businessRepository
+                    .findByIdAndDeletedAtIsNull(campaign.getBusinessId())
+                    .orElse(null);
+            if (business == null || !eligibilityService.isBillable(business)) {
+                campaign.setStatus(SubscriptionExpiryCampaignStatus.CANCELLED);
+                campaign.setCancelledAt(now);
+                campaignRepository.save(campaign);
+                continue;
+            }
             int graceDay = graceDay(campaign.getGraceStartedAt(), now);
             for (int stepDay : cadence) {
                 if (stepDay > graceDay || stepDay == 0) {
@@ -154,6 +168,11 @@ public class SubscriptionExpiryCampaignService {
         if (business == null) {
             recordDelivery(campaign.getId(), stepDay, SubscriptionExpiryDeliveryChannel.SMS,
                     SubscriptionExpiryDeliveryStatus.SKIPPED, "business missing");
+            return false;
+        }
+        if (!eligibilityService.isBillable(business)) {
+            recordDelivery(campaign.getId(), stepDay, SubscriptionExpiryDeliveryChannel.SMS,
+                    SubscriptionExpiryDeliveryStatus.SKIPPED, "not billable");
             return false;
         }
         String phone = resolveAlertPhone(campaign.getBusinessId());
@@ -207,6 +226,11 @@ public class SubscriptionExpiryCampaignService {
         if (business == null) {
             recordDelivery(campaign.getId(), stepDay, SubscriptionExpiryDeliveryChannel.EMAIL,
                     SubscriptionExpiryDeliveryStatus.SKIPPED, "business missing");
+            return false;
+        }
+        if (!eligibilityService.isBillable(business)) {
+            recordDelivery(campaign.getId(), stepDay, SubscriptionExpiryDeliveryChannel.EMAIL,
+                    SubscriptionExpiryDeliveryStatus.SKIPPED, "not billable");
             return false;
         }
         Set<String> emails = resolveRecipientEmails(campaign.getBusinessId());

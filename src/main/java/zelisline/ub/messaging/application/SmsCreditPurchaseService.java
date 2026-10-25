@@ -21,15 +21,16 @@ import zelisline.ub.messaging.domain.SmsCreditPurchaseStatus;
 import zelisline.ub.messaging.repository.SmsCreditPurchaseRepository;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
+import zelisline.ub.payments.application.PlatformStkRailService;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
-import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.StkPushContextType;
-import zelisline.ub.platform.application.PlatformDomainSettingsService;
 
 /**
- * SMS credit top-ups settled through the platform M-Pesa STK till
- * (SMS_CREDITS_SCOPE.md §13). {@code status} + unique M-Pesa receipt guard the
- * STK callback against double-crediting.
+ * SMS credit top-ups settled through the platform M-Pesa rail
+ * (SMS_CREDITS_SCOPE.md §13) — the same rail package renewals use, so Safaricom
+ * Daraja Express collects the money whenever Super Admin has made it live.
+ * {@code status} + unique M-Pesa receipt guard the STK callback against
+ * double-crediting.
  */
 @Service
 @RequiredArgsConstructor
@@ -37,14 +38,12 @@ public class SmsCreditPurchaseService {
 
     private static final Logger log = LoggerFactory.getLogger(SmsCreditPurchaseService.class);
 
-    public static final String SMS_CREDITS_STK_CONFIG_ID = "platform-sms-credits-stk";
-
     private final SmsCreditPurchaseRepository purchaseRepository;
     private final SmsCreditSettingsService settingsService;
     private final SmsCreditService creditService;
     private final PaymentGatewayStkService paymentGatewayStkService;
     private final GatewayStkPushService gatewayStkPushService;
-    private final PlatformDomainSettingsService platformDomainSettingsService;
+    private final PlatformStkRailService platformStkRailService;
 
     @Transactional
     public SmsCreditPurchaseDtos.SmsCreditPurchaseResponse initiate(
@@ -70,11 +69,9 @@ public class SmsCreditPurchaseService {
         if (phone == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter a valid M-Pesa phone number");
         }
-        if (!platformDomainSettingsService.palmartStkConfigured()) {
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "Platform M-Pesa is not configured. Ask Super Admin to add Palmart STK under Platform → Domains.");
-        }
+        // Collect on the same platform M-Pesa rail package renewals use (Custody rail →
+        // Daraja Express), never a provider hard-coded here.
+        PlatformStkRailService.Rail rail = platformStkRailService.require("SMS credits purchase");
 
         BigDecimal amount = settings.getUnitPriceKes()
                 .multiply(BigDecimal.valueOf(credits))
@@ -95,10 +92,10 @@ public class SmsCreditPurchaseService {
         gatewayStkPushService.cancelPendingForPhone(businessId, phone, "Replaced by SMS credits purchase");
 
         PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiateWithCredentials(
-                GatewayType.KOPOKOPO.name(),
-                SMS_CREDITS_STK_CONFIG_ID,
+                rail.gatewayType().name(),
+                rail.configId(),
                 businessId,
-                platformDomainSettingsService.resolvePalmartStkCredentials(),
+                rail.credentialsFor(reference),
                 phone,
                 amount,
                 reference,
@@ -107,8 +104,8 @@ public class SmsCreditPurchaseService {
         if (outcome.accepted() && outcome.checkoutRequestId() != null) {
             var push = gatewayStkPushService.registerPush(
                     businessId,
-                    GatewayType.KOPOKOPO,
-                    SMS_CREDITS_STK_CONFIG_ID,
+                    rail.gatewayType(),
+                    rail.configId(),
                     outcome.checkoutRequestId(),
                     reference,
                     StkPushContextType.SMS_CREDIT_PURCHASE,

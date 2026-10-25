@@ -20,7 +20,7 @@ import zelisline.ub.platform.application.PlatformDomainSettingsService;
 
 /**
  * The platform M-Pesa rail that collects Palmart's own revenue — package renewals
- * today.
+ * and SMS-credit top-ups.
  *
  * <p>Safaricom Daraja (M-Pesa Express) wins whenever the platform Daraja app is
  * enabled under Payments → Safaricom Daraja. That is the same rail tenant payments
@@ -29,10 +29,11 @@ import zelisline.ub.platform.application.PlatformDomainSettingsService;
  * (PartyB = shortcode) — no tenant till, no B2B settlement leg.
  *
  * <p>Only when Daraja is off does it drop to the legacy custody KopoKopo rail, then
- * to the Palmart KopoKopo till under Platform → Domains (the rail tenant SMS-credit
- * purchases use). A Custody rail explicitly set to Daraja never falls through to
- * KopoKopo — that fallthrough is what produced {@code invalid_client} OAuth errors
- * on package payments in production.
+ * to the Palmart KopoKopo till under Platform → Domains. Both SMS-credit purchases
+ * and package renewals use this rail, so neither can fall through to a
+ * mis-scoped KopoKopo client. A Custody rail explicitly set to Daraja never falls
+ * through to KopoKopo — that fallthrough is what produced {@code invalid_client}
+ * OAuth errors in production.
  */
 @Service
 @RequiredArgsConstructor

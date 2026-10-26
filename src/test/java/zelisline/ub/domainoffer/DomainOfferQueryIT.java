@@ -101,5 +101,11 @@ class DomainOfferQueryIT {
         var campaignView = domainOfferService.getCampaign();
         assertThat(campaignView.status()).isEqualTo("RUNNING");
         assertThat(campaignView.touches()).hasSize(3);
+
+        var preview = domainOfferService.publicOffer(DomainOfferService.PREVIEW_TOKEN);
+        assertThat(preview.preview()).isTrue();
+        assertThat(preview.canPay()).isFalse();
+        assertThat(preview.businessName()).isEqualTo("Powermart");
+        assertThat(preview.suggestedDomain()).isEqualTo("powermart.co.ke");
     }
 }

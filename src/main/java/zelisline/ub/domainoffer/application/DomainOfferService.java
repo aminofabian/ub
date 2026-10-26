@@ -72,6 +72,8 @@ public class DomainOfferService {
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final String REFERENCE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     private static final int MAX_ORDERS = 200;
+    /** The super-admin test email opens this token; it is demo-only and never payable. */
+    public static final String PREVIEW_TOKEN = "preview-token";
 
     private static final List<PublicDomainOfferDtos.ThemeOption> CURATED_THEMES = List.of(
             new PublicDomainOfferDtos.ThemeOption("mart", "Market day", "Produce, price tags, and a busy counter."),
@@ -516,6 +518,9 @@ public class DomainOfferService {
 
     @Transactional(readOnly = true)
     public PublicDomainOfferDtos.PublicDomainOfferResponse publicOffer(String token) {
+        if (isPreviewToken(token)) {
+            return previewOffer();
+        }
         DomainOfferOrder order = requireByToken(token);
         Business business = businessFor(order.getBusinessId());
         String suggested = order.effectiveDomain();
@@ -546,12 +551,11 @@ public class DomainOfferService {
                 order.getPaidAt(),
                 order.getSlaDueAt(),
                 statusMessage(order),
+                false,
                 canPay,
                 unavailable,
                 CURATED_THEMES,
-                Arrays.stream(DomainOfferThemeDirection.values())
-                        .map(d -> new PublicDomainOfferDtos.ThemeOption(d.name(), d.label(), d.hint()))
-                        .toList());
+                directionOptions());
     }
 
     @Transactional
@@ -559,6 +563,11 @@ public class DomainOfferService {
             String token,
             PublicDomainOfferDtos.PublicPayRequest request
     ) {
+        if (isPreviewToken(token)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "This is a preview link. Start the campaign to send a payable link to a shop.");
+        }
         DomainOfferOrder order = requireByToken(token);
         if (order.getStatus() == DomainOfferStatus.AWAITING_PAYMENT
                 && order.getPaymentStartedAt() != null
@@ -676,6 +685,18 @@ public class DomainOfferService {
 
     @Transactional(readOnly = true)
     public PublicDomainOfferDtos.PublicStatusResponse publicStatus(String token) {
+        if (isPreviewToken(token)) {
+            return new PublicDomainOfferDtos.PublicStatusResponse(
+                    DomainOfferStatus.INVITED.name(),
+                    false,
+                    false,
+                    null,
+                    null,
+                    "Preview only. Start the campaign to send a real, payable link.",
+                    null,
+                    null,
+                    "PREVIEW");
+        }
         DomainOfferOrder order = requireByToken(token);
         return new PublicDomainOfferDtos.PublicStatusResponse(
                 order.getStatus().name(),
@@ -690,6 +711,46 @@ public class DomainOfferService {
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
+
+    private static boolean isPreviewToken(String token) {
+        return token != null && PREVIEW_TOKEN.equals(token.trim());
+    }
+
+    private static List<PublicDomainOfferDtos.ThemeOption> directionOptions() {
+        return Arrays.stream(DomainOfferThemeDirection.values())
+                .map(d -> new PublicDomainOfferDtos.ThemeOption(d.name(), d.label(), d.hint()))
+                .toList();
+    }
+
+    private PublicDomainOfferDtos.PublicDomainOfferResponse previewOffer() {
+        return new PublicDomainOfferDtos.PublicDomainOfferResponse(
+                "Powermart",
+                "powermart",
+                "powermart.kiosk.ke",
+                "https://powermart.kiosk.ke",
+                "powermart.co.ke",
+                DomainOfferCampaign.DEFAULT_PRICE_CENTS,
+                "KES",
+                DomainOfferStatus.INVITED.name(),
+                false,
+                false,
+                null,
+                "powermart.co.ke",
+                DomainOfferDomainMode.OWNED.name(),
+                DomainOfferThemeDirection.WARM_MARKET.name(),
+                "mart",
+                "Keep the green from our shop sign.",
+                null,
+                "PREVIEW",
+                null,
+                null,
+                "Preview only. Start the campaign to send a real, payable link.",
+                true,
+                false,
+                "This is a preview link. No M-Pesa prompt is sent.",
+                CURATED_THEMES,
+                directionOptions());
+    }
 
     private boolean applyPaid(DomainOfferOrder order, String checkoutId, String txnId, String phone) {
         if (order.getStatus().isPaidLike()) {

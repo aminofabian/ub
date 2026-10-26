@@ -37,6 +37,7 @@ public final class PublicDomainOfferDtos {
             Instant paidAt,
             Instant slaDueAt,
             String message,
+            boolean preview,
             boolean canPay,
             String paymentUnavailableReason,
             List<ThemeOption> themes,

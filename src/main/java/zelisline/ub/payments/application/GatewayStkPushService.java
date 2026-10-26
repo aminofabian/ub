@@ -125,6 +125,7 @@ public class GatewayStkPushService {
     private final InboundTillPaymentService inboundTillPaymentService;
     private final ObjectProvider<zelisline.ub.messaging.application.SmsCreditPurchaseService> smsCreditPurchaseService;
     private final ObjectProvider<zelisline.ub.billing.application.SubscriptionRenewalService> subscriptionRenewalService;
+    private final ObjectProvider<zelisline.ub.domainoffer.application.DomainOfferService> domainOfferService;
     private final ObjectProvider<zelisline.ub.finance.application.ProfitPocketService> profitPocketService;
     /** Own proxy, so gateway polling can open a transaction only to write the result. */
     private final ObjectProvider<GatewayStkPushService> self;
@@ -741,11 +742,18 @@ public class GatewayStkPushService {
                         GatewayStkPushStatuses.PENDING,
                         StkPushContextType.SUBSCRIPTION_RENEWAL);
             }
+            if (push.isEmpty()) {
+                push = pushRepository.findFirstByMerchantReferenceAndStatusAndContextType(
+                        parsed.reference().trim(),
+                        GatewayStkPushStatuses.PENDING,
+                        StkPushContextType.DOMAIN_THEME_OFFER);
+            }
         }
         if (push.isEmpty()
                 || (push.get().getContextType() != StkPushContextType.DOMAIN_ORDER
                 && push.get().getContextType() != StkPushContextType.SMS_CREDIT_PURCHASE
-                && push.get().getContextType() != StkPushContextType.SUBSCRIPTION_RENEWAL)) {
+                && push.get().getContextType() != StkPushContextType.SUBSCRIPTION_RENEWAL
+                && push.get().getContextType() != StkPushContextType.DOMAIN_THEME_OFFER)) {
             log.warn("KopoKopo platform webhook: no platform STK push checkout={} ref={}",
                     parsed.gatewayCheckoutId(), parsed.reference());
             return true;
@@ -1365,6 +1373,7 @@ public class GatewayStkPushService {
             case KIOSK_PAY_TOPUP -> confirmKioskPayTopUp(push);
             case SMS_CREDIT_PURCHASE -> confirmSmsCreditPurchase(push);
             case SUBSCRIPTION_RENEWAL -> confirmSubscriptionRenewal(push);
+            case DOMAIN_THEME_OFFER -> confirmDomainThemeOffer(push);
             case PROFIT_POCKET -> confirmProfitPocket(push);
             case PROFIT_POCKET_TEST, ONBOARDING_RECEIVE_TEST -> log.info(
                     "Destination test STK confirmed push={} txn={}",
@@ -1409,6 +1418,24 @@ public class GatewayStkPushService {
                 push.getContextId(),
                 push.getGatewayCheckoutId(),
                 push.getGatewayTransactionId());
+    }
+
+    /** Paid the KES 1,000 domain + theme offer — start the 24-hour fulfilment clock. */
+    private void confirmDomainThemeOffer(GatewayStkPush push) {
+        if (push.getContextId() == null) {
+            return;
+        }
+        var offers = domainOfferService.getIfAvailable();
+        if (offers == null) {
+            log.warn("Domain theme offer {} paid but the module is unavailable", push.getContextId());
+            return;
+        }
+        offers.settleFromStk(
+                push.getBusinessId(),
+                push.getContextId(),
+                push.getGatewayCheckoutId(),
+                push.getGatewayTransactionId(),
+                push.getPhoneNumber());
     }
 
     private void confirmSubscriptionRenewal(GatewayStkPush push) {
@@ -1551,6 +1578,16 @@ public class GatewayStkPushService {
                 }
             } catch (Exception e) {
                 log.warn("Failed to mark subscription renewal failed {}", push.getContextId(), e);
+            }
+        }
+        if (push.getContextType() == StkPushContextType.DOMAIN_THEME_OFFER && push.getContextId() != null) {
+            try {
+                var offers = domainOfferService.getIfAvailable();
+                if (offers != null) {
+                    offers.markPaymentFailed(push.getBusinessId(), push.getContextId(), reason);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to mark domain theme offer failed {}", push.getContextId(), e);
             }
         }
         if (push.getContextType() == StkPushContextType.PROFIT_POCKET && push.getContextId() != null) {

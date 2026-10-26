@@ -20,6 +20,8 @@ public enum StkPushContextType {
     SMS_CREDIT_PURCHASE,
     /** Subscription renewal via platform M-Pesa STK. */
     SUBSCRIPTION_RENEWAL,
+    /** KES 1,000 custom-domain + theme offer (platform M-Pesa Express). */
+    DOMAIN_THEME_OFFER,
     /** Onboarding “prove my till/paybill works” KES 1 STK ping. */
     ONBOARDING_RECEIVE_TEST,
     /** Profit Pocket destination test (KES 1 Express to PartyB). */

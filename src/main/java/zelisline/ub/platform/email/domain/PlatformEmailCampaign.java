@@ -33,6 +33,8 @@ public class PlatformEmailCampaign {
     public static final String SEGMENT_HAS_OPEN_TABS = "has_open_tabs";
     /** All shops — CTA opens cashier for weighted / litre selling guide. */
     public static final String SEGMENT_WEIGHTED_GUIDE = "weighted_guide";
+    /** Owners/admins of shops with no custom domain yet (kiosk.ke subdomain only). */
+    public static final String SEGMENT_NO_CUSTOM_DOMAIN = "no_custom_domain";
 
     public static final int MAX_RECIPIENTS = 500;
 

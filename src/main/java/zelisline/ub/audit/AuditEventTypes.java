@@ -204,6 +204,14 @@ public final class AuditEventTypes {
 
     public static final String PLATFORM_EMAIL_CAMPAIGN_SENT = "platform.email_campaign.sent";
 
+    // Custom domain + theme offer
+    public static final String DOMAIN_OFFER_CAMPAIGN_STARTED = "domain_offer.campaign_started";
+    public static final String DOMAIN_OFFER_PAID = "domain_offer.paid";
+    public static final String DOMAIN_OFFER_DELIVERED = "domain_offer.delivered";
+    public static final String DOMAIN_OFFER_CANCELLED = "domain_offer.cancelled";
+    public static final String DOMAIN_OFFER_REFUNDED = "domain_offer.refunded";
+
+
     // SMS credits & quotas
     public static final String SMS_CREDITS_PURCHASED = "sms_credits.purchased";
     public static final String SMS_CREDITS_GRANTED = "sms_credits.granted";

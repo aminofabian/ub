@@ -34,7 +34,11 @@ import zelisline.ub.platform.email.domain.PlatformEmailCampaignRecipient;
 import zelisline.ub.storefront.application.ShopperPhoneEmails;
 import zelisline.ub.tenancy.application.BusinessOnboardingSettingsService;
 import zelisline.ub.tenancy.domain.Business;
+import zelisline.ub.tenancy.domain.DomainMapping;
+import zelisline.ub.tenancy.domain.DomainSource;
+import zelisline.ub.tenancy.domain.DomainStatus;
 import zelisline.ub.tenancy.repository.BusinessRepository;
+import zelisline.ub.tenancy.repository.DomainMappingRepository;
 
 @Service
 @RequiredArgsConstructor
@@ -51,7 +55,8 @@ public class PlatformEmailAudienceService {
             PlatformEmailCampaign.SEGMENT_SELECTED_USERS,
             PlatformEmailCampaign.SEGMENT_NO_PAYMENT_METHOD,
             PlatformEmailCampaign.SEGMENT_HAS_OPEN_TABS,
-            PlatformEmailCampaign.SEGMENT_WEIGHTED_GUIDE);
+            PlatformEmailCampaign.SEGMENT_WEIGHTED_GUIDE,
+            PlatformEmailCampaign.SEGMENT_NO_CUSTOM_DOMAIN);
 
     private final BusinessRepository businessRepository;
     private final UserRepository userRepository;
@@ -60,6 +65,7 @@ public class PlatformEmailAudienceService {
     private final FrontendAuthLinkBuilder frontendAuthLinkBuilder;
     private final PaymentGatewayConfigRepository paymentGatewayConfigRepository;
     private final CreditAccountRepository creditAccountRepository;
+    private final DomainMappingRepository domainMappingRepository;
 
     public String normalizeSegment(String raw) {
         String key = raw == null || raw.isBlank()
@@ -141,6 +147,9 @@ public class PlatformEmailAudienceService {
         if (PlatformEmailCampaign.SEGMENT_WEIGHTED_GUIDE.equals(segmentKey)) {
             return "/sales/quick";
         }
+        if (PlatformEmailCampaign.SEGMENT_NO_CUSTOM_DOMAIN.equals(segmentKey)) {
+            return "/business/domains";
+        }
         return "/business";
     }
 
@@ -157,6 +166,23 @@ public class PlatformEmailAudienceService {
                 .collect(Collectors.toCollection(HashSet::new));
         return loadBusinesses(ids).stream()
                 .filter(b -> b.getId() != null && !configured.contains(b.getId()))
+                .toList();
+    }
+
+    /** Live shops with no non-platform domain mapping (pending or active). */
+    private List<Business> loadBusinessesWithoutCustomDomain(List<String> ids) {
+        Set<String> withCustomDomain = new HashSet<>();
+        for (DomainMapping domain : domainMappingRepository.findByDeletedAtIsNull()) {
+            if (domain.getSource() == DomainSource.PLATFORM_SUBDOMAIN) {
+                continue;
+            }
+            if (domain.getStatus() == DomainStatus.FAILED) {
+                continue;
+            }
+            withCustomDomain.add(domain.getBusinessId());
+        }
+        return loadBusinesses(ids).stream()
+                .filter(b -> b.getId() != null && !withCustomDomain.contains(b.getId()))
                 .toList();
     }
 

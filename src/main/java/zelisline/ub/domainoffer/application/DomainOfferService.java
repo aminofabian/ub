@@ -46,7 +46,6 @@ import zelisline.ub.payments.application.PlatformStkRailService;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
 import zelisline.ub.payments.domain.GatewayStkPushStatuses;
 import zelisline.ub.payments.domain.StkPushContextType;
-import zelisline.ub.tenancy.api.dto.CreateDomainOrderRequest;
 import zelisline.ub.tenancy.api.dto.DomainResponse;
 import zelisline.ub.tenancy.api.dto.DomainOrderResponse;
 import zelisline.ub.tenancy.api.dto.StorefrontTemplateIds;
@@ -329,8 +328,12 @@ public class DomainOfferService {
                     HttpStatus.BAD_REQUEST,
                     "New registrations are limited to .ke names. Connect an existing domain instead.");
         }
-        DomainOrderResponse created = domainPurchaseService.createOrder(
-                order.getBusinessId(), new CreateDomainOrderRequest(domain));
+        DomainOrderResponse created = domainPurchaseService.createIncludedOrder(
+                order.getBusinessId(),
+                domain,
+                order.getPaymentCheckoutId(),
+                order.getMpesaReceipt(),
+                order.getPayerPhone());
         order.setDomainOrderId(created.id());
         order.setRequestedDomain(domain);
         order.setRegistrationStatus(DomainOfferOrder.REGISTRATION_ORDERED);

@@ -25,7 +25,7 @@ class DomainOfferCopyTest {
         List<DomainOfferCopy.Touch> touches = DomainOfferCopy.touches();
 
         assertThat(touches.getFirst().bodyMarkdown()).contains("{{price}}", "{{suggestedDomain}}", "{{currentHost}}");
-        assertThat(touches.getFirst().bodyMarkdown()).contains("KES 2,000/year");
+        assertThat(touches.getFirst().bodyMarkdown()).contains("included in the {{price}}");
         assertThat(touches.get(2).bodyMarkdown()).contains("24 hours");
         assertThat(touches).allSatisfy(touch -> {
             assertThat(touch.subject()).isNotBlank();

@@ -53,7 +53,7 @@ public final class DomainOfferCopy {
                         Your catalog, stock, orders, and M-Pesa setup do not change. The shop simply gets an address people remember and a face that looks like the business they walk into.
 
                         **Already own a domain?** We connect it.
-                        **Need one?** A new .co.ke registration is separate at KES 2,000/year. The {{price}} covers the setup and the theme.
+                        **Need one?** We register it. Both are included in the {{price}} — there is no second payment.
 
                         This is the first of three short notes. If it is not for you, ignore the next two.
                         """,
@@ -84,7 +84,7 @@ public final class DomainOfferCopy {
 
                         The shop keeps its catalog, stock, orders, and M-Pesa. Only the address and the look change.
 
-                        If you already own the name, we connect it. If you need a new one, registration stays separate at KES 2,000/year.
+                        If you already own the name, we connect it. If you need a new one, we register it — included in the {{price}}.
                         """,
                         "See what we would build",
                         "A .co.ke that says your name",
@@ -106,7 +106,7 @@ public final class DomainOfferCopy {
 
                         After you pay, the M-Pesa prompt arrives on your phone. Once it clears, we start: connect the domain, customise the theme, check the storefront on a phone, and send you the new address. The kiosk address keeps working, so nothing breaks while the switch settles.
 
-                        If you need a new .co.ke registered, that is a separate KES 2,000/year and we confirm the name with you before ordering. If you already own it, there is nothing else to buy.
+                        If you need a new .co.ke registered, it is included in the {{price}}. We confirm the name with you before ordering. If you already own it, we simply connect it.
 
                         The link stays open if you want it later. We will not keep emailing about it.
                         """,
@@ -141,7 +141,7 @@ public final class DomainOfferCopy {
     }
 
     private static String registrationLine() {
-        return "If this name needs registering, we will confirm availability and send the separate KES 2,000/year registration step. The theme work starts now either way.";
+        return "If this name needs registering, it is included in the {{price}} — we confirm the name with you before ordering. There is no second payment.";
     }
 
     public static String deliveredSubject() {
@@ -203,26 +203,26 @@ public final class DomainOfferCopy {
     }
 
     public static String registrationSubject() {
-        return "Confirm {{suggestedDomain}} — the KES 2,000 registration step";
+        return "We are registering {{suggestedDomain}} — included in your {{price}}";
     }
 
     public static String registrationBody() {
         return """
                 Hi {{name}},
 
-                We have opened the registration for **{{suggestedDomain}}** for {{businessName}}. The KES 1,000 setup and theme work you already paid for is running separately.
+                We have started the registration for **{{suggestedDomain}}** for {{businessName}}. It is included in the {{price}} you already paid — there is no second payment.
 
-                **The registration is KES 2,000/year**, paid to the registrar. Confirm the name and complete it from Business → Domains. If anything about the name looks wrong, reply before you pay and we will change it.
+                We will confirm the name with you if the registry needs a decision, then connect it and finish the theme. Your 24-hour setup clock is running.
 
-                Your 24-hour setup clock is not paused by this step: the theme work continues while the domain is confirmed.
+                If anything about the name looks wrong, reply now and we will change it.
                 """;
     }
 
     public static String inAppRegistrationTitle() {
-        return "Confirm your .co.ke registration";
+        return "We are registering your .co.ke";
     }
 
     public static String inAppRegistrationBody() {
-        return "{{suggestedDomain}} is ready to register for KES 2,000/year. Your KES 1,000 setup is already running.";
+        return "{{suggestedDomain}} is included in your KES 1,000. No further payment; we will confirm the name before ordering.";
     }
 }

@@ -180,6 +180,32 @@ public class DomainPurchaseService {
         return toResponse(saved);
     }
 
+    /**
+     * Creates a domain order whose registration is already covered by the
+     * KES 1,000 domain + theme offer. No second STK prompt: the domain order is
+     * priced at zero and settled with the offer's M-Pesa receipt, then the
+     * normal reseller registration path runs.
+     */
+    @Transactional
+    public DomainOrderResponse createIncludedOrder(
+            String businessId,
+            String fqdn,
+            String checkoutId,
+            String txnId,
+            String payerPhone
+    ) {
+        DomainOrderResponse created = createOrder(
+                businessId,
+                new CreateDomainOrderRequest(fqdn)
+        );
+        DomainOrder order = requireOrderAny(created.id());
+        order.setPriceCents(0L);
+        order.setCurrency(RETAIL_CURRENCY);
+        order.setLastStkStatus(GatewayStkPushStatuses.SUCCESS);
+        domainOrderRepository.save(order);
+        return markPaid(order.getId(), checkoutId, txnId, payerPhone);
+    }
+
     @Transactional(readOnly = true)
     public List<DomainOrderResponse> listOrders(String businessId) {
         requireBusiness(businessId);

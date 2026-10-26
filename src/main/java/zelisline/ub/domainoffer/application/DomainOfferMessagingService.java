@@ -125,22 +125,22 @@ public class DomainOfferMessagingService {
 
     public void sendRegistrationPrompt(DomainOfferOrder order, Business business) {
         Map<String, String> tags = tags(order, business);
-        String domainsUrl = tags.get("shopUrl") + "/business/domains";
+        String trackUrl = tags.get("payUrl");
         sendEmail(
                 order.getContactEmail(),
                 render(DomainOfferCopy.registrationSubject(), tags),
                 render(DomainOfferCopy.registrationBody(), tags),
-                "Open Business → Domains",
-                domainsUrl,
+                "Track my setup",
+                trackUrl,
                 tags.get("shopUrl"),
-                "The separate KES 2,000 registration step.",
+                "Your domain registration is included in the KES 1,000.",
                 order,
                 "registration");
         sendInApp(
                 order,
                 render(DomainOfferCopy.inAppRegistrationTitle(), tags),
                 render(DomainOfferCopy.inAppRegistrationBody(), tags),
-                domainsUrl,
+                trackUrl,
                 "registration");
     }
 

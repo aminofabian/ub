@@ -28,6 +28,7 @@ import zelisline.ub.sales.api.dto.MarginLeaksResponse;
 import zelisline.ub.sales.api.dto.PaymentLedgerRow;
 import zelisline.ub.sales.api.dto.PaymentMethodBreakdownRow;
 import zelisline.ub.sales.api.dto.RecentSaleRow;
+import zelisline.ub.sales.api.dto.RecentSaleTapeRow;
 import zelisline.ub.sales.api.dto.RevenueByCategoryRow;
 import zelisline.ub.sales.api.dto.SalesByHourResponse;
 import zelisline.ub.sales.api.dto.StaffPerformanceRow;
@@ -140,6 +141,54 @@ public class SalesIntelligenceController {
                 itemTypeId,
                 itemId,
                 rowLimit);
+    }
+
+    /**
+     * The hub tape's feed: the same window and filters as {@link #recentSales},
+     * projected to the nine fields the tape paints.
+     *
+     * <p>Separate path rather than a mode flag on the full board so the compiler
+     * and the generated client keep the two shapes distinct — a tape row has no
+     * customer identity, SKU, unit price or channel to accidentally read.
+     */
+    @GetMapping("/recent-sales/tape")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read')")
+    public List<RecentSaleTapeRow> recentSalesTape(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String branchId,
+            @RequestParam(required = false) String itemTypeId,
+            @RequestParam(required = false) String itemId,
+            @RequestParam(required = false) Integer limit,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        int rowLimit = Math.min(limit == null ? 150 : limit, 150);
+        return salesIntelligenceService.recentSales(
+                        TenantRequestIds.resolveBusinessId(request),
+                        from,
+                        to,
+                        branchId,
+                        itemTypeId,
+                        itemId,
+                        rowLimit)
+                .stream()
+                .map(SalesIntelligenceController::toTapeRow)
+                .toList();
+    }
+
+    private static RecentSaleTapeRow toTapeRow(RecentSaleRow row) {
+        return new RecentSaleTapeRow(
+                row.saleId(),
+                row.soldAt(),
+                row.cashierName(),
+                row.paymentMethod(),
+                row.paymentMethods(),
+                row.itemName(),
+                row.quantity(),
+                row.lineTotal(),
+                row.profit(),
+                row.status());
     }
 
     @GetMapping("/payments-by-method")

@@ -18,6 +18,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import zelisline.ub.notifications.domain.Notification;
 import zelisline.ub.notifications.repository.NotificationRepository;
 import zelisline.ub.notifications.application.NotificationPreferenceService;
+import zelisline.ub.notifications.application.NotificationPresenter;
 import zelisline.ub.onboarding.progress.application.SetupProgressUpdatedEvent;
 
 /**
@@ -36,18 +37,21 @@ public class RealtimeBridge {
     private final ObjectMapper objectMapper;
     private final NotificationPreferenceService preferenceService;
     private final NotificationRepository notificationRepository;
+    private final NotificationPresenter notificationPresenter;
 
     public RealtimeBridge(
             SessionRegistry sessionRegistry,
             RealtimeWebSocketHandler handler,
             NotificationPreferenceService preferenceService,
-            NotificationRepository notificationRepository
+            NotificationRepository notificationRepository,
+            NotificationPresenter notificationPresenter
     ) {
         this.sessionRegistry = sessionRegistry;
         this.handler = handler;
         this.objectMapper = new ObjectMapper();
         this.preferenceService = preferenceService;
         this.notificationRepository = notificationRepository;
+        this.notificationPresenter = notificationPresenter;
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -816,76 +820,15 @@ public class RealtimeBridge {
             }
         }
 
-        String title;
-        String body = "";
-        String actionUrl = "";
-        if (usesPayloadPresentation(n.getType()) && n.getPayloadJson() != null && !n.getPayloadJson().isBlank()) {
-            try {
-                @SuppressWarnings("unchecked")
-                var parsed = objectMapper.readValue(n.getPayloadJson(), Map.class);
-                title = stringOr(parsed.get("title"), defaultTitleForType(n.getType()));
-                body = stringOr(parsed.get("body"), "");
-                actionUrl = stringOr(parsed.get("actionUrl"),
-                        stringOr(parsed.get("paymentUrl"), ""));
-            } catch (Exception e) {
-                title = defaultTitleForType(n.getType());
-            }
-        } else {
-            title = defaultTitleForType(n.getType());
-        }
-        payload.put("title", title);
-        payload.put("body", body);
-        payload.put("actionUrl", actionUrl);
+        // Copy comes from the same resolver the REST bell list uses, so a live
+        // frame and a hydrated row read identically.
+        NotificationPresenter.Presentation copy =
+                notificationPresenter.present(n.getType(), n.getPayloadJson());
+        payload.put("title", copy.title());
+        payload.put("body", copy.body());
+        payload.put("actionUrl", copy.actionUrl());
 
         return payload;
-    }
-
-    private static boolean usesPayloadPresentation(String type) {
-        return switch (type) {
-            case "credit_sale.reminder", "order.received", "order.payment_received",
-                 "order.confirmed", "order.dispatched", "order.delivered",
-                 "storefront.order.placed", "storefront.order.paid", "stock.low",
-                 "sales.daily_digest", "inventory.restock_digest", "account.welcome",
-                 "onboarding.fill_shelf", "onboarding.sizes_right", "onboarding.money_loop",
-                 "onboarding.first_sale", "onboarding.go_live", "onboarding.team_rhythm",
-                 "onboarding.week_checkin", "onboarding.reengage", "onboarding.lookalike",
-                 "onboarding.close_shift", "onboarding.web_order", "till.slip" -> true;
-            default -> false;
-        };
-    }
-
-    private static String defaultTitleForType(String type) {
-        return switch (type) {
-            case "payable.overdue" -> "Overdue supplier payments";
-            case "receivable.overdue" -> "Overdue customer payments";
-            case "shift.variance_detected" -> "Shift cash variance detected";
-            case "stock.low" -> "Low stock alert";
-            case "batch.expiring" -> "Expiring stock alert";
-            case "storefront.order.placed" -> "New web order";
-            case "storefront.order.paid" -> "Web order paid";
-            case "order.received" -> "Order received";
-            case "order.payment_received" -> "Payment received";
-            case "order.confirmed" -> "Order confirmed";
-            case "order.dispatched" -> "Ready for pickup";
-            case "order.delivered" -> "Order complete";
-            case "approval.requested" -> "Approval requested";
-            case "approval.resolved" -> "Approval resolved";
-            case "export.completed" -> "Export ready";
-            case "credit_sale.reminder" -> "Credit purchase";
-            case "sales.daily_digest" -> "Daily sales summary";
-            case "inventory.restock_digest" -> "Tonight's list";
-            case "account.welcome" -> "Welcome to Kiosk!";
-            case "till.slip" -> "Print on this till";
-            default -> type;
-        };
-    }
-
-    private static String stringOr(Object raw, String fallback) {
-        if (raw == null) {
-            return fallback;
-        }
-        String s = String.valueOf(raw).trim();
-        return s.isEmpty() ? fallback : s;
     }
 
     private String toJson(Object obj) {

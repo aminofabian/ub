@@ -2,6 +2,7 @@ package zelisline.ub.tenancy.api;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
@@ -19,6 +20,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.tenancy.api.dto.OnboardBusinessRequest;
 import zelisline.ub.tenancy.api.dto.PublicHostResolveResponse;
+import zelisline.ub.tenancy.api.dto.PublicHostUnmappedResponse;
 import zelisline.ub.tenancy.api.dto.PublicSignInDestinationResponse;
 import zelisline.ub.tenancy.api.dto.SelfServeCountryResponse;
 import zelisline.ub.tenancy.application.PublicHostResolverService;
@@ -45,16 +47,25 @@ public class PublicHostResolveController {
     private final PublicSignInDestinationService publicSignInDestinationService;
     private final RegionDefaults regionDefaults;
 
+    /**
+     * An unknown host is {@code 200} {@code {mapped:false}}, not a 404. The
+     * storefront calls this on every render, and a miss (the platform apex,
+     * an unused subdomain) is a normal answer. 404s here flooded the platform
+     * log and were not cached by Next.js, so each page view probed again.
+     */
     @GetMapping("/resolve")
-    public ResponseEntity<PublicHostResolveResponse> resolve(@RequestParam("host") String host) {
-        PublicHostResolveResponse body = publicHostResolverService.resolveByHost(host)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND,
-                        "No active tenant mapping for host"));
+    public ResponseEntity<Object> resolve(@RequestParam("host") String host) {
+        Optional<PublicHostResolveResponse> resolved = publicHostResolverService.resolveByHost(host);
+        if (resolved.isEmpty()) {
+            return ResponseEntity.ok()
+                    .cacheControl(CacheControl.maxAge(CACHE_TTL).cachePublic())
+                    .header(HttpHeaders.VARY, "host")
+                    .body(PublicHostUnmappedResponse.INSTANCE);
+        }
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.maxAge(CACHE_TTL).cachePublic())
                 .header(HttpHeaders.VARY, "host")
-                .body(body);
+                .body(resolved.get());
     }
 
     /**

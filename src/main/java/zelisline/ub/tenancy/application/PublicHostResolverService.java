@@ -322,7 +322,22 @@ public class PublicHostResolverService {
                 Instant.now(),
                 countryCode,
                 localities.isEmpty() ? List.of() : localities,
-                metaPixel
+                metaPixel,
+                catalogReady(storefront.catalogBranchId(), branches)
         );
+    }
+
+    /** Matches {@code PublicStorefrontContextService} catalog gate: branch set and active. */
+    private static boolean catalogReady(String catalogBranchId, List<Branch> branches) {
+        if (catalogBranchId == null || catalogBranchId.isBlank() || branches == null) {
+            return false;
+        }
+        String id = catalogBranchId.trim();
+        for (Branch branch : branches) {
+            if (branch != null && id.equals(branch.getId()) && branch.isActive()) {
+                return true;
+            }
+        }
+        return false;
     }
 }

@@ -47,6 +47,12 @@ public record PublicHostResolveResponse(
          * Secret-free Meta pixel config (enabled + pixel id only). Always present;
          * {@code enabled} is false when the tenant hasn't configured the integration.
          */
-        MetaPixelPublicConfig metaPixel
+        MetaPixelPublicConfig metaPixel,
+        /**
+         * True when the public catalog can be read (catalog branch set and active).
+         * The storefront skips catalog calls when this is false — those endpoints
+         * answer 404 until a branch is chosen, which is a setup gap, not an outage.
+         */
+        boolean publicCatalogReady
 ) {
 }

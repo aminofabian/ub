@@ -1,5 +1,6 @@
 package zelisline.ub.tenancy.api;
 
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -7,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -20,9 +22,11 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import zelisline.ub.billing.application.SubscriptionAccessPolicy;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.domain.DomainMapping;
 import zelisline.ub.tenancy.domain.TenantStatus;
+import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 import zelisline.ub.tenancy.repository.DomainMappingRepository;
 
@@ -52,9 +56,17 @@ class PublicHostResolveIT {
     @MockitoBean
     private BusinessRepository businessRepository;
 
+    @MockitoBean
+    private BranchRepository branchRepository;
+
+    @MockitoBean
+    private SubscriptionAccessPolicy subscriptionAccessPolicy;
+
     @BeforeEach
     void resetMocks() {
-        Mockito.reset(domainMappingRepository, businessRepository);
+        Mockito.reset(domainMappingRepository, businessRepository, branchRepository, subscriptionAccessPolicy);
+        given(branchRepository.findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(anyString()))
+                .willReturn(List.of());
     }
 
     @Test
@@ -81,7 +93,8 @@ class PublicHostResolveIT {
                 .andExpect(jsonPath("$.featureFlags").isMap())
                 .andExpect(jsonPath("$.resolvedAt").exists())
                 .andExpect(jsonPath("$.countryCode").exists())
-                .andExpect(jsonPath("$.branchLocalities").isArray());
+                .andExpect(jsonPath("$.branchLocalities").isArray())
+                .andExpect(jsonPath("$.publicCatalogReady").value(false));
     }
 
     @Test
@@ -133,6 +146,7 @@ class PublicHostResolveIT {
     void suspendedTenant_resolvesWithStatusField() throws Exception {
         givenActiveMapping(MAPPED_HOST, BUSINESS_ID);
         givenBusiness(BUSINESS_ID, BUSINESS_SLUG, BUSINESS_NAME, TenantStatus.SUSPENDED, "{}");
+        given(subscriptionAccessPolicy.isAccessBlockingEnabled()).willReturn(true);
 
         mockMvc.perform(get("/api/v1/public/host/resolve")
                         .param("host", MAPPED_HOST))
@@ -141,25 +155,30 @@ class PublicHostResolveIT {
     }
 
     @Test
-    void unknownHost_returns404ProblemJson() throws Exception {
+    void unknownHost_returnsMappedFalse() throws Exception {
         given(domainMappingRepository.findByDomainAndActiveTrue("unknown.example.com"))
                 .willReturn(Optional.empty());
 
         mockMvc.perform(get("/api/v1/public/host/resolve")
                         .param("host", "unknown.example.com"))
-                .andExpect(status().isNotFound())
-                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("max-age=60")))
+                .andExpect(jsonPath("$.mapped").value(false))
+                .andExpect(jsonPath("$.tenantId").doesNotExist());
     }
 
     @Test
-    void deletedBusiness_returns404() throws Exception {
+    void deletedBusiness_returnsMappedFalse() throws Exception {
         givenActiveMapping(MAPPED_HOST, BUSINESS_ID);
         given(businessRepository.findByIdAndDeletedAtIsNull(BUSINESS_ID))
                 .willReturn(Optional.empty());
 
         mockMvc.perform(get("/api/v1/public/host/resolve")
                         .param("host", MAPPED_HOST))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.mapped").value(false))
+                .andExpect(jsonPath("$.tenantId").doesNotExist());
     }
 
     private void givenActiveMapping(String host, String businessId) {

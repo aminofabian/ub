@@ -31,10 +31,9 @@ public interface PlatformRequestLogRepository
     List<CategorySummaryRow> summarySince(@Param("since") Instant since);
 
     /**
-     * Tenant lookups that answered 404 — the platform's own frontend probes
-     * {@code /api/v1/public/host/resolve*} for every host it renders, and an
-     * unknown host (e.g. the platform host itself) is an expected miss, not a
-     * failure. Counted separately so real failures stay visible.
+     * Historical tenant lookups that answered 404. A miss is now
+     * {@code 200 {mapped:false}}; rows already stored under the old contract
+     * stay excluded from the failure tally.
      */
     @Query(value = """
             SELECT COUNT(*) FROM platform_request_log

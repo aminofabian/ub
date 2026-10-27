@@ -238,6 +238,15 @@ class DarajaStkPushTest {
     }
 
     @Test
+    void normalizeMsisdn_dropsTrunkZeroKeptAfter254() {
+        assertThat(DarajaPaymentGateway.normalizeMsisdn("+254 0725393621")).isEqualTo("254725393621");
+        assertThat(DarajaPaymentGateway.normalizeMsisdn("2540725393621")).isEqualTo("254725393621");
+        assertThat(DarajaPaymentGateway.normalizeMsisdn("0725393621")).isEqualTo("254725393621");
+        assertThat(DarajaPaymentGateway.normalizeMsisdn("254725393621")).isEqualTo("254725393621");
+        assertThat(DarajaPaymentGateway.normalizeMsisdn("+254 0110123456")).isEqualTo("254110123456");
+    }
+
+    @Test
     void errorMessage_addsMitigationForKnownCodes() {
         assertThat(DarajaPaymentGateway.stkErrorMessage("404.001.03", "Invalid Access Token"))
                 .contains("Invalid Access Token")

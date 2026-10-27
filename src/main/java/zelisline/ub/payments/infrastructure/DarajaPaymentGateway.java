@@ -134,7 +134,7 @@ public class DarajaPaymentGateway implements PaymentGateway {
         }
         if (!isValidMsisdn(phone)) {
             return StkPushResponse.rejected("INVALID_PHONE",
-                    "phoneNumber must be a Safaricom M-Pesa number in the 2547XXXXXXXX format");
+                    "M-Pesa prompts go to Safaricom numbers, like 0712 345 678.");
         }
 
         BigDecimal amount = request.amount().setScale(0, RoundingMode.HALF_UP);
@@ -1024,6 +1024,10 @@ public class DarajaPaymentGateway implements PaymentGateway {
         String phone = raw.replaceAll("[^0-9]", "");
         if (phone.startsWith("0")) {
             phone = "254" + phone.substring(1);
+        }
+        // "+254 07xx…" keeps the trunk 0: 2540725… must become 254725….
+        if (phone.matches("2540[17]\\d{8}")) {
+            phone = "254" + phone.substring(4);
         }
         if (!phone.startsWith("254") && phone.length() == 9) {
             phone = "254" + phone;

@@ -176,14 +176,20 @@ public class TillPrintService {
 
     @Transactional(readOnly = true)
     public List<TillPrintPendingResponse> listPending(String businessId, String userId) {
-        return tillPrintJobRepository.findPending(businessId, userId, cutoff()).stream()
-                .map(job -> new TillPrintPendingResponse(
-                        job.getId(),
-                        job.getKind(),
-                        job.getReferenceNo(),
-                        job.getCreatedAt(),
-                        readSlip(job.getPayloadJson())))
-                .toList();
+        List<TillPrintPendingResponse> pending = new ArrayList<>();
+        for (TillPrintJob job : tillPrintJobRepository.findPending(businessId, userId, cutoff())) {
+            TillPrintSlip slip = readSlipOrNull(job.getPayloadJson(), job.getId());
+            if (slip == null) {
+                continue;
+            }
+            pending.add(new TillPrintPendingResponse(
+                    job.getId(),
+                    job.getKind(),
+                    job.getReferenceNo(),
+                    job.getCreatedAt(),
+                    slip));
+        }
+        return pending;
     }
 
     @Transactional
@@ -286,6 +292,16 @@ public class TillPrintService {
             return objectMapper.readValue(json, TillPrintSlip.class);
         } catch (JsonProcessingException e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Stored print slip is unreadable");
+        }
+    }
+
+    /** One bad payload must not 500 the till's whole queue on every poll. */
+    private TillPrintSlip readSlipOrNull(String json, String jobId) {
+        try {
+            return objectMapper.readValue(json, TillPrintSlip.class);
+        } catch (JsonProcessingException e) {
+            log.warn("Skipping unreadable till print job {}: {}", jobId, e.getMessage());
+            return null;
         }
     }
 

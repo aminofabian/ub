@@ -365,7 +365,7 @@ public class PaystackPaymentGateway implements CheckoutPaymentGateway {
         if (secretKey != null && !secretKey.isBlank()
                 && !secretKey.startsWith("sk_test_") && !secretKey.startsWith("sk_live_")) {
             return ValidationResult.failure("KEY_PREFIX",
-                    "Secret key must start with sk_test_ or sk_live_", null);
+                    "Paystack secret key must start with sk_test_ or sk_live_", null);
         }
         if (publicKey != null && !publicKey.isBlank()
                 && !publicKey.startsWith("pk_test_") && !publicKey.startsWith("pk_live_")) {

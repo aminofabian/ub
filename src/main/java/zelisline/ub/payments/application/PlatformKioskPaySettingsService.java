@@ -37,6 +37,7 @@ public class PlatformKioskPaySettingsService {
 
     @Transactional
     public PlatformKioskPaySettingsResponse update(UpdatePlatformKioskPaySettingsRequest body) {
+        body = withoutMisplacedKopokopoSecrets(body);
         PlatformKioskPaySettings row = loadSingleton();
         if (body.enabled() != null) {
             row.setEnabled(body.enabled());
@@ -183,6 +184,83 @@ public class PlatformKioskPaySettingsService {
         }
         merged.put("environment", row.getKopokopoEnvironment());
         row.setKopokopoCredentialsEnc(encryptionService.encrypt(writeJson(merged)));
+    }
+
+    /**
+     * KopoKopo client secrets and API keys are opaque. They do not use Paystack's
+     * {@code sk_test_} / {@code sk_live_} prefixes. A KopoKopo secret pasted into the
+     * Paystack secret field (or copied there by the browser) must not fail that check.
+     */
+    static UpdatePlatformKioskPaySettingsRequest withoutMisplacedKopokopoSecrets(
+            UpdatePlatformKioskPaySettingsRequest body
+    ) {
+        if (!savingKopokopo(body)) {
+            return body;
+        }
+        String secret = blankToNull(body.paystackSecretKey());
+        String publicKey = blankToNull(body.paystackPublicKey());
+        boolean secretIsPaystack = isPaystackSecret(secret);
+        boolean publicIsPaystack = isPaystackPublic(publicKey);
+        if ((secret == null || secretIsPaystack) && (publicKey == null || publicIsPaystack)) {
+            return body;
+        }
+
+        String clientSecret = blankToNull(body.kopokopoClientSecret());
+        String clientId = blankToNull(body.kopokopoClientId());
+        String paystackSecret = secret;
+        String paystackPublic = publicKey;
+        if (secret != null && !secretIsPaystack) {
+            if (clientSecret == null) {
+                clientSecret = secret;
+            }
+            paystackSecret = null;
+        }
+        if (publicKey != null && !publicIsPaystack) {
+            if (clientId == null) {
+                clientId = publicKey;
+            }
+            paystackPublic = null;
+        }
+        return new UpdatePlatformKioskPaySettingsRequest(
+                body.enabled(),
+                body.feePercent(),
+                body.minWithdrawAmount(),
+                body.dailyWithdrawLimit(),
+                body.currency(),
+                body.paystackEnvironment(),
+                paystackPublic,
+                paystackSecret,
+                body.clearPaystackCredentials(),
+                body.kopokopoEnvironment(),
+                clientId,
+                clientSecret,
+                body.kopokopoApiKey(),
+                body.kopokopoTillNumber(),
+                body.clearKopokopoCredentials(),
+                body.clearSendMoneyFloatConstraint());
+    }
+
+    private static boolean savingKopokopo(UpdatePlatformKioskPaySettingsRequest body) {
+        return blankToNull(body.kopokopoClientId()) != null
+                || blankToNull(body.kopokopoClientSecret()) != null
+                || blankToNull(body.kopokopoApiKey()) != null
+                || blankToNull(body.kopokopoTillNumber()) != null;
+    }
+
+    private static boolean isPaystackSecret(String value) {
+        return value != null && (value.startsWith("sk_test_") || value.startsWith("sk_live_"));
+    }
+
+    private static boolean isPaystackPublic(String value) {
+        return value != null && (value.startsWith("pk_test_") || value.startsWith("pk_live_"));
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private PlatformKioskPaySettingsResponse toResponse(PlatformKioskPaySettings row) {

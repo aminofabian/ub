@@ -253,7 +253,14 @@ public class PlatformDarajaSettingsService {
         if (row.getShortcode() != null && !row.getShortcode().isBlank()) {
             out.put("shortcode", row.getShortcode());
         }
-        applyDestinationToStk(out);
+        // PartyB is applied only for Kiosk's own charges. Leaving it on this map
+        // sent shop credit prompts to the platform destination, and Daraja rejected
+        // them before the phone rang.
+        out.remove("partyB");
+        out.remove("transactionType");
+        if (out.containsKey("platformDestinationType")) {
+            out.remove("accountReference");
+        }
         return out;
     }
 

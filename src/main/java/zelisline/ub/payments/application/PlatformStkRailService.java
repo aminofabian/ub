@@ -159,7 +159,13 @@ public class PlatformStkRailService {
         if (daraja == null || !daraja.isEnabledAndConfigured()) {
             return Map.of();
         }
-        return daraja.credentials().orElse(Map.of());
+        Map<String, String> creds = daraja.credentials().orElse(Map.of());
+        if (creds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> stamped = new LinkedHashMap<>(creds);
+        PlatformDarajaSettingsService.applyDestinationToStk(stamped);
+        return stamped;
     }
 
     private static Rail darajaRail(Map<String, String> credentials) {

@@ -196,10 +196,14 @@ public class MpesaStkIntentService {
 
         PaymentGatewayStkService.StkPushOutcome outcome = initiateRealStkPush(
                 businessId, phone, amt, idempotencyKey, narrative);
-        String checkoutRequestId = outcome.accepted() && outcome.checkoutRequestId() != null
-                ? outcome.checkoutRequestId()
-                : "STUB-" + java.util.UUID.randomUUID();
-        row.setCheckoutRequestId(checkoutRequestId);
+        if (!outcome.accepted() || outcome.checkoutRequestId() == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    outcome.message() != null && !outcome.message().isBlank()
+                            ? outcome.message()
+                            : "Could not send the M-Pesa prompt.");
+        }
+        row.setCheckoutRequestId(outcome.checkoutRequestId());
 
         mpesaStkIntentRepository.save(row);
         registerPush(businessId, row, phone, outcome, contextType);

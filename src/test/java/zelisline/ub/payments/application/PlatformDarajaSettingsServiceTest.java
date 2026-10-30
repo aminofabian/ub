@@ -80,6 +80,7 @@ class PlatformDarajaSettingsServiceTest {
         return new UpdatePlatformDarajaSettingsRequest(
                 null, null, null, null, null, null, null,
                 null, null, null, null,
-                Boolean.TRUE, null);
+                Boolean.TRUE, null,
+                null, null, null, null);
     }
 }

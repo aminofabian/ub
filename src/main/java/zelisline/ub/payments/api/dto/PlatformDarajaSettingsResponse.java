@@ -13,6 +13,11 @@ public record PlatformDarajaSettingsResponse(
         boolean disburseConfigured,
         String initiatorName,
         String b2bShortcode,
+        /** {@code shortcode}, {@code till}, or {@code paybill}. */
+        String platformDestinationType,
+        String platformDestinationTill,
+        String platformDestinationPaybill,
+        String platformDestinationAccount,
         Instant updatedAt
 ) {
 }

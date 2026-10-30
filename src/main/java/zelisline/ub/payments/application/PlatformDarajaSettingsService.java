@@ -150,7 +150,11 @@ public class PlatformDarajaSettingsService {
                 || body.initiatorName() != null
                 || body.initiatorPassword() != null
                 || body.b2bShortcode() != null
-                || body.b2bRequester() != null;
+                || body.b2bRequester() != null
+                || body.platformDestinationType() != null
+                || body.platformDestinationTill() != null
+                || body.platformDestinationPaybill() != null
+                || body.platformDestinationAccount() != null;
 
         if (!anyProvided && !clearDisburse) {
             // Still sync shortcode / env into the encrypted blob when present.
@@ -191,7 +195,55 @@ public class PlatformDarajaSettingsService {
             merged.remove("b2bShortcode");
             merged.remove("b2bRequester");
         }
+        applyPlatformDestination(merged, body);
         row.setCredentialsEnc(encryptionService.encrypt(writeJson(enrich(row, merged))));
+    }
+
+    /**
+     * Platform charges (SMS credits, package renewals) use the same Lipa Na M-Pesa
+     * PartyB rules as a shop till. {@code shortcode} credits the Go Live shortcode.
+     */
+    private static void applyPlatformDestination(
+            Map<String, String> merged, UpdatePlatformDarajaSettingsRequest body) {
+        if (body.platformDestinationType() == null || body.platformDestinationType().isBlank()) {
+            return;
+        }
+        String type = body.platformDestinationType().trim().toLowerCase();
+        if ("till".equals(type) || "buygoods".equals(type) || "buy_goods".equals(type)) {
+            String till = digitsOnly(body.platformDestinationTill());
+            if (till == null || till.length() < 5 || till.length() > 7) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Platform destination till must be 5–7 digits");
+            }
+            merged.put("platformDestinationType", "till");
+            merged.put("platformDestinationTill", till);
+            merged.remove("platformDestinationPaybill");
+            merged.remove("platformDestinationAccount");
+            return;
+        }
+        if ("paybill".equals(type)) {
+            String paybill = digitsOnly(body.platformDestinationPaybill());
+            String account = body.platformDestinationAccount() == null
+                    ? ""
+                    : body.platformDestinationAccount().trim();
+            if (paybill == null || paybill.length() < 5 || paybill.length() > 7) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Platform destination paybill must be 5–7 digits");
+            }
+            if (account.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Platform destination paybill needs an account number");
+            }
+            merged.put("platformDestinationType", "paybill");
+            merged.put("platformDestinationPaybill", paybill);
+            merged.put("platformDestinationAccount", account);
+            merged.remove("platformDestinationTill");
+            return;
+        }
+        merged.put("platformDestinationType", "shortcode");
+        merged.remove("platformDestinationTill");
+        merged.remove("platformDestinationPaybill");
+        merged.remove("platformDestinationAccount");
     }
 
     private static Map<String, String> enrich(PlatformDarajaSettings row, Map<String, String> creds) {
@@ -201,7 +253,41 @@ public class PlatformDarajaSettingsService {
         if (row.getShortcode() != null && !row.getShortcode().isBlank()) {
             out.put("shortcode", row.getShortcode());
         }
+        applyDestinationToStk(out);
         return out;
+    }
+
+    /**
+     * Same PartyB split shops use: till → Buy Goods, paybill → Pay Bill + account.
+     * Absent destination keeps PartyB on the Go Live shortcode.
+     */
+    static void applyDestinationToStk(Map<String, String> creds) {
+        String type = creds.get("platformDestinationType");
+        if (type == null || type.isBlank() || "shortcode".equalsIgnoreCase(type)) {
+            creds.remove("partyB");
+            creds.remove("transactionType");
+            return;
+        }
+        if ("till".equalsIgnoreCase(type)) {
+            String till = creds.get("platformDestinationTill");
+            if (till == null || till.isBlank()) {
+                return;
+            }
+            creds.put("partyB", till);
+            creds.put("transactionType", "CustomerBuyGoodsOnline");
+            creds.remove("accountReference");
+            return;
+        }
+        if ("paybill".equalsIgnoreCase(type)) {
+            String paybill = creds.get("platformDestinationPaybill");
+            String account = creds.get("platformDestinationAccount");
+            if (paybill == null || paybill.isBlank() || account == null || account.isBlank()) {
+                return;
+            }
+            creds.put("partyB", paybill);
+            creds.put("transactionType", "CustomerPayBillOnline");
+            creds.put("accountReference", account.replaceAll("\\s+", ""));
+        }
     }
 
     private void requireConfigured(PlatformDarajaSettings row) {
@@ -238,6 +324,10 @@ public class PlatformDarajaSettingsService {
                 isPresent(creds, "initiatorName") && isPresent(creds, "initiatorPassword"),
                 creds.get("initiatorName"),
                 isPresent(creds, "b2bShortcode") ? creds.get("b2bShortcode") : row.getShortcode(),
+                blankToShortcode(creds.get("platformDestinationType")),
+                blankToNull(creds.get("platformDestinationTill")),
+                blankToNull(creds.get("platformDestinationPaybill")),
+                blankToNull(creds.get("platformDestinationAccount")),
                 row.getUpdatedAt() != null ? row.getUpdatedAt() : Instant.now());
     }
 
@@ -287,6 +377,17 @@ public class PlatformDarajaSettingsService {
             return "till";
         }
         return "paybill";
+    }
+
+    private static String blankToShortcode(String type) {
+        if (type == null || type.isBlank()) {
+            return "shortcode";
+        }
+        return type;
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     private static String digitsOnly(String raw) {

@@ -80,6 +80,12 @@ public class PlatformStkRailService {
             if (!isDaraja()) {
                 return credentials;
             }
+            // Paybill AccountReference is the destination account, not the purchase id.
+            if ("CustomerPayBillOnline".equals(credentials.get("transactionType"))
+                    && credentials.get("accountReference") != null
+                    && !credentials.get("accountReference").isBlank()) {
+                return credentials;
+            }
             Map<String, String> out = new LinkedHashMap<>(credentials);
             String accountReference = darajaAccountReference(reference);
             if (accountReference != null) {

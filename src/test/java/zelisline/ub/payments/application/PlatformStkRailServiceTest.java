@@ -144,6 +144,49 @@ class PlatformStkRailServiceTest {
     }
 
     @Test
+    void paybillDestinationKeepsTheAccountReference() {
+        Map<String, String> creds = new java.util.LinkedHashMap<>();
+        creds.put("shortcode", "4030000");
+        creds.put("platformDestinationType", "paybill");
+        creds.put("platformDestinationPaybill", "880100");
+        creds.put("platformDestinationAccount", "0140001234567");
+        PlatformDarajaSettingsService.applyDestinationToStk(creds);
+
+        PlatformStkRailService.Rail rail = new PlatformStkRailService.Rail(
+                GatewayType.DARAJA,
+                PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID,
+                "Safaricom Daraja",
+                creds);
+
+        Map<String, String> sent = rail.credentialsFor("smsc-0123456789ab");
+
+        assertThat(sent.get("partyB")).isEqualTo("880100");
+        assertThat(sent.get("transactionType")).isEqualTo("CustomerPayBillOnline");
+        assertThat(sent.get("accountReference")).isEqualTo("0140001234567");
+    }
+
+    @Test
+    void tillDestinationCreditsTheTillNotThePurchaseReference() {
+        Map<String, String> creds = new java.util.LinkedHashMap<>();
+        creds.put("shortcode", "4030000");
+        creds.put("platformDestinationType", "till");
+        creds.put("platformDestinationTill", "3502582");
+        PlatformDarajaSettingsService.applyDestinationToStk(creds);
+
+        PlatformStkRailService.Rail rail = new PlatformStkRailService.Rail(
+                GatewayType.DARAJA,
+                PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID,
+                "Safaricom Daraja",
+                creds);
+
+        Map<String, String> sent = rail.credentialsFor("smsc-0123456789ab-cd12");
+
+        assertThat(sent.get("partyB")).isEqualTo("3502582");
+        assertThat(sent.get("transactionType")).isEqualTo("CustomerBuyGoodsOnline");
+        assertThat(sent.get("accountReference")).isEqualTo("smsc012345678");
+    }
+
+    @Test
     void kopokopoCredentialsArePassedThroughUnchanged() {
         PlatformStkRailService.Rail rail = new PlatformStkRailService.Rail(
                 GatewayType.KOPOKOPO,

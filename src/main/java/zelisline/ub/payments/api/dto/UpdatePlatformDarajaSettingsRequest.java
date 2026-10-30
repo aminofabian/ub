@@ -21,6 +21,14 @@ public record UpdatePlatformDarajaSettingsRequest(
         String b2bShortcode,
         String b2bRequester,
         Boolean clearDisburseCredentials,
-        Boolean clearCredentials
+        Boolean clearCredentials,
+        /**
+         * Where platform charges land: {@code shortcode} (the Go Live shortcode),
+         * {@code till}, or {@code paybill}. Same PartyB rules as a shop till.
+         */
+        String platformDestinationType,
+        String platformDestinationTill,
+        String platformDestinationPaybill,
+        String platformDestinationAccount
 ) {
 }

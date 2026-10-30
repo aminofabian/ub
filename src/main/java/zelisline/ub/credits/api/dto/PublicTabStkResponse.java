@@ -8,6 +8,7 @@ public record PublicTabStkResponse(
         String status,
         BigDecimal amount,
         BigDecimal balanceOwed,
-        BigDecimal walletBalance
+        BigDecimal walletBalance,
+        String message
 ) {
 }

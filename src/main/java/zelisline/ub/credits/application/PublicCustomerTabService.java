@@ -22,6 +22,7 @@ import zelisline.ub.credits.domain.MpesaStkIntent;
 import zelisline.ub.credits.repository.CreditAccountRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.credits.repository.MpesaStkIntentRepository;
+import zelisline.ub.payments.repository.GatewayStkPushRepository;
 import zelisline.ub.platform.pageseal.application.PageSealService;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -38,6 +39,7 @@ public class PublicCustomerTabService {
     private final BusinessRepository businessRepository;
     private final PublicPaymentClaimService publicPaymentClaimService;
     private final PageSealService pageSealService;
+    private final GatewayStkPushRepository gatewayStkPushRepository;
 
     @Transactional(readOnly = true)
     public PublicCustomerTabResponse overview(String businessId, String phoneRaw) {
@@ -113,13 +115,7 @@ public class PublicCustomerTabService {
         BigDecimal wallet = resolved.account().getWalletBalance() != null
                 ? resolved.account().getWalletBalance()
                 : BigDecimal.ZERO;
-        return new PublicTabStkResponse(
-                intent.getId(),
-                intent.getCheckoutRequestId(),
-                intent.getStatus(),
-                intent.getAmount(),
-                owed,
-                wallet);
+        return stkResponse(intent, owed, wallet);
     }
 
     @Transactional
@@ -147,13 +143,7 @@ public class PublicCustomerTabService {
         BigDecimal wallet = resolved.account().getWalletBalance() != null
                 ? resolved.account().getWalletBalance()
                 : BigDecimal.ZERO;
-        return new PublicTabStkResponse(
-                intent.getId(),
-                intent.getCheckoutRequestId(),
-                intent.getStatus(),
-                intent.getAmount(),
-                owed,
-                wallet);
+        return stkResponse(intent, owed, wallet);
     }
 
     @Transactional
@@ -195,13 +185,30 @@ public class PublicCustomerTabService {
             owed = fresh.getBalanceOwed() != null ? fresh.getBalanceOwed() : owed;
             wallet = fresh.getWalletBalance() != null ? fresh.getWalletBalance() : wallet;
         }
+        return stkResponse(intent, owed, wallet);
+    }
+
+    private PublicTabStkResponse stkResponse(MpesaStkIntent intent, BigDecimal owed, BigDecimal wallet) {
         return new PublicTabStkResponse(
                 intent.getId(),
                 intent.getCheckoutRequestId(),
                 intent.getStatus(),
                 intent.getAmount(),
                 owed,
-                wallet);
+                wallet,
+                failureMessage(intent));
+    }
+
+    private String failureMessage(MpesaStkIntent intent) {
+        String checkoutId = intent.getCheckoutRequestId();
+        if (checkoutId == null || checkoutId.isBlank()) {
+            return null;
+        }
+        return gatewayStkPushRepository
+                .findFirstByBusinessIdAndGatewayCheckoutId(intent.getBusinessId(), checkoutId)
+                .map(push -> push.getFailureReason())
+                .filter(reason -> reason != null && !reason.isBlank())
+                .orElse(null);
     }
 
     /** Public tab path key → customer id, or 404. */

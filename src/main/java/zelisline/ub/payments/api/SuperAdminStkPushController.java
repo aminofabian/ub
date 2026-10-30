@@ -28,4 +28,10 @@ public class SuperAdminStkPushController {
     ) {
         return service.listForSuperAdmin(status, limit);
     }
+
+    /** Paid platform charges: SMS credits, packages, domains, domain offer, Kiosk Pay top-ups. */
+    @GetMapping("/platform-paid")
+    public List<GatewayStkPushOpsResponse> platformPaid(@RequestParam(defaultValue = "30") int limit) {
+        return service.listPlatformPaid(limit);
+    }
 }

@@ -16,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.api.dto.GatewayStkPushOpsResponse;
 import zelisline.ub.payments.domain.GatewayStkPush;
 import zelisline.ub.payments.domain.GatewayStkPushStatuses;
+import zelisline.ub.payments.domain.StkPushContextType;
 import zelisline.ub.payments.repository.GatewayStkPushRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
@@ -45,6 +46,31 @@ public class SuperAdminStkPushService {
         }
         Map<String, BusinessLite> businesses = loadBusinesses(businessIds);
 
+        return rows.stream()
+                .map(row -> toResponse(row, businesses.get(row.getBusinessId())))
+                .toList();
+    }
+
+    /** Money paid to Kiosk itself, as opposed to a shop's own collections. */
+    static final List<StkPushContextType> PLATFORM_CHARGE_CONTEXTS = List.of(
+            StkPushContextType.SMS_CREDIT_PURCHASE,
+            StkPushContextType.SUBSCRIPTION_RENEWAL,
+            StkPushContextType.DOMAIN_ORDER,
+            StkPushContextType.DOMAIN_THEME_OFFER,
+            StkPushContextType.KIOSK_PAY_TOPUP);
+
+    @Transactional(readOnly = true)
+    public List<GatewayStkPushOpsResponse> listPlatformPaid(int limit) {
+        int capped = Math.min(Math.max(limit, 1), 100);
+        var pageable = PageRequest.of(0, capped, Sort.by(Sort.Direction.DESC, "confirmedAt", "createdAt"));
+        List<GatewayStkPush> rows = pushRepository.findByStatusAndContextTypeIn(
+                GatewayStkPushStatuses.SUCCESS, PLATFORM_CHARGE_CONTEXTS, pageable);
+
+        Set<String> businessIds = new HashSet<>();
+        for (GatewayStkPush row : rows) {
+            businessIds.add(row.getBusinessId());
+        }
+        Map<String, BusinessLite> businesses = loadBusinesses(businessIds);
         return rows.stream()
                 .map(row -> toResponse(row, businesses.get(row.getBusinessId())))
                 .toList();

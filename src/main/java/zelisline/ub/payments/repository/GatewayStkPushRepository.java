@@ -14,6 +14,12 @@ public interface GatewayStkPushRepository extends JpaRepository<GatewayStkPush, 
 
     List<GatewayStkPush> findByStatus(String status, Pageable pageable);
 
+    List<GatewayStkPush> findByStatusAndContextTypeIn(
+            String status,
+            java.util.Collection<zelisline.ub.payments.domain.StkPushContextType> contextTypes,
+            Pageable pageable
+    );
+
     Optional<GatewayStkPush> findByGatewayTypeAndGatewayCheckoutId(
             GatewayType gatewayType,
             String gatewayCheckoutId

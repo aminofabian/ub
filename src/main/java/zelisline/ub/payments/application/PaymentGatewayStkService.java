@@ -21,6 +21,7 @@ import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.PlatformDarajaSettings;
+import zelisline.ub.payments.domain.PlatformMpesaCustodyProviders;
 import zelisline.ub.payments.domain.PlatformPaymentGateway;
 import zelisline.ub.payments.domain.spi.PaymentGateway;
 import zelisline.ub.payments.domain.spi.StkPushRequest;
@@ -553,9 +554,16 @@ public class PaymentGatewayStkService {
     }
 
     /**
-     * First ACTIVE tenant config for an enabled platform STK gateway, else custody if ready.
+     * Till/paybill-only shops use the platform Daraja app: BusinessShortCode and
+     * passkey are Kiosk's Go Live app, PartyB is the shop till. A BYO Daraja or
+     * KopoKopo client must not take that prompt — its passkey accepts the HTTP
+     * call and then never rings the phone.
      */
     public String findDefaultActiveStkConfigId(String businessId) {
+        String custodyId = darajaCustodyConfigId(businessId);
+        if (custodyId != null) {
+            return custodyId;
+        }
         for (GatewayType type : STK_GATEWAY_PRIORITY) {
             if (!isPlatformEnabled(type)) {
                 continue;
@@ -582,6 +590,22 @@ public class PaymentGatewayStkService {
             }
         }
         return null;
+    }
+
+    /**
+     * Active till/paybill config when the platform collect rail is Daraja.
+     * Null when the shop has not entered a till, or custody is not on Daraja.
+     */
+    private String darajaCustodyConfigId(String businessId) {
+        if (!PlatformMpesaCustodyProviders.DARAJA.equals(custodyProvider())) {
+            return null;
+        }
+        PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
+        if (custody == null || !custody.platformRailsReady()) {
+            return null;
+        }
+        PaymentGatewayConfig cfg = custody.findActiveCustodyConfig(businessId);
+        return cfg != null ? cfg.getId() : null;
     }
 
     private boolean darajaRailIsLive() {

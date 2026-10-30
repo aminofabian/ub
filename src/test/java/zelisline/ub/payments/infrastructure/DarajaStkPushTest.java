@@ -75,7 +75,9 @@ class DarajaStkPushTest {
     @Test
     void accountReference_isAlphanumeric() {
         assertThat(DarajaPaymentGateway.accountReference("555 283-0017")).isEqualTo("5552830017");
-        assertThat(DarajaPaymentGateway.accountReference("#ACC/2026 000111222")).isEqualTo("ACC2026000111222");
+        assertThat(DarajaPaymentGateway.accountReference("#ACC/2026 000111222")).isEqualTo("ACC202600011");
+        assertThat(DarajaPaymentGateway.accountReference(
+                "a3361da6-feb9-4235-a01e-16d725120305")).isEqualTo("a3361da6feb9");
         assertThat(DarajaPaymentGateway.accountReference("  ")).isEqualTo("Kiosk");
         assertThat(DarajaPaymentGateway.accountReference("---")).isEqualTo("Kiosk");
         assertThat(DarajaPaymentGateway.accountReference(null)).isEqualTo("Kiosk");
@@ -139,7 +141,7 @@ class DarajaStkPushTest {
         assertThat(body.get("Amount")).isEqualTo(150);
         assertThat(body.get("PartyA")).isEqualTo("254722000000");
         assertThat(body.get("PhoneNumber")).isEqualTo("254722000000");
-        assertThat(body.get("AccountReference")).isEqualTo("ORDER123456789");
+        assertThat(body.get("AccountReference")).isEqualTo("ORDER1234567");
         assertThat(body.get("TransactionDesc")).isEqualTo("Kiosk sale pa");
     }
 

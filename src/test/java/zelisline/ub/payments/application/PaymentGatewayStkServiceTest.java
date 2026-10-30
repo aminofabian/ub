@@ -28,6 +28,7 @@ import zelisline.ub.payments.domain.DarajaStorefrontPolicy;
 import zelisline.ub.payments.domain.GatewayStatus;
 import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
+import zelisline.ub.payments.domain.PlatformMpesaCustodyProviders;
 import zelisline.ub.payments.domain.PlatformPaymentGateway;
 import zelisline.ub.payments.domain.spi.PaymentGateway;
 import zelisline.ub.payments.domain.spi.StkPushRequest;
@@ -278,6 +279,27 @@ class PaymentGatewayStkServiceTest {
         assertThat(outcome.gatewayType()).isEqualTo(GatewayType.DARAJA.name());
         assertThat(outcome.configId()).isEqualTo("cfg-custody");
         verify(kopokopoGateway, never()).initiateStkPush(any());
+        ArgumentCaptor<StkPushRequest> sent = ArgumentCaptor.forClass(StkPushRequest.class);
+        verify(darajaGateway).initiateStkPush(sent.capture());
+        assertThat(sent.getValue().credentials().get("shortcode")).isEqualTo("4094529");
+        assertThat(sent.getValue().credentials().get("partyB")).isEqualTo("3502582");
+        assertThat(sent.getValue().credentials().get("transactionType")).isEqualTo("CustomerBuyGoodsOnline");
+    }
+
+    @Test
+    void findDefault_darajaCustodyTillBeatsAByoDarajaClient() {
+        when(custodyService.activeProvider()).thenReturn(PlatformMpesaCustodyProviders.DARAJA);
+        when(custodyService.platformRailsReady()).thenReturn(true);
+        when(custodyService.findActiveCustodyConfig(BUSINESS)).thenReturn(custodyConfig());
+        when(platformPaymentGatewayService.listEnabled())
+                .thenReturn(List.of(
+                        platformGateway(GatewayType.KOPOKOPO),
+                        platformGateway(GatewayType.DARAJA)));
+        when(configRepository.findByBusinessIdAndGatewayTypeAndStatus(
+                BUSINESS, GatewayType.DARAJA, GatewayStatus.ACTIVE))
+                .thenReturn(List.of(darajaConfig(DarajaStorefrontPolicy.OFF)));
+
+        assertThat(service.findDefaultActiveStkConfigId(BUSINESS)).isEqualTo("cfg-custody");
     }
 
     @Test

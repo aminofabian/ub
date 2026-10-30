@@ -1,11 +1,14 @@
 package zelisline.ub.payments.application;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -74,6 +77,38 @@ class PlatformDarajaSettingsServiceTest {
         service.update(clearDisburse());
 
         verify(custodySettings, never()).update(any(UpdatePlatformMpesaCustodySettingsRequest.class));
+    }
+
+    @Test
+    void stampPlatformDestination_sendsAShopDarajaPromptToTheSuperAdminPaybill() {
+        Map<String, String> creds = new LinkedHashMap<>();
+        creds.put("consumerKey", "ck");
+        creds.put("passkey", "pk");
+        creds.put("shortcode", "4094529");
+        creds.put("partyB", "3502582");
+        creds.put("transactionType", "CustomerBuyGoodsOnline");
+
+        PlatformDarajaSettingsService.stampPlatformDestination(
+                creds, "paybill", "4094529", "paybill", null, "880100", "KIOSK");
+
+        assertThat(creds)
+                .containsEntry("partyB", "880100")
+                .containsEntry("transactionType", "CustomerPayBillOnline")
+                .containsEntry("accountReference", "KIOSK");
+    }
+
+    @Test
+    void stampPlatformDestination_pointsAKopokopoTillAtTheSuperAdminTill() {
+        Map<String, String> creds = new LinkedHashMap<>();
+        creds.put("clientId", "id");
+        creds.put("clientSecret", "secret");
+        creds.put("tillNumber", "123456");
+
+        PlatformDarajaSettingsService.stampPlatformDestination(
+                creds, "till", "4094529", "paybill", "3502582", null, null);
+
+        assertThat(creds).containsEntry("tillNumber", "3502582");
+        assertThat(creds).doesNotContainKey("partyB");
     }
 
     private static UpdatePlatformDarajaSettingsRequest clearDisburse() {

@@ -86,7 +86,7 @@ class SubscriptionRenewalServiceTest {
 
     @Test
     void packageRenewalUsesTheTenantCreditPaymentRail() {
-        given(paymentGatewayStkService.initiate(
+        given(paymentGatewayStkService.initiateToPlatformDestination(
                 anyString(), anyString(), any(BigDecimal.class), anyString(), anyString()))
                 .willReturn(PaymentGatewayStkService.StkPushOutcome.accepted(
                         "KOPOKOPO", "cfg-tenant",
@@ -104,7 +104,7 @@ class SubscriptionRenewalServiceTest {
         assertThat(response.status()).isEqualTo("PENDING");
         assertThat(response.amountKes()).isEqualByComparingTo("800.00");
 
-        verify(paymentGatewayStkService).initiate(
+        verify(paymentGatewayStkService).initiateToPlatformDestination(
                 eq(BUSINESS_ID),
                 eq("254721530181"),
                 eq(new BigDecimal("800.00")),
@@ -125,7 +125,7 @@ class SubscriptionRenewalServiceTest {
 
     @Test
     void packageRenewalRecordsTheGatewayFailure() {
-        given(paymentGatewayStkService.initiate(
+        given(paymentGatewayStkService.initiateToPlatformDestination(
                 anyString(), anyString(), any(BigDecimal.class), anyString(), anyString()))
                 .willReturn(PaymentGatewayStkService.StkPushOutcome.rejected(
                         null, "NO_GATEWAY", "Online payment is not available right now."));

@@ -69,7 +69,7 @@ class SmsCreditPurchaseServiceTest {
 
     @Test
     void smsCreditsUseTheTenantCreditPaymentRail() {
-        given(paymentGatewayStkService.initiate(
+        given(paymentGatewayStkService.initiateToPlatformDestination(
                 anyString(), anyString(), any(BigDecimal.class), anyString(), anyString()))
                 .willReturn(PaymentGatewayStkService.StkPushOutcome.accepted(
                         "KOPOKOPO", "cfg-tenant",
@@ -86,7 +86,7 @@ class SmsCreditPurchaseServiceTest {
         assertThat(response.status()).isEqualTo(SmsCreditPurchaseStatus.PENDING);
         assertThat(response.amountKes()).isEqualByComparingTo("80.00");
 
-        verify(paymentGatewayStkService).initiate(
+        verify(paymentGatewayStkService).initiateToPlatformDestination(
                 eq(BUSINESS_ID),
                 eq("254721530181"),
                 eq(new BigDecimal("80.00")),
@@ -107,7 +107,7 @@ class SmsCreditPurchaseServiceTest {
 
     @Test
     void smsCreditsRecordTheGatewayFailureInsteadOfAPlatformDarajaLogin() {
-        given(paymentGatewayStkService.initiate(
+        given(paymentGatewayStkService.initiateToPlatformDestination(
                 anyString(), anyString(), any(BigDecimal.class), anyString(), anyString()))
                 .willReturn(PaymentGatewayStkService.StkPushOutcome.rejected(
                         "KOPOKOPO", "DECLINED", "The customer cancelled the request"));

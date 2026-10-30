@@ -26,10 +26,10 @@ import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.StkPushContextType;
 
 /**
- * SMS credit top-ups settled on the same M-Pesa rail a tenant uses for credit
- * payments — the shop's active till, paybill, or KopoKopo method — not the
- * platform Daraja app. {@code status} + unique M-Pesa receipt guard the STK
- * callback against double-crediting.
+ * SMS credit top-ups use the same M-Pesa rail as a tenant credit payment, and the
+ * payee is the platform destination from Payments → Safaricom Daraja.
+ * {@code status} + unique M-Pesa receipt guard the STK callback against
+ * double-crediting.
  */
 @Service
 @RequiredArgsConstructor
@@ -85,8 +85,8 @@ public class SmsCreditPurchaseService {
 
         gatewayStkPushService.cancelPendingForPhone(businessId, phone, "Replaced by SMS credits purchase");
 
-        // Same entry credit-account payments use: the shop's active STK method.
-        PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiate(
+        // Same rail as a credit payment, paid to the super-admin platform destination.
+        PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiateToPlatformDestination(
                 businessId,
                 phone,
                 amount,

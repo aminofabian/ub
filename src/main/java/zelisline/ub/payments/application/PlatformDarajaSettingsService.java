@@ -258,6 +258,27 @@ public class PlatformDarajaSettingsService {
     }
 
     /**
+     * Point a shop STK credential map at the platform destination from
+     * Payments → Safaricom Daraja. The OAuth app stays the one the shop already
+     * uses; only the payee (PartyB or KopoKopo till) changes.
+     */
+    public void stampPlatformDestination(Map<String, String> creds) {
+        if (creds == null || creds.isEmpty()) {
+            return;
+        }
+        PlatformDarajaSettings row = loadSingleton();
+        Map<String, String> stored = decryptMap(row.getCredentialsEnc()).orElse(Map.of());
+        stampPlatformDestination(
+                creds,
+                blankToShortcode(stored.get("platformDestinationType")),
+                row.getShortcode(),
+                row.getShortcodeType(),
+                stored.get("platformDestinationTill"),
+                stored.get("platformDestinationPaybill"),
+                stored.get("platformDestinationAccount"));
+    }
+
+    /**
      * Same PartyB split shops use: till → Buy Goods, paybill → Pay Bill + account.
      * Absent destination keeps PartyB on the Go Live shortcode.
      */
@@ -287,6 +308,60 @@ public class PlatformDarajaSettingsService {
             creds.put("partyB", paybill);
             creds.put("transactionType", "CustomerPayBillOnline");
             creds.put("accountReference", account.replaceAll("\\s+", ""));
+        }
+    }
+
+    static void stampPlatformDestination(
+            Map<String, String> creds,
+            String destinationType,
+            String hoShortcode,
+            String hoShortcodeType,
+            String till,
+            String paybill,
+            String account
+    ) {
+        String type = destinationType == null || destinationType.isBlank()
+                ? "shortcode"
+                : destinationType.trim().toLowerCase();
+        String partyB;
+        String transactionType;
+        String accountRef;
+        if ("till".equals(type) || "buygoods".equals(type) || "buy_goods".equals(type)) {
+            partyB = digitsOnly(till);
+            transactionType = "CustomerBuyGoodsOnline";
+            accountRef = null;
+        } else if ("paybill".equals(type)) {
+            partyB = digitsOnly(paybill);
+            transactionType = "CustomerPayBillOnline";
+            accountRef = account == null ? null : account.replaceAll("\\s+", "");
+            if (accountRef != null && accountRef.isBlank()) {
+                accountRef = null;
+            }
+        } else {
+            partyB = digitsOnly(hoShortcode);
+            boolean tillHo = hoShortcodeType != null && hoShortcodeType.toLowerCase().contains("till");
+            transactionType = tillHo ? "CustomerBuyGoodsOnline" : "CustomerPayBillOnline";
+            accountRef = null;
+        }
+        if (partyB == null || partyB.isBlank()) {
+            return;
+        }
+        boolean kopokopo = isPresent(creds, "clientId")
+                || isPresent(creds, "clientSecret")
+                || isPresent(creds, "apiKey");
+        boolean daraja = isPresent(creds, "consumerKey")
+                || isPresent(creds, "passkey")
+                || isPresent(creds, "shortcode");
+        if (kopokopo && !daraja && !"paybill".equals(type)) {
+            creds.put("tillNumber", partyB);
+            return;
+        }
+        creds.put("partyB", partyB);
+        creds.put("transactionType", transactionType);
+        if (accountRef != null) {
+            creds.put("accountReference", accountRef);
+        } else {
+            creds.remove("accountReference");
         }
     }
 

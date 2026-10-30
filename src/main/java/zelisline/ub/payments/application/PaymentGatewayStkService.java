@@ -62,7 +62,9 @@ public class PaymentGatewayStkService {
             String reference,
             String description
     ) {
-        return initiate(businessId, null, phoneNumber, amount, reference, description, StkAudience.CASHIER);
+        return initiate(
+                businessId, null, phoneNumber, amount, reference, description,
+                StkAudience.CASHIER, false);
     }
 
     public StkPushOutcome initiate(
@@ -74,7 +76,24 @@ public class PaymentGatewayStkService {
             String description
     ) {
         return initiate(
-                businessId, preferredConfigId, phoneNumber, amount, reference, description, StkAudience.CASHIER);
+                businessId, preferredConfigId, phoneNumber, amount, reference, description,
+                StkAudience.CASHIER, false);
+    }
+
+    /**
+     * Same STK rail a credit payment uses for this shop, with the payee replaced by
+     * the platform destination from Payments → Safaricom Daraja.
+     */
+    public StkPushOutcome initiateToPlatformDestination(
+            String businessId,
+            String phoneNumber,
+            BigDecimal amount,
+            String reference,
+            String description
+    ) {
+        return initiate(
+                businessId, null, phoneNumber, amount, reference, description,
+                StkAudience.CASHIER, true);
     }
 
     public StkPushOutcome initiate(
@@ -85,6 +104,21 @@ public class PaymentGatewayStkService {
             String reference,
             String description,
             StkAudience audience
+    ) {
+        return initiate(
+                businessId, preferredConfigId, phoneNumber, amount, reference, description,
+                audience, false);
+    }
+
+    public StkPushOutcome initiate(
+            String businessId,
+            String preferredConfigId,
+            String phoneNumber,
+            BigDecimal amount,
+            String reference,
+            String description,
+            StkAudience audience,
+            boolean platformDestination
     ) {
         StkAudience channel = audience != null ? audience : StkAudience.CASHIER;
         if (preferredConfigId == null || preferredConfigId.isBlank()) {
@@ -109,7 +143,8 @@ public class PaymentGatewayStkService {
                 return storefrontDarajaRejected();
             }
             StkPushOutcome preferred = tryConfig(
-                    businessId, preferredConfigId, phoneNumber, amount, reference, description);
+                    businessId, preferredConfigId, phoneNumber, amount, reference, description,
+                    platformDestination);
             if (preferred != null) {
                 return preferred;
             }
@@ -138,7 +173,7 @@ public class PaymentGatewayStkService {
                     continue;
                 }
                 StkPushOutcome outcome = pushWithConfig(
-                        cfg, phoneNumber, amount, reference, description);
+                        cfg, phoneNumber, amount, reference, description, platformDestination);
                 if (outcome == null) {
                     continue;
                 }
@@ -157,7 +192,7 @@ public class PaymentGatewayStkService {
         }
 
         StkPushOutcome custody = tryCustodyMpesa(
-                businessId, phoneNumber, amount, reference, description, channel);
+                businessId, phoneNumber, amount, reference, description, channel, platformDestination);
         if (custody != null) {
             return custody;
         }
@@ -276,7 +311,8 @@ public class PaymentGatewayStkService {
             BigDecimal amount,
             String reference,
             String description,
-            StkAudience audience
+            StkAudience audience,
+            boolean platformDestination
     ) {
         PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
         if (custody == null || !custody.platformRailsReady()) {
@@ -286,7 +322,7 @@ public class PaymentGatewayStkService {
         if (cfg == null || !allowedOnAudience(cfg, audience)) {
             return null;
         }
-        return pushCustodyConfig(cfg, phoneNumber, amount, reference, description);
+        return pushCustodyConfig(cfg, phoneNumber, amount, reference, description, platformDestination);
     }
 
     private boolean allowedOnAudience(PaymentGatewayConfig cfg, StkAudience audience) {
@@ -328,7 +364,8 @@ public class PaymentGatewayStkService {
             String phoneNumber,
             BigDecimal amount,
             String reference,
-            String description
+            String description,
+            boolean platformDestination
     ) {
         PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
         if (custody == null || !custody.platformRailsReady()) {
@@ -349,11 +386,14 @@ public class PaymentGatewayStkService {
         //   TransactionType   = CustomerBuyGoodsOnline for till /
         //                       CustomerPayBillOnline for paybill
         // Money credits PartyB directly. AccountReference is the prompt tag only.
-        if (rail.gatewayType() == GatewayType.DARAJA) {
+        if (rail.gatewayType() == GatewayType.DARAJA && !platformDestination) {
             StkPushOutcome destError = applyCustodyDirectPartyB(creds, cfg);
             if (destError != null) {
                 return destError;
             }
+        }
+        if (platformDestination) {
+            stampPlatformDestination(creds);
         }
         log.info("STK via platform Daraja Express (CUSTODY_MPESA) business={} config={} partyB={} type={} accountRef={}",
                 cfg.getBusinessId(), cfg.getId(),
@@ -423,6 +463,17 @@ public class PaymentGatewayStkService {
             creds.remove("accountReference");
         }
         return null;
+    }
+
+    private void stampPlatformDestination(Map<String, String> creds) {
+        PlatformDarajaSettingsService daraja = platformDarajaSettingsService.getIfAvailable();
+        if (daraja == null) {
+            return;
+        }
+        daraja.stampPlatformDestination(creds);
+        log.info("Platform charge destination partyB={} till={} type={} accountRef={}",
+                creds.get("partyB"), creds.get("tillNumber"), creds.get("transactionType"),
+                creds.get("accountReference"));
     }
 
     private static String digitsOnly(String value) {
@@ -520,7 +571,8 @@ public class PaymentGatewayStkService {
             String phoneNumber,
             BigDecimal amount,
             String reference,
-            String description
+            String description,
+            boolean platformDestination
     ) {
         PaymentGatewayConfig cfg = configRepository.findById(configId).orElse(null);
         if (cfg == null || !businessId.equals(cfg.getBusinessId())) {
@@ -530,9 +582,10 @@ public class PaymentGatewayStkService {
             return null;
         }
         if (cfg.getGatewayType() == GatewayType.CUSTODY_MPESA) {
-            return pushCustodyConfig(cfg, phoneNumber, amount, reference, description);
+            return pushCustodyConfig(
+                    cfg, phoneNumber, amount, reference, description, platformDestination);
         }
-        return pushWithConfig(cfg, phoneNumber, amount, reference, description);
+        return pushWithConfig(cfg, phoneNumber, amount, reference, description, platformDestination);
     }
 
     private StkPushOutcome pushWithConfig(
@@ -540,7 +593,8 @@ public class PaymentGatewayStkService {
             String phoneNumber,
             BigDecimal amount,
             String reference,
-            String description
+            String description,
+            boolean platformDestination
     ) {
         GatewayType type = cfg.getGatewayType();
         if (!gatewayRegistry.has(type.name())) {
@@ -561,6 +615,9 @@ public class PaymentGatewayStkService {
             }
             @SuppressWarnings("unchecked")
             Map<String, String> creds = objectMapper.readValue(decrypted, Map.class);
+            if (platformDestination) {
+                stampPlatformDestination(creds);
+            }
             return pushWithCredentials(
                     type.name(),
                     cfg.getId(),

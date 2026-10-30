@@ -23,6 +23,8 @@ import zelisline.ub.payments.domain.PlatformDarajaSettings;
 import zelisline.ub.payments.domain.PlatformMpesaCustodyProviders;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.payments.infrastructure.DarajaPaymentGateway;
+import zelisline.ub.payments.repository.GatewayStkPushRepository;
+import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
 import zelisline.ub.payments.repository.PlatformDarajaSettingsRepository;
 
 /**
@@ -49,7 +51,9 @@ class PlatformDarajaSettingsServiceTest {
                 encryption,
                 new ObjectMapper(),
                 mock(DarajaPaymentGateway.class),
-                custodyProvider);
+                custodyProvider,
+                mock(GatewayStkPushRepository.class),
+                mock(PaymentGatewayConfigRepository.class));
 
         PlatformDarajaSettings row = new PlatformDarajaSettings();
         row.setId(PlatformDarajaSettings.SINGLETON_ID);

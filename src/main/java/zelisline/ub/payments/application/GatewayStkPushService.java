@@ -90,6 +90,16 @@ public class GatewayStkPushService {
      */
     public static final String TILL_AWAIT_REPLACED_REASON = "Replaced by a new till payment wait";
 
+    /**
+     * Safaricom answered the prompt with ResultDesc "Wrong credentials" (ResultCode 4999):
+     * the STK password does not match the Go Live shortcode. No PIN prompt is sent.
+     */
+    public static final String WRONG_CREDENTIALS_REASON =
+            "Safaricom rejected the Lipa Na M-Pesa passkey (Wrong credentials) — no prompt was sent. "
+                    + "Super Admin must re-enter the passkey for the Go Live shortcode.";
+
+    private static final String TIMED_OUT_REASON = "M-Pesa prompt timed out — you can send a new prompt";
+
     /** After this age, a still-pending local STK row is marked failed so cashier can retry. */
     @Value("${app.payments.stk.stale-pending-seconds:30}")
     private int stalePendingSeconds;
@@ -442,6 +452,7 @@ public class GatewayStkPushService {
             }
             return true;
         }
+        noteWrongCredentials(push.get(), parsed);
         if (!safeToSettleDarajaPush(push.get(), parsed)) {
             return true;
         }
@@ -455,6 +466,17 @@ public class GatewayStkPushService {
      * confirmations must not cross shortcodes. Returns false when the push must not
      * settle now — it is left pending for the poller, or marked failed.
      */
+    /** Keeps the push pending; the reason replaces the generic timeout text later. */
+    private void noteWrongCredentials(GatewayStkPush push, WebhookResult parsed) {
+        if (parsed.success() || parsed.terminalFailure()
+                || !GatewayStkPushStatuses.PENDING.equals(push.getStatus())
+                || !DarajaPaymentGateway.looksLikeWrongCredentials(parsed.failureMessage())) {
+            return;
+        }
+        push.setFailureReason(WRONG_CREDENTIALS_REASON);
+        pushRepository.save(push);
+    }
+
     private boolean safeToSettleDarajaPush(GatewayStkPush push, WebhookResult parsed) {
         String mismatch = darajaShortcodeMismatch(push, parsed);
         if (mismatch != null) {
@@ -997,7 +1019,7 @@ public class GatewayStkPushService {
                         businessId, phone, GatewayStkPushStatuses.PENDING, since);
         for (GatewayStkPush push : pending) {
             if (push.getCreatedAt() != null && push.getCreatedAt().isBefore(staleBefore)) {
-                markFailed(push, "M-Pesa prompt timed out — you can send a new prompt");
+                markFailed(push, timedOutReason(push));
                 log.info("STK push timed out locally: pushId={} phone={}", push.getId(), phone);
             }
         }
@@ -1202,8 +1224,14 @@ public class GatewayStkPushService {
         if (push.getPollCount() >= maxPolls
                 && GatewayStkPushStatuses.PENDING.equals(push.getStatus())
                 && !isTillAwaitCheckout(push.getGatewayCheckoutId())) {
-            markFailed(push, "M-Pesa prompt timed out — you can send a new prompt");
+            markFailed(push, timedOutReason(push));
         }
+    }
+
+    private static String timedOutReason(GatewayStkPush push) {
+        return WRONG_CREDENTIALS_REASON.equals(push.getFailureReason())
+                ? WRONG_CREDENTIALS_REASON
+                : TIMED_OUT_REASON;
     }
 
     @Transactional(readOnly = true)

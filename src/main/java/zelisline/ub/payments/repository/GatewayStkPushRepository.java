@@ -78,6 +78,12 @@ public interface GatewayStkPushRepository extends JpaRepository<GatewayStkPush, 
             Instant createdAfter
     );
 
+    List<GatewayStkPush> findTop20ByGatewayTypeAndFailureReasonAndCreatedAtAfterOrderByCreatedAtDesc(
+            GatewayType gatewayType,
+            String failureReason,
+            Instant createdAfter
+    );
+
     Optional<GatewayStkPush> findFirstByBusinessIdAndGatewayTransactionIdIgnoreCaseAndStatus(
             String businessId,
             String gatewayTransactionId,

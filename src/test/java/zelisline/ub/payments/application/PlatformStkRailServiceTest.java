@@ -183,7 +183,7 @@ class PlatformStkRailServiceTest {
 
         assertThat(sent.get("partyB")).isEqualTo("3502582");
         assertThat(sent.get("transactionType")).isEqualTo("CustomerBuyGoodsOnline");
-        assertThat(sent.get("accountReference")).isEqualTo("smsc012345678");
+        assertThat(sent.get("accountReference")).isEqualTo("smsc01234567");
     }
 
     @Test

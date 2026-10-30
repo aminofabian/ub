@@ -1,5 +1,6 @@
 package zelisline.ub.payments.application;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -18,10 +19,13 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.payments.api.dto.PlatformDarajaSettingsResponse;
 import zelisline.ub.payments.api.dto.UpdatePlatformDarajaSettingsRequest;
 import zelisline.ub.payments.api.dto.UpdatePlatformMpesaCustodySettingsRequest;
+import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PlatformDarajaSettings;
 import zelisline.ub.payments.domain.PlatformMpesaCustodyProviders;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.payments.infrastructure.DarajaPaymentGateway;
+import zelisline.ub.payments.repository.GatewayStkPushRepository;
+import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
 import zelisline.ub.payments.repository.PlatformDarajaSettingsRepository;
 
 @Service
@@ -33,6 +37,8 @@ public class PlatformDarajaSettingsService {
     private final ObjectMapper objectMapper;
     private final DarajaPaymentGateway darajaPaymentGateway;
     private final ObjectProvider<PlatformMpesaCustodySettingsService> custodySettingsService;
+    private final GatewayStkPushRepository stkPushRepository;
+    private final PaymentGatewayConfigRepository configRepository;
 
     @Transactional(readOnly = true)
     public PlatformDarajaSettingsResponse getForSuperAdmin() {
@@ -112,7 +118,38 @@ public class PlatformDarajaSettingsService {
                     HttpStatus.BAD_REQUEST,
                     result.errorMessage() != null ? result.errorMessage() : "Daraja connection failed");
         }
+        if (platformPromptRejectedSince(row.getUpdatedAt())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Safaricom answered a recent prompt with Wrong credentials (ResultCode 4999): "
+                            + "the passkey does not match shortcode " + row.getShortcode()
+                            + ". Paste the passkey from the Go Live email for that exact shortcode "
+                            + "(or set the shortcode the email names), then save.");
+        }
         return toResponse(row);
+    }
+
+    /**
+     * The STK Query probe can pass with a wrong passkey, so a real callback is the
+     * stronger signal. Only platform and till/paybill-only prompts count; a shop's
+     * own Daraja keys are not this passkey.
+     */
+    private boolean platformPromptRejectedSince(Instant savedAt) {
+        Instant since = savedAt != null ? savedAt : Instant.now().minus(Duration.ofDays(1));
+        return stkPushRepository
+                .findTop20ByGatewayTypeAndFailureReasonAndCreatedAtAfterOrderByCreatedAtDesc(
+                        GatewayType.DARAJA, GatewayStkPushService.WRONG_CREDENTIALS_REASON, since)
+                .stream()
+                .anyMatch(push -> isPlatformPasskeyPush(push.getConfigId()));
+    }
+
+    private boolean isPlatformPasskeyPush(String configId) {
+        if (configId == null || PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID.equals(configId)) {
+            return true;
+        }
+        return configRepository.findById(configId)
+                .map(cfg -> cfg.getGatewayType() == GatewayType.CUSTODY_MPESA)
+                .orElse(false);
     }
 
     @Transactional(readOnly = true)

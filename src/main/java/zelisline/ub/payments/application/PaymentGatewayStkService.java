@@ -81,8 +81,9 @@ public class PaymentGatewayStkService {
     }
 
     /**
-     * Same STK rail a credit payment uses for this shop, with the payee replaced by
-     * the platform destination from Payments → Safaricom Daraja.
+     * Kiosk's own charges (SMS credits, package renewals) on the platform Daraja
+     * app, paid to the destination saved under Payments → Safaricom Daraja.
+     * Never the shop's KopoKopo client.
      */
     public StkPushOutcome initiateToPlatformDestination(
             String businessId,
@@ -91,9 +92,32 @@ public class PaymentGatewayStkService {
             String reference,
             String description
     ) {
-        return initiate(
-                businessId, null, phoneNumber, amount, reference, description,
-                StkAudience.CASHIER, true);
+        PlatformDarajaSettingsService daraja = platformDarajaSettingsService.getIfAvailable();
+        if (daraja == null || !daraja.isEnabledAndConfigured()) {
+            return StkPushOutcome.rejected(
+                    GatewayType.DARAJA.name(),
+                    "DARAJA_NOT_READY",
+                    "Safaricom Daraja is not ready. Ask Super Admin to finish Payments → Safaricom Daraja.");
+        }
+        Map<String, String> creds = new LinkedHashMap<>(daraja.credentials().orElse(Map.of()));
+        if (creds.isEmpty()) {
+            return StkPushOutcome.rejected(
+                    GatewayType.DARAJA.name(),
+                    "DARAJA_NOT_READY",
+                    "Safaricom Daraja is not ready. Ask Super Admin to finish Payments → Safaricom Daraja.");
+        }
+        daraja.stampPlatformDestination(creds);
+        log.info("Platform Daraja charge business={} partyB={} type={} accountRef={}",
+                businessId, creds.get("partyB"), creds.get("transactionType"), creds.get("accountReference"));
+        return initiateWithCredentials(
+                GatewayType.DARAJA.name(),
+                PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID,
+                businessId,
+                creds,
+                phoneNumber,
+                amount,
+                reference,
+                description);
     }
 
     public StkPushOutcome initiate(
@@ -164,6 +188,11 @@ public class PaymentGatewayStkService {
 
         for (GatewayType type : STK_GATEWAY_PRIORITY) {
             if (!isPlatformEnabled(type)) {
+                continue;
+            }
+            // A live Daraja app is the cashier and storefront rail. A stale
+            // KopoKopo client answers invalid_client and was stopping the prompt.
+            if (type == GatewayType.KOPOKOPO && darajaRailIsLive()) {
                 continue;
             }
             var configs = configRepository.findByBusinessIdAndGatewayTypeAndStatus(
@@ -531,6 +560,9 @@ public class PaymentGatewayStkService {
             if (!isPlatformEnabled(type)) {
                 continue;
             }
+            if (type == GatewayType.KOPOKOPO && darajaRailIsLive()) {
+                continue;
+            }
             var configs = configRepository.findByBusinessIdAndGatewayTypeAndStatus(
                     businessId, type, GatewayStatus.ACTIVE);
             for (PaymentGatewayConfig cfg : configs) {
@@ -550,6 +582,11 @@ public class PaymentGatewayStkService {
             }
         }
         return null;
+    }
+
+    private boolean darajaRailIsLive() {
+        PlatformDarajaSettingsService daraja = platformDarajaSettingsService.getIfAvailable();
+        return daraja != null && daraja.isEnabledAndConfigured();
     }
 
     private boolean isPlatformEnabled(GatewayType type) {

@@ -34,8 +34,8 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
  * M-Pesa STK subscription renewal (SUBSCRIPTION_BILLING_SCOPE.md §12).
  *
  * <p>The STK prompt runs through {@link PaymentGatewayStkService#initiateToPlatformDestination}:
- * the same rail tenant credit payments use, paid to the platform destination from
- * Payments → Safaricom Daraja. This service never picks a provider itself.
+ * the platform Safaricom Daraja app, paid to the destination from
+ * Payments → Safaricom Daraja. This service never picks KopoKopo.
  */
 @Service
 @RequiredArgsConstructor
@@ -120,7 +120,7 @@ public class SubscriptionRenewalService {
 
         gatewayStkPushService.cancelPendingForPhone(businessId, phone, "Replaced by subscription renewal");
 
-        // Same rail as a credit payment, paid to the super-admin platform destination.
+        // Platform Daraja, paid to the super-admin destination. Not KopoKopo.
         PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiateToPlatformDestination(
                 businessId,
                 phone,

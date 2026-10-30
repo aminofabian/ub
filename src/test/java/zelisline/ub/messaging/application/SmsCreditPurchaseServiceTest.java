@@ -27,8 +27,7 @@ import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.StkPushContextType;
 
 /**
- * SMS-credit top-ups must prompt on the same STK entry tenant credit payments
- * use, so a broken platform Daraja login cannot block a shop whose own till works.
+ * SMS-credit top-ups prompt on the platform Daraja app.
  */
 class SmsCreditPurchaseServiceTest {
 
@@ -68,11 +67,11 @@ class SmsCreditPurchaseServiceTest {
     }
 
     @Test
-    void smsCreditsUseTheTenantCreditPaymentRail() {
+    void smsCreditsUsePlatformDaraja() {
         given(paymentGatewayStkService.initiateToPlatformDestination(
                 anyString(), anyString(), any(BigDecimal.class), anyString(), anyString()))
                 .willReturn(PaymentGatewayStkService.StkPushOutcome.accepted(
-                        "KOPOKOPO", "cfg-tenant",
+                        "DARAJA", "platform-daraja",
                         "ws_CO_1", "Check your phone to complete M-Pesa payment."));
         GatewayStkPush push = new GatewayStkPush();
         push.setId("push-1");
@@ -95,8 +94,8 @@ class SmsCreditPurchaseServiceTest {
 
         verify(gatewayStkPushService).registerPush(
                 eq(BUSINESS_ID),
-                eq(GatewayType.KOPOKOPO),
-                eq("cfg-tenant"),
+                eq(GatewayType.DARAJA),
+                eq("platform-daraja"),
                 eq("ws_CO_1"),
                 anyString(),
                 eq(StkPushContextType.SMS_CREDIT_PURCHASE),
@@ -110,7 +109,7 @@ class SmsCreditPurchaseServiceTest {
         given(paymentGatewayStkService.initiateToPlatformDestination(
                 anyString(), anyString(), any(BigDecimal.class), anyString(), anyString()))
                 .willReturn(PaymentGatewayStkService.StkPushOutcome.rejected(
-                        "KOPOKOPO", "DECLINED", "The customer cancelled the request"));
+                        "DARAJA", "DECLINED", "The customer cancelled the request"));
 
         SmsCreditPurchaseDtos.SmsCreditPurchaseResponse response =
                 service.initiate(BUSINESS_ID, 100, "0721530181");

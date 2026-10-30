@@ -28,7 +28,7 @@ import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
- * Package renewals must prompt on the same STK entry tenant credit payments use.
+ * Package renewals prompt on the platform Daraja app.
  */
 class SubscriptionRenewalServiceTest {
 
@@ -85,11 +85,11 @@ class SubscriptionRenewalServiceTest {
     }
 
     @Test
-    void packageRenewalUsesTheTenantCreditPaymentRail() {
+    void packageRenewalUsesPlatformDaraja() {
         given(paymentGatewayStkService.initiateToPlatformDestination(
                 anyString(), anyString(), any(BigDecimal.class), anyString(), anyString()))
                 .willReturn(PaymentGatewayStkService.StkPushOutcome.accepted(
-                        "KOPOKOPO", "cfg-tenant",
+                        "DARAJA", "platform-daraja",
                         "ws_CO_1", "Check your phone to complete M-Pesa payment."));
         GatewayStkPush push = new GatewayStkPush();
         push.setId("push-1");
@@ -113,8 +113,8 @@ class SubscriptionRenewalServiceTest {
 
         verify(gatewayStkPushService).registerPush(
                 eq(BUSINESS_ID),
-                eq(GatewayType.KOPOKOPO),
-                eq("cfg-tenant"),
+                eq(GatewayType.DARAJA),
+                eq("platform-daraja"),
                 eq("ws_CO_1"),
                 anyString(),
                 eq(StkPushContextType.SUBSCRIPTION_RENEWAL),

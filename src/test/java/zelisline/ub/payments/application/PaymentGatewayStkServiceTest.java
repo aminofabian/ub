@@ -4,18 +4,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -27,6 +30,7 @@ import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.PaymentGatewayConfig;
 import zelisline.ub.payments.domain.PlatformPaymentGateway;
 import zelisline.ub.payments.domain.spi.PaymentGateway;
+import zelisline.ub.payments.domain.spi.StkPushRequest;
 import zelisline.ub.payments.domain.spi.StkPushResponse;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.payments.repository.PaymentGatewayConfigRepository;
@@ -226,6 +230,103 @@ class PaymentGatewayStkServiceTest {
         assertThat(outcome.accepted()).isFalse();
         assertThat(outcome.responseCode()).isEqualTo("NO_GATEWAY");
         verify(darajaProvider, never()).getIfAvailable();
+    }
+
+    @Test
+    void findDefault_skipsKopokopoWhenDarajaIsLive() {
+        PlatformDarajaSettingsService daraja = liveDaraja();
+        when(darajaProvider.getIfAvailable()).thenReturn(daraja);
+        when(platformPaymentGatewayService.listEnabled())
+                .thenReturn(List.of(
+                        platformGateway(GatewayType.KOPOKOPO),
+                        platformGateway(GatewayType.DARAJA)));
+        when(configRepository.findByBusinessIdAndGatewayTypeAndStatus(
+                BUSINESS, GatewayType.KOPOKOPO, GatewayStatus.ACTIVE))
+                .thenReturn(List.of(byoConfig()));
+        when(custodyService.platformRailsReady()).thenReturn(true);
+        when(custodyService.findActiveCustodyConfig(BUSINESS)).thenReturn(custodyConfig());
+
+        assertThat(service.findDefaultActiveStkConfigId(BUSINESS)).isEqualTo("cfg-custody");
+    }
+
+    @Test
+    void initiate_darajaLive_sendsCreditOnDarajaNotKopokopo() {
+        PlatformDarajaSettingsService daraja = liveDaraja();
+        when(darajaProvider.getIfAvailable()).thenReturn(daraja);
+        when(platformPaymentGatewayService.listEnabled())
+                .thenReturn(List.of(platformGateway(GatewayType.KOPOKOPO)));
+        when(configRepository.findByBusinessIdAndGatewayTypeAndStatus(
+                BUSINESS, GatewayType.KOPOKOPO, GatewayStatus.ACTIVE))
+                .thenReturn(List.of(byoConfig()));
+        when(custodyService.platformRailsReady()).thenReturn(true);
+        when(custodyService.findActiveCustodyConfig(BUSINESS)).thenReturn(custodyConfig());
+        when(configRepository.findById("cfg-custody")).thenReturn(Optional.of(custodyConfig()));
+        when(custodyService.resolveCollectRail()).thenReturn(Optional.of(
+                new PlatformCustodySettlementService.CollectRail(
+                        GatewayType.DARAJA, "DARAJA",
+                        Map.of("consumerKey", "ck", "shortcode", "4094529", "passkey", "pk"))));
+        PaymentGateway darajaGateway = mock(PaymentGateway.class);
+        when(gatewayRegistry.has("DARAJA")).thenReturn(true);
+        when(gatewayRegistry.get("DARAJA")).thenReturn(darajaGateway);
+        when(darajaGateway.initiateStkPush(any())).thenReturn(
+                StkPushResponse.accepted("checkout-d", "mr-d", "0", "Success"));
+
+        PaymentGatewayStkService.StkPushOutcome outcome = service.initiate(
+                BUSINESS, null, "254712345678", new BigDecimal("20.00"), "REF-1", "Credit");
+
+        assertThat(outcome.accepted()).isTrue();
+        assertThat(outcome.gatewayType()).isEqualTo(GatewayType.DARAJA.name());
+        assertThat(outcome.configId()).isEqualTo("cfg-custody");
+        verify(kopokopoGateway, never()).initiateStkPush(any());
+    }
+
+    @Test
+    void initiateToPlatformDestination_usesDarajaPayeeNotKopokopo() {
+        PlatformDarajaSettingsService daraja = liveDaraja();
+        when(darajaProvider.getIfAvailable()).thenReturn(daraja);
+        Map<String, String> creds = new LinkedHashMap<>();
+        creds.put("consumerKey", "ck");
+        creds.put("consumerSecret", "cs");
+        creds.put("passkey", "pk");
+        creds.put("shortcode", "4094529");
+        creds.put("environment", "production");
+        when(daraja.credentials()).thenReturn(Optional.of(creds));
+        doAnswer(inv -> {
+            Map<String, String> stamped = inv.getArgument(0);
+            stamped.put("partyB", "880100");
+            stamped.put("transactionType", "CustomerPayBillOnline");
+            stamped.put("accountReference", "KIOSK");
+            return null;
+        }).when(daraja).stampPlatformDestination(any());
+        PaymentGateway darajaGateway = mock(PaymentGateway.class);
+        when(gatewayRegistry.has("DARAJA")).thenReturn(true);
+        when(gatewayRegistry.get("DARAJA")).thenReturn(darajaGateway);
+        when(darajaGateway.initiateStkPush(any())).thenReturn(
+                StkPushResponse.accepted("ws", "m", "0", "ok"));
+        when(platformPaymentGatewayService.listEnabled())
+                .thenReturn(List.of(platformGateway(GatewayType.KOPOKOPO)));
+        when(configRepository.findByBusinessIdAndGatewayTypeAndStatus(
+                BUSINESS, GatewayType.KOPOKOPO, GatewayStatus.ACTIVE))
+                .thenReturn(List.of(byoConfig()));
+
+        PaymentGatewayStkService.StkPushOutcome outcome = service.initiateToPlatformDestination(
+                BUSINESS, "254721530181", new BigDecimal("8.00"), "SMS-1", "SMS credits");
+
+        assertThat(outcome.accepted()).isTrue();
+        assertThat(outcome.gatewayType()).isEqualTo(GatewayType.DARAJA.name());
+        assertThat(outcome.configId()).isEqualTo("platform-daraja");
+        verify(kopokopoGateway, never()).initiateStkPush(any());
+        ArgumentCaptor<StkPushRequest> sent = ArgumentCaptor.forClass(StkPushRequest.class);
+        verify(darajaGateway).initiateStkPush(sent.capture());
+        assertThat(sent.getValue().credentials().get("partyB")).isEqualTo("880100");
+        assertThat(sent.getValue().credentials().get("transactionType")).isEqualTo("CustomerPayBillOnline");
+        assertThat(sent.getValue().credentials().get("accountReference")).isEqualTo("KIOSK");
+    }
+
+    private static PlatformDarajaSettingsService liveDaraja() {
+        PlatformDarajaSettingsService daraja = mock(PlatformDarajaSettingsService.class);
+        when(daraja.isEnabledAndConfigured()).thenReturn(true);
+        return daraja;
     }
 
     private static PlatformPaymentGateway platformGateway(GatewayType type) {

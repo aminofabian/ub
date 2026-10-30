@@ -24,8 +24,8 @@ import zelisline.ub.billing.repository.SubscriptionRenewalOrderRepository;
 import zelisline.ub.identity.api.dto.AuthBillingGateResponse;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
-import zelisline.ub.payments.application.PlatformStkRailService;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
+import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.StkPushContextType;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -33,10 +33,9 @@ import zelisline.ub.tenancy.repository.BusinessRepository;
 /**
  * M-Pesa STK subscription renewal (SUBSCRIPTION_BILLING_SCOPE.md §12).
  *
- * <p>The STK prompt runs on whichever platform M-Pesa rail Super Admin has live
- * ({@link PlatformStkRailService}) — the same Safaricom Daraja Express rail tenant
- * payments collect on, with the Palmart KopoKopo till as the fallback. This service
- * never picks a provider itself.
+ * <p>The STK prompt runs through {@link PaymentGatewayStkService#initiate}, the same
+ * entry tenant credit payments use, so the shop's active till, paybill, or KopoKopo
+ * method sends the prompt. This service never picks a provider itself.
  */
 @Service
 @RequiredArgsConstructor
@@ -53,7 +52,6 @@ public class SubscriptionRenewalService {
     private final BusinessRepository businessRepository;
     private final PaymentGatewayStkService paymentGatewayStkService;
     private final GatewayStkPushService gatewayStkPushService;
-    private final PlatformStkRailService platformStkRailService;
 
     @Transactional(readOnly = true)
     public SubscriptionBillingDtos.RenewalQuoteResponse renewalQuote(
@@ -107,10 +105,6 @@ public class SubscriptionRenewalService {
         if (quote.amountKes().signum() <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Renewal amount must be positive");
         }
-        // Collect on the same platform M-Pesa rail tenants pay into (Custody rail →
-        // Daraja Express), never a provider hard-coded here.
-        PlatformStkRailService.Rail rail = platformStkRailService.require("package renewal");
-
         SubscriptionRenewalOrder order = new SubscriptionRenewalOrder();
         order.setBusinessId(businessId);
         order.setTierCode(quote.tier());
@@ -126,21 +120,19 @@ public class SubscriptionRenewalService {
 
         gatewayStkPushService.cancelPendingForPhone(businessId, phone, "Replaced by subscription renewal");
 
-        PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiateWithCredentials(
-                rail.gatewayType().name(),
-                rail.configId(),
+        // Same entry credit-account payments use: the shop's active STK method.
+        PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiate(
                 businessId,
-                rail.credentialsFor(reference),
                 phone,
                 quote.amountKes(),
                 reference,
                 description);
 
-        if (outcome.accepted() && outcome.checkoutRequestId() != null) {
+        if (outcome.accepted() && outcome.checkoutRequestId() != null && outcome.gatewayType() != null) {
             var push = gatewayStkPushService.registerPush(
                     businessId,
-                    rail.gatewayType(),
-                    rail.configId(),
+                    GatewayType.valueOf(outcome.gatewayType()),
+                    outcome.configId(),
                     outcome.checkoutRequestId(),
                     reference,
                     StkPushContextType.SUBSCRIPTION_RENEWAL,

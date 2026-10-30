@@ -21,16 +21,15 @@ import zelisline.ub.messaging.domain.SmsCreditPurchaseStatus;
 import zelisline.ub.messaging.repository.SmsCreditPurchaseRepository;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
-import zelisline.ub.payments.application.PlatformStkRailService;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
+import zelisline.ub.payments.domain.GatewayType;
 import zelisline.ub.payments.domain.StkPushContextType;
 
 /**
- * SMS credit top-ups settled through the platform M-Pesa rail
- * (SMS_CREDITS_SCOPE.md §13) — the same rail package renewals use, so Safaricom
- * Daraja Express collects the money whenever Super Admin has made it live.
- * {@code status} + unique M-Pesa receipt guard the STK callback against
- * double-crediting.
+ * SMS credit top-ups settled on the same M-Pesa rail a tenant uses for credit
+ * payments — the shop's active till, paybill, or KopoKopo method — not the
+ * platform Daraja app. {@code status} + unique M-Pesa receipt guard the STK
+ * callback against double-crediting.
  */
 @Service
 @RequiredArgsConstructor
@@ -43,7 +42,6 @@ public class SmsCreditPurchaseService {
     private final SmsCreditService creditService;
     private final PaymentGatewayStkService paymentGatewayStkService;
     private final GatewayStkPushService gatewayStkPushService;
-    private final PlatformStkRailService platformStkRailService;
 
     @Transactional
     public SmsCreditPurchaseDtos.SmsCreditPurchaseResponse initiate(
@@ -69,10 +67,6 @@ public class SmsCreditPurchaseService {
         if (phone == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter a valid M-Pesa phone number");
         }
-        // Collect on the same platform M-Pesa rail package renewals use (Custody rail →
-        // Daraja Express), never a provider hard-coded here.
-        PlatformStkRailService.Rail rail = platformStkRailService.require("SMS credits purchase");
-
         BigDecimal amount = settings.getUnitPriceKes()
                 .multiply(BigDecimal.valueOf(credits))
                 .setScale(2, RoundingMode.HALF_UP);
@@ -91,21 +85,19 @@ public class SmsCreditPurchaseService {
 
         gatewayStkPushService.cancelPendingForPhone(businessId, phone, "Replaced by SMS credits purchase");
 
-        PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiateWithCredentials(
-                rail.gatewayType().name(),
-                rail.configId(),
+        // Same entry credit-account payments use: the shop's active STK method.
+        PaymentGatewayStkService.StkPushOutcome outcome = paymentGatewayStkService.initiate(
                 businessId,
-                rail.credentialsFor(reference),
                 phone,
                 amount,
                 reference,
                 description);
 
-        if (outcome.accepted() && outcome.checkoutRequestId() != null) {
+        if (outcome.accepted() && outcome.checkoutRequestId() != null && outcome.gatewayType() != null) {
             var push = gatewayStkPushService.registerPush(
                     businessId,
-                    rail.gatewayType(),
-                    rail.configId(),
+                    GatewayType.valueOf(outcome.gatewayType()),
+                    outcome.configId(),
                     outcome.checkoutRequestId(),
                     reference,
                     StkPushContextType.SMS_CREDIT_PURCHASE,

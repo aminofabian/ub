@@ -1,9 +1,7 @@
 package zelisline.ub.billing.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
@@ -12,35 +10,26 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import java.math.BigDecimal;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
 
 import zelisline.ub.billing.api.dto.SubscriptionBillingDtos;
 import zelisline.ub.billing.domain.PlatformSubscriptionPlan;
 import zelisline.ub.billing.repository.SubscriptionRenewalOrderRepository;
 import zelisline.ub.payments.application.GatewayStkPushService;
 import zelisline.ub.payments.application.PaymentGatewayStkService;
-import zelisline.ub.payments.application.PlatformStkRailService;
 import zelisline.ub.payments.domain.GatewayStkPush;
 import zelisline.ub.payments.domain.GatewayType;
-import zelisline.ub.payments.domain.PlatformDarajaSettings;
 import zelisline.ub.payments.domain.StkPushContextType;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
- * Package renewals must collect on whichever platform M-Pesa rail Super Admin made
- * live — the Custody rail (Daraja Express) tenant payments use — instead of the
- * hard-coded KopoKopo till that produced the {@code invalid_client} OAuth failure.
+ * Package renewals must prompt on the same STK entry tenant credit payments use.
  */
-@SuppressWarnings("unchecked")
 class SubscriptionRenewalServiceTest {
 
     private static final String BUSINESS_ID = "biz-1";
@@ -56,7 +45,6 @@ class SubscriptionRenewalServiceTest {
     private final BusinessRepository businessRepository = mock(BusinessRepository.class);
     private final PaymentGatewayStkService paymentGatewayStkService = mock(PaymentGatewayStkService.class);
     private final GatewayStkPushService gatewayStkPushService = mock(GatewayStkPushService.class);
-    private final PlatformStkRailService platformStkRailService = mock(PlatformStkRailService.class);
 
     private final SubscriptionRenewalService service = new SubscriptionRenewalService(
             orderRepository,
@@ -67,8 +55,7 @@ class SubscriptionRenewalServiceTest {
             accessPolicy,
             businessRepository,
             paymentGatewayStkService,
-            gatewayStkPushService,
-            platformStkRailService);
+            gatewayStkPushService);
 
     @BeforeEach
     void setUp() {
@@ -98,22 +85,11 @@ class SubscriptionRenewalServiceTest {
     }
 
     @Test
-    void packageRenewalCollectsOnCustodyDarajaRail() {
-        given(platformStkRailService.require(anyString())).willReturn(new PlatformStkRailService.Rail(
-                GatewayType.DARAJA,
-                PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID,
-                "Custody rail (DARAJA)",
-                Map.of(
-                        "shortcode", "4030000",
-                        "passkey", "pk",
-                        "consumerKey", "ck",
-                        "consumerSecret", "cs",
-                        "environment", "production",
-                        "shortcodeType", "paybill")));
-        given(paymentGatewayStkService.initiateWithCredentials(
-                anyString(), anyString(), anyString(), anyMap(), anyString(), any(), anyString(), anyString()))
+    void packageRenewalUsesTheTenantCreditPaymentRail() {
+        given(paymentGatewayStkService.initiate(
+                anyString(), anyString(), any(BigDecimal.class), anyString(), anyString()))
                 .willReturn(PaymentGatewayStkService.StkPushOutcome.accepted(
-                        "DARAJA", PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID,
+                        "KOPOKOPO", "cfg-tenant",
                         "ws_CO_1", "Check your phone to complete M-Pesa payment."));
         GatewayStkPush push = new GatewayStkPush();
         push.setId("push-1");
@@ -128,23 +104,17 @@ class SubscriptionRenewalServiceTest {
         assertThat(response.status()).isEqualTo("PENDING");
         assertThat(response.amountKes()).isEqualByComparingTo("800.00");
 
-        ArgumentCaptor<Map<String, String>> credentials = ArgumentCaptor.forClass(Map.class);
-        verify(paymentGatewayStkService).initiateWithCredentials(
-                eq("DARAJA"),
-                eq(PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID),
+        verify(paymentGatewayStkService).initiate(
                 eq(BUSINESS_ID),
-                credentials.capture(),
                 eq("254721530181"),
                 eq(new BigDecimal("800.00")),
                 anyString(),
                 anyString());
-        assertThat(credentials.getValue()).containsEntry("shortcode", "4030000");
-        assertThat(credentials.getValue().get("accountReference")).hasSize(12);
 
         verify(gatewayStkPushService).registerPush(
                 eq(BUSINESS_ID),
-                eq(GatewayType.DARAJA),
-                eq(PlatformDarajaSettings.PLATFORM_DARAJA_CONFIG_ID),
+                eq(GatewayType.KOPOKOPO),
+                eq("cfg-tenant"),
                 eq("ws_CO_1"),
                 anyString(),
                 eq(StkPushContextType.SUBSCRIPTION_RENEWAL),
@@ -154,20 +124,19 @@ class SubscriptionRenewalServiceTest {
     }
 
     @Test
-    void packageRenewalStopsBeforeChargingWhenNoRailIsConfigured() {
-        given(platformStkRailService.require(anyString())).willThrow(new ResponseStatusException(
-                HttpStatus.SERVICE_UNAVAILABLE,
-                "Platform M-Pesa is not configured. Ask Super Admin to turn on the Custody rail."));
+    void packageRenewalRecordsTheGatewayFailure() {
+        given(paymentGatewayStkService.initiate(
+                anyString(), anyString(), any(BigDecimal.class), anyString(), anyString()))
+                .willReturn(PaymentGatewayStkService.StkPushOutcome.rejected(
+                        null, "NO_GATEWAY", "Online payment is not available right now."));
 
-        assertThatThrownBy(() -> service.initiate(
+        SubscriptionBillingDtos.RenewSubscriptionResponse response = service.initiate(
                 BUSINESS_ID,
-                new SubscriptionBillingDtos.RenewSubscriptionRequest("business", 1, "0721530181")))
-                .isInstanceOf(ResponseStatusException.class)
-                .satisfies(error -> assertThat(((ResponseStatusException) error).getStatusCode())
-                        .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
+                new SubscriptionBillingDtos.RenewSubscriptionRequest("business", 1, "0721530181"));
 
-        verify(orderRepository, never()).save(any());
-        verify(paymentGatewayStkService, never()).initiateWithCredentials(
-                anyString(), anyString(), anyString(), anyMap(), anyString(), any(), anyString(), anyString());
+        assertThat(response.status()).isEqualTo("FAILED");
+        assertThat(response.message()).isEqualTo("Online payment is not available right now.");
+        verify(gatewayStkPushService, never()).registerPush(
+                anyString(), any(), anyString(), anyString(), anyString(), any(), anyString(), any(), anyString());
     }
 }

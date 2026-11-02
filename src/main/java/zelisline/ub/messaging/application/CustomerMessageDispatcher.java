@@ -231,7 +231,7 @@ public class CustomerMessageDispatcher {
                     lookup,
                     "sms",
                     "skipped",
-                    "SMS provider is not configured (set Sozuri or Africa's Talking in admin).");
+                    "SMS provider is not configured (set TextSMS, Sozuri, or Ping Africa in admin).");
         }
         var sms = guardedSmsSend(messaging, e164, message);
         String channel = sms.channel();
@@ -268,8 +268,8 @@ public class CustomerMessageDispatcher {
                     lookup,
                     "none",
                     "failed",
-                    "SMS is required for verification codes. Configure Sozuri or TextSMS under"
-                            + " Super Admin → Platform integrations. Free-form WhatsApp alone is"
+                    "SMS is required for verification codes. Configure TextSMS, Sozuri, or Ping Africa"
+                            + " under Super Admin → Platform integrations. Free-form WhatsApp alone is"
                             + " unreliable outside Meta's 24h window.");
         }
 
@@ -540,7 +540,7 @@ public class CustomerMessageDispatcher {
                     "failed",
                     waDetail
                             + (authFailure
-                                    ? ". SMS fallback is not configured — fix the Meta token or enable Sozuri / Africa's Talking."
+                                    ? ". SMS fallback is not configured — fix the Meta token or enable TextSMS / Sozuri / Ping Africa."
                                     : ". SMS fallback is not configured."));
         }
 

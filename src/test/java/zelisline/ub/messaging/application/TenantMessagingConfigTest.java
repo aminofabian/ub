@@ -18,14 +18,15 @@ class TenantMessagingConfigTest {
                 null,
                 "12345",
                 "secret-key",
-                "SENDER");
+                "SENDER",
+                null);
         assertTrue(cfg.smsConfigured());
         assertEquals("textsms", cfg.effectiveSmsProvider());
     }
 
     @Test
     void smsConfigured_falseWhenProviderNoneAndNoCredentials() {
-        TenantMessagingConfig cfg = base("none", null, null, null, null, null, null, null);
+        TenantMessagingConfig cfg = base("none", null, null, null, null, null, null, null, null);
         assertFalse(cfg.smsConfigured());
         assertTrue(cfg.smsNotConfiguredHint().contains("none"));
     }
@@ -40,18 +41,36 @@ class TenantMessagingConfigTest {
                 null,
                 "12345",
                 null,
-                "SENDER");
+                "SENDER",
+                null);
         assertFalse(cfg.smsConfigured());
         assertTrue(cfg.smsNotConfiguredHint().toLowerCase().contains("api key"));
     }
 
     @Test
     void smsNotConfiguredHint_listsMissingTextsmsFieldsWhenProviderTextsms() {
-        TenantMessagingConfig cfg = base("textsms", null, null, null, null, null, null, null);
+        TenantMessagingConfig cfg = base("textsms", null, null, null, null, null, null, null, null);
         assertFalse(cfg.smsConfigured());
         assertTrue(cfg.smsNotConfiguredHint().contains("partner ID"));
         assertTrue(cfg.smsNotConfiguredHint().contains("API key"));
         assertTrue(cfg.smsNotConfiguredHint().contains("shortcode"));
+    }
+
+    @Test
+    void smsConfigured_pingAfricaNeedsOnlyBearerToken() {
+        TenantMessagingConfig cfg = base(
+                "ping_africa", null, null, null, null, null, null, null, "ping-token");
+        assertTrue(cfg.smsConfigured());
+        assertEquals("ping_africa", cfg.effectiveSmsProvider());
+    }
+
+    @Test
+    void smsNotConfiguredHint_namesMissingPingAfricaToken() {
+        TenantMessagingConfig cfg =
+                base("ping_africa", null, null, null, null, null, null, null, null);
+        assertFalse(cfg.smsConfigured());
+        assertTrue(cfg.smsNotConfiguredHint().contains("Ping Africa"));
+        assertTrue(cfg.smsNotConfiguredHint().contains("API token"));
     }
 
     private static TenantMessagingConfig base(
@@ -62,7 +81,8 @@ class TenantMessagingConfigTest {
             String sozuriKey,
             String textsmsPartner,
             String textsmsKey,
-            String textsmsShortcode
+            String textsmsShortcode,
+            String pingAfricaKey
     ) {
         return new TenantMessagingConfig(
                 true,
@@ -88,6 +108,9 @@ class TenantMessagingConfigTest {
                 textsmsKey,
                 textsmsShortcode,
                 "https://sms.textsms.co.ke/api/services/sendsms/",
+                pingAfricaKey,
+                "https://bulk.ping.africa/api",
+                null,
                 true,
                 null,
                 "biz-1",

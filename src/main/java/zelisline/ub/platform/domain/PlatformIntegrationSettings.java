@@ -78,6 +78,18 @@ public class PlatformIntegrationSettings {
     @Column(name = "textsms_api_url", length = 512)
     private String textsmsApiUrl;
 
+    /** Ping Africa Bulk SMS Bearer token (encrypted). */
+    @Column(name = "pingafrica_api_key_enc", columnDefinition = "TEXT")
+    private String pingAfricaApiKeyEnc;
+
+    /** Ping Africa API root, e.g. {@code https://bulk.ping.africa/api} ({@code /sms/send} appended). */
+    @Column(name = "pingafrica_base_url", length = 512)
+    private String pingAfricaBaseUrl;
+
+    /** Optional alphanumeric sender ID registered on the Ping Africa dashboard. */
+    @Column(name = "pingafrica_sender_id", length = 64)
+    private String pingAfricaSenderId;
+
     @Column(name = "whatsapp_meta_access_token_enc", columnDefinition = "TEXT")
     private String whatsappMetaAccessTokenEnc;
 

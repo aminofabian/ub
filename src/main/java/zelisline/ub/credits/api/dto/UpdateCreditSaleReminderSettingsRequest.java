@@ -11,6 +11,7 @@ import jakarta.validation.constraints.NotNull;
  * @param smsAfricasTalkingApiKey {@code null} = unchanged; blank = clear.
  * @param smsSozuriApiKey {@code null} = unchanged; blank = clear.
  * @param smsTextsmsApiKey {@code null} = unchanged; blank = clear.
+ * @param smsPingAfricaApiKey {@code null} = unchanged; blank = clear.
  */
 public record UpdateCreditSaleReminderSettingsRequest(
         @NotNull Boolean enabled,
@@ -39,6 +40,9 @@ public record UpdateCreditSaleReminderSettingsRequest(
         String smsTextsmsApiKey,
         String smsTextsmsShortcode,
         String smsTextsmsApiUrl,
+        String smsPingAfricaApiKey,
+        String smsPingAfricaBaseUrl,
+        String smsPingAfricaSenderId,
         /** null = leave unchanged */
         Boolean remoteInvoiceStkAutoSettle
 ) {

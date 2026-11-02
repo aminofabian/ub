@@ -16,6 +16,8 @@ public record CreditSaleReminderSettingsResponse(
         String smsTextsmsPartnerId,
         String smsTextsmsShortcode,
         String smsTextsmsApiUrl,
+        String smsPingAfricaBaseUrl,
+        String smsPingAfricaSenderId,
         boolean hasRapidApiKey,
         String rapidApiHost,
         String rapidApiLookupUrl,
@@ -27,6 +29,7 @@ public record CreditSaleReminderSettingsResponse(
         boolean hasSmsAfricasTalkingApiKey,
         boolean hasSmsSozuriApiKey,
         boolean hasSmsTextsmsApiKey,
+        boolean hasSmsPingAfricaApiKey,
         boolean secretsReadable,
         String secretsReadError,
         /** Default true: remote invoice STK success auto-pays. False = cashier must clear. */

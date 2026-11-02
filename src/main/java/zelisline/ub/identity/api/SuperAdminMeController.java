@@ -106,7 +106,7 @@ public class SuperAdminMeController {
         TenantMessagingConfig messaging = messagingSettingsService.resolvePlatformForContactReply();
         if (!messaging.smsConfigured()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Platform SMS is not configured — add Sozuri, TextSMS, or Africa's Talking under Platform → Integrations");
+                    "Platform SMS is not configured — add TextSMS, Sozuri, Ping Africa, or Africa's Talking under Platform → Integrations");
         }
         String message = "Palmart test SMS — super-admin adoption alerts are working.";
         CustomerMessageDispatcher.DeliveryResult delivery =

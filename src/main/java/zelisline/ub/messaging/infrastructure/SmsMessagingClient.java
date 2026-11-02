@@ -18,10 +18,10 @@ import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.messaging.domain.SmsSendReason;
 
 /**
- * SMS fallback for credit tab reminders (Africa's Talking, Sozuri, or TextSMS.co.ke).
- * Metered at this single choke point: every real tenant-scoped send consumes one
- * credit via {@link SmsCreditGuard} (SMS_CREDITS_SCOPE.md §8). Stub sends and
- * platform-scoped sends (no business id) are free.
+ * SMS fallback for credit tab reminders (Africa's Talking, Sozuri, TextSMS.co.ke, or
+ * Ping Africa). Metered at this single choke point: every real tenant-scoped send
+ * consumes one credit via {@link SmsCreditGuard} (SMS_CREDITS_SCOPE.md §8). Stub sends
+ * and platform-scoped sends (no business id) are free.
  */
 @Component
 public class SmsMessagingClient {
@@ -29,6 +29,8 @@ public class SmsMessagingClient {
     private static final Logger log = LoggerFactory.getLogger(SmsMessagingClient.class);
     private static final String DEFAULT_SOZURI_URL = "https://sozuri.net/api/v1/messaging";
     private static final String DEFAULT_TEXTSMS_URL = "https://sms.textsms.co.ke/api/services/sendsms/";
+    /** API root; {@code /sms/send} is appended. */
+    private static final String DEFAULT_PINGAFRICA_URL = "https://bulk.ping.africa/api";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final SmsCreditGuard smsCreditGuard;
@@ -76,6 +78,8 @@ public class SmsMessagingClient {
             result = sendSozuri(toE164, body, cfg);
         } else if ("textsms".equalsIgnoreCase(provider)) {
             result = sendTextSms(toE164, body, cfg);
+        } else if ("ping_africa".equalsIgnoreCase(provider)) {
+            result = sendPingAfrica(toE164, body, cfg);
         } else {
             result = sendAfricasTalking(toE164, body, cfg);
         }
@@ -167,6 +171,120 @@ public class SmsMessagingClient {
             log.warn("TextSMS failed: {}", ex.getMessage());
             return SendResult.failed("error");
         }
+    }
+
+    /**
+     * Ping Africa Bulk SMS — {@code POST {baseUrl}/sms/send} with a Bearer token.
+     * Accepts E.164 with the leading {@code +} (their documented form). The optional
+     * {@code sender_id} is only sent when configured, so the account default applies
+     * otherwise.
+     *
+     * @see <a href="https://bulk.ping.africa/docs/api">Ping Africa API reference</a>
+     */
+    private SendResult sendPingAfrica(String toE164, String body, TenantMessagingConfig cfg) {
+        String url = stripTrailingSlashes(
+                blankToDefault(cfg.smsPingAfricaBaseUrl(), DEFAULT_PINGAFRICA_URL)) + "/sms/send";
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("recipient", toE164);
+            payload.put("message", body);
+            String senderId = cfg.smsPingAfricaSenderId();
+            if (senderId != null && !senderId.isBlank()) {
+                payload.put("sender_id", senderId.trim());
+            }
+            String json = objectMapper.writeValueAsString(payload);
+            HttpResponse<String> response = Unirest.post(url)
+                    .header("Authorization", "Bearer " + stripBearerPrefix(cfg.smsPingAfricaApiKey()))
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .body(json)
+                    .asString();
+            if (response.getStatus() < 200 || response.getStatus() >= 300) {
+                String reason = parsePingAfricaError(response.getBody());
+                log.warn("Ping Africa SMS HTTP {} body={}", response.getStatus(), truncate(response.getBody()));
+                return SendResult.failed(
+                        reason == null ? "http_" + response.getStatus()
+                                : "http_" + response.getStatus() + ":" + reason);
+            }
+            String detail = parsePingAfricaResponse(response.getBody());
+            if (detail == null) {
+                return SendResult.sent("ping_africa");
+            }
+            log.warn("Ping Africa rejected for {}: {}", mask(toE164), detail);
+            return SendResult.failed(detail);
+        } catch (Exception ex) {
+            log.warn("Ping Africa SMS failed: {}", ex.getMessage());
+            return SendResult.failed("error");
+        }
+    }
+
+    /**
+     * @return null when accepted; otherwise a short failure detail. Ping answers
+     *     {@code 201 { success: true, message: { id, status } }} on success.
+     */
+    private String parsePingAfricaResponse(String rawBody) {
+        if (rawBody == null || rawBody.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(rawBody);
+            JsonNode success = root.get("success");
+            if (success != null && success.isBoolean() && !success.asBoolean()) {
+                String detail = parsePingAfricaError(rawBody);
+                return detail == null ? "rejected" : detail;
+            }
+            return null;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    /** Best-effort provider explanation from an error body ({@code error} / {@code message} / {@code messages}). */
+    private String parsePingAfricaError(String rawBody) {
+        if (rawBody == null || rawBody.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(rawBody);
+            JsonNode error = root.get("error");
+            if (error != null && !error.isNull()) {
+                String text = error.isTextual() ? error.asText().trim() : error.toString();
+                if (!text.isBlank()) {
+                    return truncate(text);
+                }
+            }
+            JsonNode message = root.get("message");
+            if (message != null && message.isTextual()) {
+                return truncate(message.asText(""));
+            }
+            JsonNode messages = root.get("messages");
+            if (messages != null && messages.isArray() && !messages.isEmpty()) {
+                JsonNode first = messages.get(0);
+                String text = first.isTextual() ? first.asText("") : first.toString();
+                return truncate(text.isBlank() ? messages.toString() : text);
+            }
+            if (message != null && message.isObject()) {
+                String status = message.path("status").asText("");
+                return status.isBlank() ? null : truncate(status);
+            }
+            return null;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private static String stripBearerPrefix(String token) {
+        if (token == null) {
+            return "";
+        }
+        return token.trim().replaceFirst("(?i)^Bearer\\s+", "").trim();
+    }
+
+    private static String stripTrailingSlashes(String url) {
+        if (url == null) {
+            return "";
+        }
+        return url.trim().replaceAll("/+$", "");
     }
 
     /**

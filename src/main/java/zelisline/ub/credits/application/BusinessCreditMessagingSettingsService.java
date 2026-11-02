@@ -19,6 +19,7 @@ import zelisline.ub.messaging.domain.SmsSendReason;
 import zelisline.ub.payments.infrastructure.CredentialEncryptionService;
 import zelisline.ub.platform.application.PlatformIntegrationSettingsService;
 import zelisline.ub.platform.application.ResolvedMetaWhatsAppConfig;
+import zelisline.ub.platform.application.ResolvedPingAfricaSmsConfig;
 import zelisline.ub.platform.application.ResolvedRapidApiWhatsappConfig;
 import zelisline.ub.platform.application.ResolvedSozuriSmsConfig;
 import zelisline.ub.platform.application.ResolvedTextSmsConfig;
@@ -133,6 +134,9 @@ public class BusinessCreditMessagingSettingsService {
                 source.smsTextsmsApiKey(),
                 source.smsTextsmsShortcode(),
                 source.smsTextsmsApiUrl(),
+                source.smsPingAfricaApiKey(),
+                source.smsPingAfricaBaseUrl(),
+                source.smsPingAfricaSenderId(),
                 source.secretsReadable(),
                 source.secretsReadError(),
                 businessId,
@@ -152,6 +156,8 @@ public class BusinessCreditMessagingSettingsService {
                 platformIntegrationSettingsService.resolveSozuriSms();
         ResolvedTextSmsConfig platformTextSms =
                 platformIntegrationSettingsService.resolveTextSms();
+        ResolvedPingAfricaSmsConfig platformPingAfrica =
+                platformIntegrationSettingsService.resolvePingAfricaSms();
         ResolvedMetaWhatsAppConfig platformMeta =
                 platformIntegrationSettingsService.resolveMetaWhatsApp();
         String smsProvider = firstNonBlank(platformSms.provider(), env.sms().provider(), "none");
@@ -163,6 +169,8 @@ public class BusinessCreditMessagingSettingsService {
             } else if (platformSms.project() != null && !platformSms.project().isBlank()
                     && platformSms.apiKey() != null && !platformSms.apiKey().isBlank()) {
                 smsProvider = "sozuri";
+            } else if (platformPingAfrica.pingAfricaReady()) {
+                smsProvider = "ping_africa";
             }
         }
         return new TenantMessagingConfig(
@@ -189,6 +197,9 @@ public class BusinessCreditMessagingSettingsService {
                 trimToNull(platformTextSms.apiKey()),
                 trimToNull(platformTextSms.shortcode()),
                 firstNonBlank(platformTextSms.apiUrl(), "https://sms.textsms.co.ke/api/services/sendsms/"),
+                trimToNull(platformPingAfrica.apiKey()),
+                firstNonBlank(platformPingAfrica.baseUrl(), "https://bulk.ping.africa/api"),
+                trimToNull(platformPingAfrica.senderId()),
                 true,
                 null,
                 null,
@@ -208,6 +219,8 @@ public class BusinessCreditMessagingSettingsService {
                 platformIntegrationSettingsService.resolveSozuriSms();
         ResolvedTextSmsConfig platformTextSms =
                 platformIntegrationSettingsService.resolveTextSms();
+        ResolvedPingAfricaSmsConfig platformPingAfrica =
+                platformIntegrationSettingsService.resolvePingAfricaSms();
         ResolvedMetaWhatsAppConfig platformMeta =
                 platformIntegrationSettingsService.resolveMetaWhatsApp();
         String paymentUrl = firstNonBlank(
@@ -236,6 +249,8 @@ public class BusinessCreditMessagingSettingsService {
                     && (decryptOrNull(s.getSmsSozuriApiKeyEnc()) != null
                             || (platformSms.apiKey() != null && !platformSms.apiKey().isBlank()))) {
                 smsProvider = "sozuri";
+            } else if (platformPingAfrica.pingAfricaReady() || tenantPingAfricaReady(s)) {
+                smsProvider = "ping_africa";
             }
         }
         // D5: platform keys (super-admin) are authoritative; per-business columns are
@@ -290,6 +305,12 @@ public class BusinessCreditMessagingSettingsService {
                         trimToNull(s.getSmsTextsmsApiUrl()),
                         platformTextSms.apiUrl(),
                         "https://sms.textsms.co.ke/api/services/sendsms/"),
+                firstNonBlank(decryptOrNull(s.getSmsPingAfricaApiKeyEnc()), platformPingAfrica.apiKey()),
+                firstNonBlank(
+                        trimToNull(s.getSmsPingAfricaBaseUrl()),
+                        platformPingAfrica.baseUrl(),
+                        "https://bulk.ping.africa/api"),
+                firstNonBlank(trimToNull(s.getSmsPingAfricaSenderId()), platformPingAfrica.senderId()),
                 true,
                 null,
                 businessId,
@@ -335,6 +356,9 @@ public class BusinessCreditMessagingSettingsService {
                 tenant.smsTextsmsApiKey(),
                 tenant.smsTextsmsShortcode(),
                 tenant.smsTextsmsApiUrl(),
+                tenant.smsPingAfricaApiKey(),
+                tenant.smsPingAfricaBaseUrl(),
+                tenant.smsPingAfricaSenderId(),
                 tenant.secretsReadable(),
                 tenant.secretsReadError(),
                 tenant.businessId(),
@@ -369,6 +393,9 @@ public class BusinessCreditMessagingSettingsService {
                 platform.smsTextsmsApiKey(),
                 platform.smsTextsmsShortcode(),
                 platform.smsTextsmsApiUrl(),
+                platform.smsPingAfricaApiKey(),
+                platform.smsPingAfricaBaseUrl(),
+                platform.smsPingAfricaSenderId(),
                 tenant.secretsReadable(),
                 tenant.secretsReadError(),
                 tenant.businessId(),
@@ -405,6 +432,9 @@ public class BusinessCreditMessagingSettingsService {
                 firstNonBlank(tenant.smsTextsmsApiKey(), platform.smsTextsmsApiKey()),
                 firstNonBlank(tenant.smsTextsmsShortcode(), platform.smsTextsmsShortcode()),
                 firstNonBlank(tenant.smsTextsmsApiUrl(), platform.smsTextsmsApiUrl()),
+                firstNonBlank(tenant.smsPingAfricaApiKey(), platform.smsPingAfricaApiKey()),
+                firstNonBlank(tenant.smsPingAfricaBaseUrl(), platform.smsPingAfricaBaseUrl()),
+                firstNonBlank(tenant.smsPingAfricaSenderId(), platform.smsPingAfricaSenderId()),
                 tenant.secretsReadable(),
                 tenant.secretsReadError(),
                 tenant.businessId(),
@@ -434,6 +464,9 @@ public class BusinessCreditMessagingSettingsService {
                     merged.smsTextsmsApiKey(),
                     merged.smsTextsmsShortcode(),
                     merged.smsTextsmsApiUrl(),
+                    merged.smsPingAfricaApiKey(),
+                    merged.smsPingAfricaBaseUrl(),
+                    merged.smsPingAfricaSenderId(),
                     merged.secretsReadable(),
                     merged.secretsReadError(),
                     merged.businessId(),
@@ -447,14 +480,16 @@ public class BusinessCreditMessagingSettingsService {
         if (body.paymentAccountUrl() == null || body.paymentAccountUrl().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payment account URL is required");
         }
+        BusinessCreditSettings s = businessCreditSettingsService.resolveForBusiness(businessId);
         String smsProvider = body.smsProvider() == null ? "none" : body.smsProvider().trim().toLowerCase();
         if (!"none".equals(smsProvider)
                 && !"africas_talking".equals(smsProvider)
                 && !"sozuri".equals(smsProvider)
-                && !"textsms".equals(smsProvider)) {
+                && !"textsms".equals(smsProvider)
+                && !"ping_africa".equals(smsProvider)) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "SMS provider must be none, africas_talking, sozuri, or textsms");
+                    "SMS provider must be none, africas_talking, sozuri, textsms, or ping_africa");
         }
         if ("africas_talking".equals(smsProvider)) {
             if (body.smsAfricasTalkingUsername() == null || body.smsAfricasTalkingUsername().isBlank()) {
@@ -495,8 +530,19 @@ public class BusinessCreditMessagingSettingsService {
                         "TextSMS shortcode / sender ID required (set here or in Super Admin → Platform integrations)");
             }
         }
+        if ("ping_africa".equals(smsProvider)) {
+            ResolvedPingAfricaSmsConfig platformPingAfrica =
+                    platformIntegrationSettingsService.resolvePingAfricaSms();
+            String token = blankToNull(body.smsPingAfricaApiKey());
+            // Blank token on the form means "keep the saved one" — only complain when the
+            // shop has no stored Ping Africa token and the platform has none either.
+            if (token == null && !platformPingAfrica.pingAfricaReady() && !tenantPingAfricaReady(s)) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Ping Africa API token required (set here or in Super Admin → Platform integrations)");
+            }
+        }
 
-        BusinessCreditSettings s = businessCreditSettingsService.resolveForBusiness(businessId);
         s.setCreditSaleReminderEnabled(body.enabled());
         s.setCreditSaleReminderPaymentUrl(body.paymentAccountUrl().trim());
         applyWhatsAppNumber(s, body);
@@ -520,6 +566,10 @@ public class BusinessCreditMessagingSettingsService {
             s.setSmsTextsmsPartnerId(blankToNull(body.smsTextsmsPartnerId()));
             s.setSmsTextsmsShortcode(blankToNull(body.smsTextsmsShortcode()));
             s.setSmsTextsmsApiUrl(blankToNull(body.smsTextsmsApiUrl()));
+        }
+        if ("ping_africa".equals(smsProvider)) {
+            s.setSmsPingAfricaBaseUrl(blankToNull(body.smsPingAfricaBaseUrl()));
+            s.setSmsPingAfricaSenderId(blankToNull(body.smsPingAfricaSenderId()));
         }
 
         if (body.rapidApiKey() != null) {
@@ -554,6 +604,9 @@ public class BusinessCreditMessagingSettingsService {
         }
         if (body.smsTextsmsApiKey() != null) {
             s.setSmsTextsmsApiKeyEnc(encryptOrClear(body.smsTextsmsApiKey()));
+        }
+        if (body.smsPingAfricaApiKey() != null) {
+            s.setSmsPingAfricaApiKeyEnc(encryptOrClear(body.smsPingAfricaApiKey()));
         }
         if (body.remoteInvoiceStkAutoSettle() != null) {
             s.setRemoteInvoiceStkAutoSettle(body.remoteInvoiceStkAutoSettle());
@@ -622,6 +675,8 @@ public class BusinessCreditMessagingSettingsService {
                 platformIntegrationSettingsService.resolveSozuriSms();
         ResolvedTextSmsConfig platformTextSms =
                 platformIntegrationSettingsService.resolveTextSms();
+        ResolvedPingAfricaSmsConfig platformPingAfrica =
+                platformIntegrationSettingsService.resolvePingAfricaSms();
         return new CreditSaleReminderSettingsResponse(
                 s.isCreditSaleReminderEnabled(),
                 firstNonBlank(trimToNull(s.getCreditSaleReminderPaymentUrl()), defaultUrl),
@@ -644,6 +699,11 @@ public class BusinessCreditMessagingSettingsService {
                         trimToNull(s.getSmsTextsmsApiUrl()),
                         platformTextSms.apiUrl(),
                         "https://sms.textsms.co.ke/api/services/sendsms/"),
+                firstNonBlank(
+                        trimToNull(s.getSmsPingAfricaBaseUrl()),
+                        platformPingAfrica.baseUrl(),
+                        "https://bulk.ping.africa/api"),
+                firstNonBlank(trimToNull(s.getSmsPingAfricaSenderId()), platformPingAfrica.senderId()),
                 read.hasRapidApiKey,
                 firstNonBlank(trimToNull(s.getRapidapiHost()), platformWa.host()),
                 firstNonBlank(trimToNull(s.getRapidapiLookupUrl()), platformWa.lookupUrl()),
@@ -656,6 +716,8 @@ public class BusinessCreditMessagingSettingsService {
                 read.hasSmsSozuriApiKey || (platformSms.apiKey() != null && !platformSms.apiKey().isBlank()),
                 read.hasSmsTextsmsApiKey
                         || (platformTextSms.apiKey() != null && !platformTextSms.apiKey().isBlank()),
+                read.hasSmsPingAfricaApiKey
+                        || (platformPingAfrica.apiKey() != null && !platformPingAfrica.apiKey().isBlank()),
                 read.readable,
                 read.errorMessage,
                 s.isRemoteInvoiceStkAutoSettle());
@@ -674,6 +736,7 @@ public class BusinessCreditMessagingSettingsService {
                 hasEncrypted(s.getSmsAfricasTalkingApiKeyEnc()),
                 hasEncrypted(s.getSmsSozuriApiKeyEnc()),
                 hasEncrypted(s.getSmsTextsmsApiKeyEnc()),
+                hasEncrypted(s.getSmsPingAfricaApiKeyEnc()),
                 true,
                 persistenceHint);
     }
@@ -700,6 +763,12 @@ public class BusinessCreditMessagingSettingsService {
         }
     }
 
+    /** True when this shop saved its own readable Ping Africa token. */
+    private boolean tenantPingAfricaReady(BusinessCreditSettings s) {
+        String key = decryptOrNull(s.getSmsPingAfricaApiKeyEnc());
+        return key != null && !key.isBlank();
+    }
+
     private String defaultPaymentUrl() {
         String base = frontendBaseUrl == null ? "http://localhost:3000" : frontendBaseUrl.trim();
         if (base.endsWith("/")) {
@@ -712,6 +781,7 @@ public class BusinessCreditMessagingSettingsService {
         return new TenantMessagingConfig(
                 false, "", null, null, null, null, false, null, null, null, "none", "none",
                 null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null,
                 readError == null, readError, null, null);
     }
 
@@ -741,6 +811,7 @@ public class BusinessCreditMessagingSettingsService {
             boolean hasSmsAtApiKey,
             boolean hasSmsSozuriApiKey,
             boolean hasSmsTextsmsApiKey,
+            boolean hasSmsPingAfricaApiKey,
             boolean readable,
             String errorMessage
     ) {

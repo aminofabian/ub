@@ -32,6 +32,9 @@ public record TenantMessagingConfig(
         String smsTextsmsApiKey,
         String smsTextsmsShortcode,
         String smsTextsmsApiUrl,
+        String smsPingAfricaApiKey,
+        String smsPingAfricaBaseUrl,
+        String smsPingAfricaSenderId,
         boolean secretsReadable,
         String secretsReadError,
         String businessId,
@@ -62,8 +65,8 @@ public record TenantMessagingConfig(
     /**
      * Provider used for send routing. Prefer a declared provider that has credentials;
      * otherwise infer from whichever credential set is complete. This covers cases where
-     * TextSMS/Sozuri keys were saved (or come from env) but {@code smsProvider} stayed
-     * {@code none}.
+     * TextSMS/Sozuri/Ping Africa keys were saved (or come from env) but {@code smsProvider}
+     * stayed {@code none}.
      */
     public String effectiveSmsProvider() {
         String declared = smsProvider == null ? "none" : smsProvider.trim().toLowerCase();
@@ -76,6 +79,9 @@ public record TenantMessagingConfig(
         if ("africas_talking".equals(declared) && africasTalkingCredentialsReady()) {
             return "africas_talking";
         }
+        if ("ping_africa".equals(declared) && pingAfricaCredentialsReady()) {
+            return "ping_africa";
+        }
         if (textsmsCredentialsReady()) {
             return "textsms";
         }
@@ -84,6 +90,9 @@ public record TenantMessagingConfig(
         }
         if (africasTalkingCredentialsReady()) {
             return "africas_talking";
+        }
+        if (pingAfricaCredentialsReady()) {
+            return "ping_africa";
         }
         return declared.isBlank() ? "none" : declared;
     }
@@ -94,6 +103,7 @@ public record TenantMessagingConfig(
             case "textsms" -> textsmsCredentialsReady();
             case "sozuri" -> sozuriCredentialsReady();
             case "africas_talking" -> africasTalkingCredentialsReady();
+            case "ping_africa" -> pingAfricaCredentialsReady();
             default -> false;
         };
     }
@@ -110,6 +120,11 @@ public record TenantMessagingConfig(
         return present(smsUsername) && present(smsApiKey);
     }
 
+    /** Ping Africa needs only the Bearer token; base URL and sender ID are optional. */
+    public boolean pingAfricaCredentialsReady() {
+        return present(smsPingAfricaApiKey);
+    }
+
     /** Operator-facing hint when {@link #smsConfigured()} is false (no secrets). */
     public String smsNotConfiguredHint() {
         String declared = smsProvider == null ? "none" : smsProvider.trim();
@@ -119,6 +134,15 @@ public record TenantMessagingConfig(
         boolean textsmsKey = present(smsTextsmsApiKey);
         boolean sozuriProject = present(smsSozuriProject);
         boolean sozuriKey = present(smsSozuriApiKey);
+        boolean pingAfricaKey = present(smsPingAfricaApiKey);
+        if ("ping_africa".equalsIgnoreCase(declared) || "ping_africa".equalsIgnoreCase(effective)) {
+            if (!pingAfricaKey) {
+                return "Ping Africa is selected but the API token is missing or could not be"
+                        + " decrypted. Open Super Admin → Platform integrations, paste the Ping"
+                        + " Africa API token, save, then retry (or set it under Customers →"
+                        + " messaging).";
+            }
+        }
         if ("textsms".equalsIgnoreCase(declared) || "textsms".equalsIgnoreCase(effective)) {
             java.util.List<String> missing = new java.util.ArrayList<>();
             if (!partner) {
@@ -147,14 +171,14 @@ public record TenantMessagingConfig(
                     + " Re-save the Sozuri API key under Super Admin → Platform integrations"
                     + " (or Customers → messaging), then retry.";
         }
-        if ("none".equalsIgnoreCase(declared) && !partner && !sozuriProject) {
-            return "SMS provider is still \"none\". Choose TextSMS or Sozuri under Super Admin →"
-                    + " Platform integrations (or Customers → messaging), fill the credentials,"
-                    + " save, then retry.";
+        if ("none".equalsIgnoreCase(declared) && !partner && !sozuriProject && !pingAfricaKey) {
+            return "SMS provider is still \"none\". Choose TextSMS, Sozuri, or Ping Africa under"
+                    + " Super Admin → Platform integrations (or Customers → messaging), fill the"
+                    + " credentials, save, then retry.";
         }
-        return "SMS must be configured to send verification codes. Set Sozuri or TextSMS under"
-                + " Super Admin → Platform integrations, or under Customers → messaging"
-                + " settings, then retry. (provider=" + declared + ")";
+        return "SMS must be configured to send verification codes. Set TextSMS, Sozuri, Ping Africa,"
+                + " or Africa's Talking under Super Admin → Platform integrations, or under"
+                + " Customers → messaging settings, then retry. (provider=" + declared + ")";
     }
 
     private static boolean present(String value) {

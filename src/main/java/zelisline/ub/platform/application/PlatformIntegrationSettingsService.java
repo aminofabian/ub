@@ -22,6 +22,7 @@ public class PlatformIntegrationSettingsService {
     private static final String DEFAULT_PHONE_FIELD = "phone";
     private static final String DEFAULT_SOZURI_URL = "https://sozuri.net/api/v1/messaging";
     private static final String DEFAULT_TEXTSMS_URL = "https://sms.textsms.co.ke/api/services/sendsms/";
+    private static final String DEFAULT_PINGAFRICA_URL = "https://bulk.ping.africa/api";
     private static final String DEFAULT_GRAPH_VERSION = "v25.0";
 
     private final PlatformIntegrationSettingsRepository repository;
@@ -74,7 +75,8 @@ public class PlatformIntegrationSettingsService {
                 if (!"none".equals(provider)
                         && !"africas_talking".equals(provider)
                         && !"sozuri".equals(provider)
-                        && !"textsms".equals(provider)) {
+                        && !"textsms".equals(provider)
+                        && !"ping_africa".equals(provider)) {
                     provider = "none";
                 }
             }
@@ -114,6 +116,15 @@ public class PlatformIntegrationSettingsService {
         if (body.textsmsApiUrl() != null) {
             row.setTextsmsApiUrl(blankToNull(body.textsmsApiUrl()));
         }
+        if (body.pingAfricaApiKey() != null) {
+            row.setPingAfricaApiKeyEnc(encryptOrClear(body.pingAfricaApiKey()));
+        }
+        if (body.pingAfricaBaseUrl() != null) {
+            row.setPingAfricaBaseUrl(blankToNull(body.pingAfricaBaseUrl()));
+        }
+        if (body.pingAfricaSenderId() != null) {
+            row.setPingAfricaSenderId(blankToNull(body.pingAfricaSenderId()));
+        }
         if (body.whatsappMetaAccessToken() != null) {
             row.setWhatsappMetaAccessTokenEnc(encryptOrClear(body.whatsappMetaAccessToken()));
         }
@@ -140,14 +151,35 @@ public class PlatformIntegrationSettingsService {
             row.setGoogleOauthClientSecretEnc(encryptOrClear(body.googleOauthClientSecret()));
         }
         SecretRead secrets = readSecrets(row);
-        validateSmsProvider(row, secrets);
+        validateSmsProvider(row, secrets, body.smsProvider() != null);
         row.setUpdatedAt(Instant.now());
         PlatformIntegrationSettings saved = repository.save(row);
         return toResponse(saved, readSecrets(saved));
     }
 
-    private void validateSmsProvider(PlatformIntegrationSettings row, SecretRead secrets) {
+    /**
+     * Enforce the selected provider's required credentials. Only runs when the request
+     * chooses a provider — a follow-up save that just clears a stale secret (e.g. the
+     * "remove key" action sends only the secret field) must not be blocked by it.
+     */
+    private void validateSmsProvider(
+            PlatformIntegrationSettings row,
+            SecretRead secrets,
+            boolean providerSelected
+    ) {
+        if (!providerSelected) {
+            return;
+        }
         String provider = trimToNull(row.getSmsProvider());
+        if ("ping_africa".equalsIgnoreCase(provider)) {
+            ResolvedPingAfricaSmsConfig pingAfrica = resolvePingAfricaFromRow(row, secrets);
+            if (pingAfrica.pingAfricaReady() || messagingProperties.sms().pingAfricaConfigured()) {
+                return;
+            }
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "Ping Africa API token is required when Ping Africa is the platform SMS provider");
+        }
         if (!"textsms".equalsIgnoreCase(provider)) {
             return;
         }
@@ -205,6 +237,13 @@ public class PlatformIntegrationSettingsService {
         PlatformIntegrationSettings row = loadSingleton();
         SecretRead secrets = readSecrets(row);
         return resolveTextSmsFromRow(row, secrets);
+    }
+
+    @Transactional(readOnly = true)
+    public ResolvedPingAfricaSmsConfig resolvePingAfricaSms() {
+        PlatformIntegrationSettings row = loadSingleton();
+        SecretRead secrets = readSecrets(row);
+        return resolvePingAfricaFromRow(row, secrets);
     }
 
     @Transactional(readOnly = true)
@@ -271,6 +310,7 @@ public class PlatformIntegrationSettingsService {
         ResolvedRapidApiWhatsappConfig wa = resolveWhatsappFromRow(row, secrets, msgEnv);
         ResolvedSozuriSmsConfig sozuri = resolveSozuriFromRow(row, secrets);
         ResolvedTextSmsConfig textsms = resolveTextSmsFromRow(row, secrets);
+        ResolvedPingAfricaSmsConfig pingAfrica = resolvePingAfricaFromRow(row, secrets);
         ResolvedMetaWhatsAppConfig meta = resolveMetaWhatsAppFromRow(row, secrets);
         String googleClientId = trimToNull(row.getGoogleOauthClientId());
         return new PlatformIntegrationsResponse(
@@ -293,6 +333,9 @@ public class PlatformIntegrationSettingsService {
                 textsms.shortcode(),
                 textsms.apiUrl(),
                 secrets.hasTextsmsApiKey,
+                pingAfrica.baseUrl(),
+                pingAfrica.senderId(),
+                secrets.hasPingAfricaApiKey,
                 secrets.hasWhatsappMetaAccessToken,
                 meta.phoneNumberId(),
                 meta.graphVersion(),
@@ -306,6 +349,7 @@ public class PlatformIntegrationSettingsService {
                 envHasRapidApiWhatsappKey(msgEnv),
                 envHasSozuriKey(messagingProperties.sms()),
                 envHasTextsmsKey(messagingProperties.sms()),
+                envHasPingAfricaKey(messagingProperties.sms()),
                 messagingProperties.metaWhatsApp().configured(),
                 secrets.readable,
                 secrets.errorMessage,
@@ -367,6 +411,26 @@ public class PlatformIntegrationSettingsService {
         String apiUrl =
                 firstNonBlank(trimToNull(row.getTextsmsApiUrl()), env.textsmsApiUrl(), DEFAULT_TEXTSMS_URL);
         return new ResolvedTextSmsConfig(partnerId, apiKey, shortcode, apiUrl);
+    }
+
+    private ResolvedPingAfricaSmsConfig resolvePingAfricaFromRow(
+            PlatformIntegrationSettings row,
+            SecretRead secrets
+    ) {
+        var env = messagingProperties.sms();
+        String provider = firstNonBlank(trimToNull(row.getSmsProvider()), env.provider(), "none");
+        String apiKey =
+                secrets.readable
+                        ? firstNonBlank(secrets.pingAfricaApiKey, env.pingAfricaApiKey())
+                        : blankToNull(env.pingAfricaApiKey());
+        String baseUrl =
+                firstNonBlank(
+                        trimToNull(row.getPingAfricaBaseUrl()),
+                        env.pingAfricaBaseUrl(),
+                        DEFAULT_PINGAFRICA_URL);
+        String senderId =
+                firstNonBlank(trimToNull(row.getPingAfricaSenderId()), env.pingAfricaSenderId());
+        return new ResolvedPingAfricaSmsConfig(provider, apiKey, baseUrl, senderId);
     }
 
     private ResolvedMetaWhatsAppConfig resolveMetaWhatsAppFromRow(
@@ -451,6 +515,7 @@ public class PlatformIntegrationSettingsService {
                     hasEncrypted(row.getRapidapiWhatsappKeyEnc()),
                     hasEncrypted(row.getSozuriApiKeyEnc()),
                     hasEncrypted(row.getTextsmsApiKeyEnc()),
+                    hasEncrypted(row.getPingAfricaApiKeyEnc()),
                     hasEncrypted(row.getWhatsappMetaAccessTokenEnc()),
                     hasEncrypted(row.getWhatsappMetaWebhookVerifyTokenEnc()),
                     hasEncrypted(row.getWhatsappMetaAppSecretEnc()),
@@ -459,6 +524,7 @@ public class PlatformIntegrationSettingsService {
                     decryptOrNull(row.getRapidapiWhatsappKeyEnc()),
                     decryptOrNull(row.getSozuriApiKeyEnc()),
                     decryptOrNull(row.getTextsmsApiKeyEnc()),
+                    decryptOrNull(row.getPingAfricaApiKeyEnc()),
                     decryptOrNull(row.getWhatsappMetaAccessTokenEnc()),
                     decryptOrNull(row.getWhatsappMetaWebhookVerifyTokenEnc()),
                     decryptOrNull(row.getWhatsappMetaAppSecretEnc()),
@@ -471,10 +537,12 @@ public class PlatformIntegrationSettingsService {
                     hasEncrypted(row.getRapidapiWhatsappKeyEnc()),
                     hasEncrypted(row.getSozuriApiKeyEnc()),
                     hasEncrypted(row.getTextsmsApiKeyEnc()),
+                    hasEncrypted(row.getPingAfricaApiKeyEnc()),
                     hasEncrypted(row.getWhatsappMetaAccessTokenEnc()),
                     hasEncrypted(row.getWhatsappMetaWebhookVerifyTokenEnc()),
                     hasEncrypted(row.getWhatsappMetaAppSecretEnc()),
                     hasEncrypted(row.getGoogleOauthClientSecretEnc()),
+                    null,
                     null,
                     null,
                     null,
@@ -535,6 +603,10 @@ public class PlatformIntegrationSettingsService {
         return env.textsmsApiKey() != null && !env.textsmsApiKey().isBlank();
     }
 
+    private static boolean envHasPingAfricaKey(MessagingProperties.Sms env) {
+        return env.pingAfricaApiKey() != null && !env.pingAfricaApiKey().isBlank();
+    }
+
     private static String trimToNull(String value) {
         if (value == null) {
             return null;
@@ -562,6 +634,7 @@ public class PlatformIntegrationSettingsService {
             boolean hasRapidapiWhatsappKey,
             boolean hasSozuriApiKey,
             boolean hasTextsmsApiKey,
+            boolean hasPingAfricaApiKey,
             boolean hasWhatsappMetaAccessToken,
             boolean hasWhatsappMetaWebhookVerifyToken,
             boolean hasWhatsappMetaAppSecret,
@@ -570,6 +643,7 @@ public class PlatformIntegrationSettingsService {
             String rapidapiWhatsappKey,
             String sozuriApiKey,
             String textsmsApiKey,
+            String pingAfricaApiKey,
             String whatsappMetaAccessToken,
             String whatsappMetaWebhookVerifyToken,
             String whatsappMetaAppSecret,

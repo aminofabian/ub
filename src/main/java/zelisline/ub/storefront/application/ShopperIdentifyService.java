@@ -115,8 +115,8 @@ public class ShopperIdentifyService {
         if (!messaging.smsConfigured()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "SMS must be configured to send verification codes. Set Sozuri or TextSMS under"
-                            + " Super Admin → Platform integrations.");
+                    "SMS must be configured to send verification codes. Set TextSMS, Sozuri, Ping Africa,"
+                            + " or Africa's Talking under Super Admin → Platform integrations.");
         }
 
         String message = "Your Kiosk verification code is " + code + ". Valid for 10 minutes.";

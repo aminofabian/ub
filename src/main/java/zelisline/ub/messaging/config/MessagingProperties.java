@@ -25,7 +25,8 @@ public record MessagingProperties(
             sms = new Sms(
                     "none", "", "",
                     "", "", "Sozuri", "transactional", "https://sozuri.net/api/v1/messaging",
-                    "", "", "", "https://sms.textsms.co.ke/api/services/sendsms/");
+                    "", "", "", "https://sms.textsms.co.ke/api/services/sendsms/",
+                    "", "https://bulk.ping.africa/api", "");
         }
         if (credits == null) {
             credits = new Credits(true);
@@ -83,7 +84,10 @@ public record MessagingProperties(
             String textsmsPartnerId,
             String textsmsApiKey,
             String textsmsShortcode,
-            String textsmsApiUrl
+            String textsmsApiUrl,
+            String pingAfricaApiKey,
+            String pingAfricaBaseUrl,
+            String pingAfricaSenderId
     ) {
         public boolean africasTalkingConfigured() {
             return "africas_talking".equalsIgnoreCase(provider)
@@ -102,6 +106,12 @@ public record MessagingProperties(
                     && textsmsPartnerId != null && !textsmsPartnerId.isBlank()
                     && textsmsApiKey != null && !textsmsApiKey.isBlank()
                     && textsmsShortcode != null && !textsmsShortcode.isBlank();
+        }
+
+        /** Ping Africa only needs a Bearer token; sender ID and base URL have defaults. */
+        public boolean pingAfricaConfigured() {
+            return "ping_africa".equalsIgnoreCase(provider)
+                    && pingAfricaApiKey != null && !pingAfricaApiKey.isBlank();
         }
     }
 }

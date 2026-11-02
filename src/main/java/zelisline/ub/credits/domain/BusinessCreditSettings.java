@@ -106,6 +106,18 @@ public class BusinessCreditSettings {
     @Column(name = "sms_textsms_api_url", length = 512)
     private String smsTextsmsApiUrl;
 
+    /** Ping Africa Bulk SMS Bearer token for this shop (encrypted). */
+    @Column(name = "sms_pingafrica_api_key_enc", columnDefinition = "TEXT")
+    private String smsPingAfricaApiKeyEnc;
+
+    /** Ping Africa API root; blank inherits the platform/default endpoint. */
+    @Column(name = "sms_pingafrica_base_url", length = 512)
+    private String smsPingAfricaBaseUrl;
+
+    /** Optional alphanumeric sender ID registered on Ping Africa. */
+    @Column(name = "sms_pingafrica_sender_id", length = 64)
+    private String smsPingAfricaSenderId;
+
     /**
      * When true (default), remote grocery invoice STK success auto-pays the invoice.
      * When false, STK only notifies the till; cashier must clear manually.

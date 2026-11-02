@@ -413,7 +413,7 @@ public class CreditSaleReminderService {
                     "sms_only_test",
                     "sms",
                     "skipped",
-                    "Configure Sozuri or Africa's Talking in Platform integrations or Credit tab reminders, save, then retry.",
+                    "Configure TextSMS, Sozuri, or Ping Africa in Platform integrations or Credit tab reminders, save, then retry.",
                     message);
         }
 

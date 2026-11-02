@@ -3,6 +3,7 @@ package zelisline.ub.platform.api;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -20,14 +22,22 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.integrations.whatsapp.application.MetaWhatsAppAppSecretVerifier;
 import zelisline.ub.integrations.whatsapp.application.MetaWhatsAppNumberResolver;
 import zelisline.ub.integrations.whatsapp.application.MetaWhatsAppWabaProvisioner;
+import zelisline.ub.messaging.application.CustomerMessageDispatcher;
+import zelisline.ub.messaging.application.TenantMessagingConfig;
+import zelisline.ub.messaging.infrastructure.PingAfricaApiClient;
+import zelisline.ub.payments.application.StkPhoneNormalizer;
+import zelisline.ub.platform.api.dto.PingAfricaCreditsResponse;
 import zelisline.ub.platform.api.dto.PlatformIntegrationsResponse;
 import zelisline.ub.platform.api.dto.PlatformWhatsAppAppSecretDtos.AddAppSecretRequest;
 import zelisline.ub.platform.api.dto.PlatformWhatsAppAppSecretDtos.AppSecretRow;
+import zelisline.ub.platform.api.dto.TestPingAfricaSmsRequest;
+import zelisline.ub.platform.api.dto.TestPingAfricaSmsResponse;
 import zelisline.ub.platform.api.dto.UpdatePlatformIntegrationsRequest;
 import zelisline.ub.platform.api.dto.VerifyMetaWhatsAppAppSecretRequest;
 import zelisline.ub.platform.api.dto.VerifyMetaWhatsAppAppSecretResponse;
 import zelisline.ub.platform.application.PlatformIntegrationSettingsService;
 import zelisline.ub.platform.application.PlatformWhatsAppAppSecretService;
+import zelisline.ub.platform.application.ResolvedPingAfricaSmsConfig;
 
 @Validated
 @RestController
@@ -40,6 +50,8 @@ public class SuperAdminPlatformIntegrationsController {
     private final PlatformWhatsAppAppSecretService platformWhatsAppAppSecretService;
     private final MetaWhatsAppNumberResolver metaWhatsAppNumberResolver;
     private final MetaWhatsAppWabaProvisioner metaWhatsAppWabaProvisioner;
+    private final PingAfricaApiClient pingAfricaApiClient;
+    private final CustomerMessageDispatcher customerMessageDispatcher;
 
     @GetMapping
     public PlatformIntegrationsResponse get() {
@@ -49,6 +61,107 @@ public class SuperAdminPlatformIntegrationsController {
     @PutMapping
     public PlatformIntegrationsResponse update(@Valid @RequestBody UpdatePlatformIntegrationsRequest body) {
         return platformIntegrationSettingsService.update(body);
+    }
+
+    /**
+     * Live Ping Africa organization credit balance ({@code GET /credits/balance}).
+     * Uses the saved platform token — save Integrations first if you just pasted a new key.
+     */
+    @GetMapping("/ping-africa/credits")
+    public PingAfricaCreditsResponse pingAfricaCredits() {
+        ResolvedPingAfricaSmsConfig ping = platformIntegrationSettingsService.resolvePingAfricaSms();
+        String apiKey = trimToNull(ping.apiKey());
+        if (apiKey == null) {
+            return new PingAfricaCreditsResponse(
+                    false, null, "Ping Africa API token is not configured", 0, false);
+        }
+        PingAfricaApiClient.CreditsResult result =
+                pingAfricaApiClient.fetchCredits(apiKey, ping.baseUrl());
+        return new PingAfricaCreditsResponse(
+                result.ok(), result.balance(), result.detail(), result.httpStatus(), true);
+    }
+
+    /**
+     * One-off SMS via the saved Ping Africa credentials (ignores the selected default
+     * provider so you can verify Ping Africa before switching tenants over).
+     */
+    @PostMapping("/ping-africa/test-sms")
+    public TestPingAfricaSmsResponse testPingAfricaSms(@Valid @RequestBody TestPingAfricaSmsRequest body) {
+        ResolvedPingAfricaSmsConfig ping = platformIntegrationSettingsService.resolvePingAfricaSms();
+        String apiKey = trimToNull(ping.apiKey());
+        if (apiKey == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Ping Africa API token is not configured — paste it under SMS fallback and save first");
+        }
+        String digits = StkPhoneNormalizer.normalize(body.phone());
+        if (digits == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Enter a valid Kenyan mobile number (e.g. 07XX XXX XXX or +254…)");
+        }
+        TenantMessagingConfig messaging = pingAfricaOnlyConfig(ping);
+        String message = "Kiosk Ping Africa test SMS — credentials are working.";
+        CustomerMessageDispatcher.DeliveryResult delivery =
+                customerMessageDispatcher.deliverSmsOnly(messaging, digits, message);
+        if ("failed".equals(delivery.outcome()) || "skipped".equals(delivery.outcome())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    delivery.detail() != null && !delivery.detail().isBlank()
+                            ? delivery.detail()
+                            : "Test SMS could not be delivered");
+        }
+        Double balanceAfter = null;
+        PingAfricaApiClient.CreditsResult credits =
+                pingAfricaApiClient.fetchCredits(apiKey, ping.baseUrl());
+        if (credits.ok()) {
+            balanceAfter = credits.balance();
+        }
+        return new TestPingAfricaSmsResponse(
+                delivery.channel(),
+                delivery.outcome(),
+                delivery.detail(),
+                maskPhone(digits),
+                balanceAfter);
+    }
+
+    /** Platform-scoped Ping Africa config (no tenant SMS credit metering). */
+    private static TenantMessagingConfig pingAfricaOnlyConfig(ResolvedPingAfricaSmsConfig ping) {
+        return new TenantMessagingConfig(
+                true,
+                null,
+                null,
+                null,
+                null,
+                null,
+                false,
+                null,
+                null,
+                null,
+                null,
+                "ping_africa",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                trimToNull(ping.apiKey()),
+                ping.baseUrl(),
+                trimToNull(ping.senderId()),
+                true,
+                null,
+                null,
+                null);
+    }
+
+    private static String maskPhone(String phone) {
+        if (phone == null || phone.length() <= 6) {
+            return "***";
+        }
+        return phone.substring(0, 4) + "…" + phone.substring(phone.length() - 2);
     }
 
     /**

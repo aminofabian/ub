@@ -2,6 +2,7 @@ package zelisline.ub.support.application;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -362,13 +363,9 @@ public class SupportService {
         String phone = normalizePhone(order.getCustomerPhone());
         String name = trimTo(order.getCustomerName(), 120);
 
-        SupportConversation conversation = null;
-        if (phone != null) {
-            conversation = conversationRepository
-                    .findFirstByConversationTypeAndBusinessIdAndGuestPhoneOrderByLastMessageAtDescCreatedAtDesc(
-                            SupportConversation.TYPE_STOREFRONT, businessId, phone)
-                    .orElse(null);
-        }
+        SupportConversation conversation = phone == null
+                ? null
+                : firstStorefrontThreadForPhone(businessId, phone);
         if (conversation != null) {
             if (name != null && !name.isBlank()) {
                 conversation.setGuestName(name);
@@ -419,16 +416,27 @@ public class SupportService {
         } catch (DataIntegrityViolationException ex) {
             // Race — reload by phone/guest id.
             if (phone != null) {
-                return conversationRepository
-                        .findFirstByConversationTypeAndBusinessIdAndGuestPhoneOrderByLastMessageAtDescCreatedAtDesc(
-                                SupportConversation.TYPE_STOREFRONT, businessId, phone)
-                        .orElseThrow(() -> ex);
+                SupportConversation existing = firstStorefrontThreadForPhone(businessId, phone);
+                if (existing != null) {
+                    return existing;
+                }
+                throw ex;
             }
             return conversationRepository
                     .findByConversationTypeAndBusinessIdAndGuestId(
                             SupportConversation.TYPE_STOREFRONT, businessId, guestId)
                     .orElseThrow(() -> ex);
         }
+    }
+
+    /** The buyer's live thread for this number, whatever form the phone was saved in. */
+    private SupportConversation firstStorefrontThreadForPhone(String businessId, String phone) {
+        return conversationRepository
+                .findAllByGuestPhoneIn(
+                        SupportConversation.TYPE_STOREFRONT, businessId, phoneLookupCandidates(phone))
+                .stream()
+                .findFirst()
+                .orElse(null);
     }
 
     private static SupportOrderCardDto toOrderCard(WebOrder order, List<WebOrderLine> lines, String branchName) {
@@ -728,15 +736,15 @@ public class SupportService {
     // ── Guest side (VISITOR / STOREFRONT threads) ──────────────────────────
 
     /**
-     * Start or resume a guest thread. The phone is the identity anchor:
+     * Start or resume a guest thread:
      * <ul>
-     *   <li>phone matches an existing thread → the visitor resumes it (one
-     *       continuous conversation per person, even from a new browser);</li>
-     *   <li>otherwise a thread for this guestId+token resumes;</li>
+     *   <li>a thread for this guestId resumes — but only when the caller
+     *       presents its secret token;</li>
      *   <li>otherwise a new thread is created and a fresh token minted.</li>
      * </ul>
-     * A different device claiming an existing phone thread adopts it and
-     * rotates the secret, so the previous device must re-identify itself.
+     * A phone number is never an entry point: reclaiming an existing transcript
+     * (after cleared storage, on a new device, or to merge a checkout's
+     * order-card thread) goes through OTP recovery — see {@link #guestRecover}.
      */
     @Transactional
     public GuestThreadDto guestStartOrResume(
@@ -826,6 +834,133 @@ public class SupportService {
         }
         refreshGuestIdentity(conversation, null, phone);
         return guestPayload(conversation, null);
+    }
+
+    /**
+     * Reclaims a guest's threads after the browser lost its token — cleared
+     * storage, a new device, or a checkout that posted the order card into a
+     * phone-keyed thread the buyer's chat never opened.
+     *
+     * <p>The caller has already proved it controls {@code verifiedPhone} with an
+     * OTP, so the phone is the identity anchor here: every thread for that
+     * number in this (type, business) is merged into one, bound to this
+     * browser's guest id, and handed a freshly minted token. Messages move with
+     * their timestamps and read watermarks so no history or unread state is
+     * invented by the merge.
+     *
+     * @return the merged thread plus its new token (always present, unlike resume)
+     */
+    @Transactional
+    public GuestThreadDto guestRecover(
+            String type, String businessId, String guestId, String verifiedPhone
+    ) {
+        requireGuestType(type);
+        String phone = normalizePhone(verifiedPhone);
+        if (phone == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "A verified phone number is required to recover a chat");
+        }
+
+        SupportConversation deviceThread = conversationRepository
+                .findByConversationTypeAndBusinessIdAndGuestId(type, businessId, guestId)
+                .orElse(null);
+        List<SupportConversation> phoneThreads = conversationRepository
+                .findAllByGuestPhoneIn(type, businessId, phoneLookupCandidates(phone));
+
+        if (phoneThreads.isEmpty() && deviceThread == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "No chat found for this number yet");
+        }
+
+        SupportConversation canonical;
+        if (phoneThreads.isEmpty()) {
+            // Nothing phone-keyed to merge — stamp the verified number on the
+            // thread this browser already has (e.g. the buyer chatted before
+            // ever placing an order).
+            canonical = deviceThread;
+        } else {
+            canonical = phoneThreads.get(0);
+            Set<String> merged = new HashSet<>();
+            merged.add(canonical.getId());
+            List<SupportConversation> sources = new ArrayList<>(phoneThreads.subList(1, phoneThreads.size()));
+            if (deviceThread != null) {
+                sources.add(deviceThread);
+            }
+            for (SupportConversation source : sources) {
+                if (source == null || !merged.add(source.getId())) {
+                    continue;
+                }
+                mergeThreadInto(canonical, source);
+            }
+            // The emptied shells must be gone before the browser's guest id moves
+            // onto the survivor: (type, business, guest_id) is unique.
+            conversationRepository.flush();
+        }
+
+        canonical.setGuestPhone(phone);
+        canonical.setGuestId(guestId);
+        if (canonical.getCreatedBy() == null || canonical.getCreatedBy().isBlank()) {
+            canonical.setCreatedBy(guestId);
+        }
+        String token = guestTokens.mintToken();
+        canonical.setGuestTokenHash(guestTokens.hash(token));
+
+        messageRepository.findTopByConversationIdOrderByCreatedAtDesc(canonical.getId()).ifPresent(latest -> {
+            Instant lastAt = canonical.getLastMessageAt();
+            if (lastAt == null || latest.getCreatedAt().isAfter(lastAt)) {
+                canonical.touchLastMessage(latest.getCreatedAt(), latest.getBody());
+            }
+        });
+        conversationRepository.save(canonical);
+
+        log.debug("Support guest thread recovered: type={} business={} guest={} phoneThreads={}",
+                type, businessId, guestId, phoneThreads.size());
+        return guestPayload(canonical, token);
+    }
+
+    /**
+     * Folds one thread into the surviving conversation: messages move under the
+     * target, read watermarks keep the later timestamp, and the emptied shell is
+     * deleted so staff see one thread, not two halves of the same person.
+     */
+    private void mergeThreadInto(SupportConversation target, SupportConversation source) {
+        if (target.getId().equals(source.getId())) {
+            return;
+        }
+        // (conversation_id, client_message_id) is unique — drop a key the target
+        // already spent before moving the row that carries it.
+        List<String> targetKeys = messageRepository.findClientMessageIds(target.getId());
+        if (!targetKeys.isEmpty()) {
+            List<String> collisions = messageRepository.findClientMessageIds(source.getId()).stream()
+                    .filter(targetKeys::contains)
+                    .toList();
+            if (!collisions.isEmpty()) {
+                messageRepository.clearClientMessageIds(source.getId(), collisions);
+            }
+        }
+        messageRepository.reassignConversation(target.getId(), source.getId());
+
+        target.setGuestLastReadAt(later(target.getGuestLastReadAt(), source.getGuestLastReadAt()));
+        target.setTenantLastReadAt(later(target.getTenantLastReadAt(), source.getTenantLastReadAt()));
+        target.setAdminLastReadAt(later(target.getAdminLastReadAt(), source.getAdminLastReadAt()));
+        Instant sourceLast = source.getLastMessageAt() != null
+                ? source.getLastMessageAt()
+                : source.getCreatedAt();
+        if (sourceLast != null
+                && (target.getLastMessageAt() == null || sourceLast.isAfter(target.getLastMessageAt()))) {
+            target.touchLastMessage(sourceLast, source.getLastMessagePreview());
+        }
+        conversationRepository.delete(source);
+    }
+
+    private static Instant later(Instant a, Instant b) {
+        if (a == null) {
+            return b;
+        }
+        if (b == null) {
+            return a;
+        }
+        return a.isAfter(b) ? a : b;
     }
 
     /** Whether the token opens at least one thread owned by this guest (ticket mint). */
@@ -930,6 +1065,24 @@ public class SupportService {
         if (changed) {
             conversationRepository.save(conversation);
         }
+    }
+
+    /**
+     * Stored phone forms that mean the same number. A checkout may write
+     * {@code +254…}, a guest {@code 0712…}; matching only the raw string split
+     * one person into an order thread and a chat thread.
+     */
+    private static List<String> phoneLookupCandidates(String phone) {
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        for (String form : zelisline.ub.credits.domain.KenyanPhoneForms.lookupCandidates(phone)) {
+            out.add(form);
+            out.add("+" + form);
+        }
+        String raw = normalizePhone(phone);
+        if (raw != null) {
+            out.add(raw);
+        }
+        return new ArrayList<>(out);
     }
 
     private static String normalizePhone(String phone) {

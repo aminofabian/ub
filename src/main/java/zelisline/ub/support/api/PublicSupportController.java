@@ -38,6 +38,7 @@ import zelisline.ub.platform.realtime.TicketRecord;
 import zelisline.ub.support.api.dto.GuestThreadDto;
 import zelisline.ub.support.api.dto.SendSupportMessageRequest;
 import zelisline.ub.support.api.dto.SupportMessageDto;
+import zelisline.ub.support.application.GuestThreadRecoveryService;
 import zelisline.ub.support.application.SupportService;
 import zelisline.ub.support.domain.SupportConversation;
 import zelisline.ub.tenancy.domain.Business;
@@ -68,6 +69,7 @@ public class PublicSupportController {
     private static final String RESOURCE_RAW = "raw";
 
     private final SupportService supportService;
+    private final GuestThreadRecoveryService guestThreadRecoveryService;
     private final BusinessRepository businessRepository;
     private final RealtimeTicketService ticketService;
     private final RealtimeTicketController tenantTicketController;
@@ -97,6 +99,22 @@ public class PublicSupportController {
     ) {
         String businessId = resolveBusinessId(type, businessSlug);
         return supportService.guestResume(type, businessId, guestId, guestPhone, token);
+    }
+
+    /**
+     * Recover a guest's transcript with a phone OTP. The browser proves the
+     * number with {@code /api/v1/public/shopper/auth/identify/*} first; the
+     * single-use verification token is the credential that opens the merge, so
+     * a typed phone number alone still opens nothing.
+     *
+     * <p>Returns the merged thread with a freshly minted guest token — the
+     * browser stores it and resumes normally from then on.
+     */
+    @PostMapping("/threads/recover")
+    public GuestThreadDto recover(@Valid @RequestBody RecoverGuestThreadRequest body) {
+        String businessId = resolveBusinessId(body.type(), body.businessSlug());
+        return guestThreadRecoveryService.recover(
+                body.type(), businessId, body.guestId(), body.phone(), body.phoneVerificationToken());
     }
 
     @PostMapping("/threads/{id}/messages")
@@ -237,5 +255,14 @@ public class PublicSupportController {
             @Size(max = 120) String guestName,
             @Size(max = 4000) String body,
             @Size(max = 64) String clientMessageId
+    ) {}
+
+    /** OTP-verified thread recovery — {@code phoneVerificationToken} is single-use. */
+    public record RecoverGuestThreadRequest(
+            @NotBlank @Size(max = 16) String type,
+            @Size(max = 191) String businessSlug,
+            @NotBlank @Size(max = 36) String guestId,
+            @NotBlank @Size(max = 32) String phone,
+            @NotBlank @Size(max = 128) String phoneVerificationToken
     ) {}
 }

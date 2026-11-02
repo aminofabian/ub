@@ -140,6 +140,17 @@ public class ShopperIdentifyService {
     }
 
     /**
+     * Consumes a platform verification token and returns the phone it was minted
+     * for. The single-use token is proof of phone ownership for flows that need
+     * it without a shopper session — support-chat transcript recovery is one.
+     */
+    @Transactional
+    public String consumeVerifiedPhone(String rawPhone, String rawToken) {
+        return phoneVerificationService.consumeRegistrationToken(
+                PLATFORM_VERIFICATION_BUSINESS_ID, rawToken, rawPhone);
+    }
+
+    /**
      * Consumes the platform verification token, then returns the shops the phone
      * has a customer record in. Empty for a verified phone with no history —
      * never an error, so existence is never confirmed (§12).

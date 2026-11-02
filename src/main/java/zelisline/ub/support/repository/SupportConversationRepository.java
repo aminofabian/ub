@@ -22,12 +22,25 @@ public interface SupportConversationRepository extends JpaRepository<SupportConv
             String conversationType, String businessId, String guestId);
 
     /**
-     * The most recently active thread for a phone. Phones are not unique (a
-     * family can share one), so this is intentionally a "first" lookup rather
-     * than a single-result query that would throw on duplicates.
+     * Every thread for a phone in one shop, newest activity first. Used by OTP
+     * recovery to merge the checkout's order-card thread (keyed to the phone)
+     * with the browser's own chat thread into one conversation.
+     *
+     * <p>{@code guestPhone} carries the stored forms of the same number
+     * ({@code 07…}, {@code 254…}, {@code +254…}) so formatting never splits a
+     * person into two threads.
      */
-    Optional<SupportConversation> findFirstByConversationTypeAndBusinessIdAndGuestPhoneOrderByLastMessageAtDescCreatedAtDesc(
-            String conversationType, String businessId, String guestPhone);
+    @Query("""
+            SELECT c FROM SupportConversation c
+            WHERE c.conversationType = :conversationType
+              AND c.businessId = :businessId
+              AND c.guestPhone IN :guestPhones
+            ORDER BY COALESCE(c.lastMessageAt, c.createdAt) DESC
+            """)
+    List<SupportConversation> findAllByGuestPhoneIn(
+            @Param("conversationType") String conversationType,
+            @Param("businessId") String businessId,
+            @Param("guestPhones") List<String> guestPhones);
 
     /** Every thread a guest owns across businesses (token check on ticket mint). */
     List<SupportConversation> findByGuestId(String guestId);

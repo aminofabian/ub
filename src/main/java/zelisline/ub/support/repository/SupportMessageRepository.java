@@ -27,6 +27,35 @@ public interface SupportMessageRepository extends JpaRepository<SupportMessage, 
     long countByConversationIdAndSenderTypeAndCreatedAtAfter(
             String conversationId, String senderType, Instant createdAtAfter);
 
+    Optional<SupportMessage> findTopByConversationIdOrderByCreatedAtDesc(String conversationId);
+
+    /** Idempotency keys already spent in a thread — used to de-dupe on merge. */
+    @Query("""
+            SELECT m.clientMessageId FROM SupportMessage m
+            WHERE m.conversationId = :conversationId AND m.clientMessageId IS NOT NULL
+            """)
+    List<String> findClientMessageIds(@Param("conversationId") String conversationId);
+
+    @Modifying(flushAutomatically = true)
+    @Query("""
+            UPDATE SupportMessage m
+            SET m.clientMessageId = NULL
+            WHERE m.conversationId = :conversationId
+              AND m.clientMessageId IN :clientMessageIds
+            """)
+    int clearClientMessageIds(@Param("conversationId") String conversationId,
+                              @Param("clientMessageIds") List<String> clientMessageIds);
+
+    /** Moves a merged thread's messages under the surviving conversation. */
+    @Modifying(flushAutomatically = true)
+    @Query("""
+            UPDATE SupportMessage m
+            SET m.conversationId = :targetConversationId
+            WHERE m.conversationId = :sourceConversationId
+            """)
+    int reassignConversation(@Param("targetConversationId") String targetConversationId,
+                             @Param("sourceConversationId") String sourceConversationId);
+
     @Modifying
     @Query("""
             UPDATE SupportMessage m

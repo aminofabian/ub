@@ -2,7 +2,6 @@ package zelisline.ub.purchasing.application;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -69,8 +68,6 @@ import zelisline.ub.purchasing.repository.PurchaseOrderRepository;
 import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
-import zelisline.ub.suppliers.domain.SupplierProduct;
-import zelisline.ub.suppliers.repository.SupplierProductRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
 import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -96,7 +93,7 @@ public class PathAPurchaseService {
     private final LedgerAccountResolver ledgerAccountResolver;
     private final ItemRepository itemRepository;
     private final SupplierRepository supplierRepository;
-    private final SupplierProductRepository supplierProductRepository;
+    private final SupplyCostDefaultsService supplyCostDefaultsService;
     private final BranchRepository branchRepository;
     private final BusinessRepository businessRepository;
     private final IdempotencyKeyRepository idempotencyKeyRepository;
@@ -494,8 +491,9 @@ public class PathAPurchaseService {
             gl.setInventoryBatchId(batch.getId());
             goodsReceiptLineRepository.save(gl);
 
-            // Supplier last cost stays at catalog (PO) unit, not base-stock unit.
-            touchSupplierProduct(po.getSupplierId(), pol.getItemId(), pol.getUnitEstimatedCost());
+            // Cost stays at catalog (PO) unit, not base-stock unit. It also becomes the product's default buying price.
+            supplyCostDefaultsService.recordSupplyCost(
+                    businessId, po.getSupplierId(), pol.getItemId(), pol.getUnitEstimatedCost());
         }
         sb.setItemCount(itemCount);
         sb.setTotalInitialQuantity(totalInitial);
@@ -815,18 +813,6 @@ public class PathAPurchaseService {
         throw new ResponseStatusException(
                 HttpStatus.CONFLICT,
                 "Mark arrived first, or override to unpack into stock now");
-    }
-
-    private void touchSupplierProduct(String supplierId, String itemId, BigDecimal unitCost) {
-        Optional<SupplierProduct> opt = supplierProductRepository.findBySupplierIdAndItemId(supplierId, itemId);
-        opt.ifPresent(sp -> {
-            if (sp.getDeletedAt() != null || !sp.isActive()) {
-                return;
-            }
-            sp.setLastCostPrice(unitCost);
-            sp.setLastPurchaseAt(Instant.now());
-            supplierProductRepository.save(sp);
-        });
     }
 
 

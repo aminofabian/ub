@@ -1,6 +1,7 @@
 package zelisline.ub.platform.realtime;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,6 +31,13 @@ public class SessionRegistry {
     private final ConcurrentHashMap<String, Instant> lastSeenByBusiness = new ConcurrentHashMap<>();
 
     /**
+     * Tenant businesses that have opened a socket since this instance started.
+     * Keeps {@link #tenantLastSeenSnapshot()} free of platform and guest keys,
+     * which share {@link #lastSeenByBusiness}.
+     */
+    private final Set<String> tenantBusinessesSeen = ConcurrentHashMap.newKeySet();
+
+    /**
      * Register a newly opened WebSocket session.
      *
      * @param sessionId WebSocket session id
@@ -45,6 +53,9 @@ public class SessionRegistry {
             sessionSubscriptions.get(sessionId).addAll(channels);
         }
         lastSeenByBusiness.put(meta.businessId(), Instant.now());
+        if (isTenantSession(meta)) {
+            tenantBusinessesSeen.add(meta.businessId());
+        }
         log.debug("WS session registered: id={} user={} business={}", sessionId, meta.userId(), meta.businessId());
     }
 
@@ -150,32 +161,57 @@ public class SessionRegistry {
     }
 
     /**
-     * Distinct tenant businesses with at least one open WebSocket (dashboard /
-     * till / support). Excludes platform super-admin and anonymous guest scopes.
+     * Open WebSocket count per tenant business (dashboard / till / support).
+     * Excludes platform super-admin and anonymous guest scopes. Tenants with no
+     * open socket are absent from the map.
      */
-    public int countDistinctOnlineTenantBusinesses() {
-        java.util.HashSet<String> ids = new java.util.HashSet<>();
+    public Map<String, Integer> openSessionCountsByTenantBusiness() {
+        Map<String, Integer> counts = new HashMap<>();
         for (Map.Entry<String, RealtimeSession> entry : sessionMeta.entrySet()) {
             RealtimeSession meta = entry.getValue();
-            if (meta == null) {
-                continue;
-            }
-            if ("SUPER_ADMIN".equals(meta.roleId())) {
-                continue;
-            }
-            String businessId = meta.businessId();
-            if (businessId == null
-                    || businessId.isBlank()
-                    || RealtimeScopes.PLATFORM.equals(businessId)
-                    || RealtimeScopes.GUEST.equals(businessId)) {
+            if (!isTenantSession(meta)) {
                 continue;
             }
             WebSocketSession session = sessions.get(entry.getKey());
             if (session != null && session.isOpen()) {
-                ids.add(businessId);
+                counts.merge(meta.businessId(), 1, Integer::sum);
             }
         }
-        return ids.size();
+        return counts;
+    }
+
+    /**
+     * Distinct tenant businesses with at least one open WebSocket (dashboard /
+     * till / support). Excludes platform super-admin and anonymous guest scopes.
+     */
+    public int countDistinctOnlineTenantBusinesses() {
+        return openSessionCountsByTenantBusiness().size();
+    }
+
+    /**
+     * Last recorded activity per tenant business on this instance, including
+     * tenants that have since disconnected. Platform and guest keys are left out.
+     */
+    public Map<String, Instant> tenantLastSeenSnapshot() {
+        Map<String, Instant> snapshot = new HashMap<>();
+        for (String businessId : tenantBusinessesSeen) {
+            Instant seenAt = lastSeenByBusiness.get(businessId);
+            if (seenAt != null) {
+                snapshot.put(businessId, seenAt);
+            }
+        }
+        return snapshot;
+    }
+
+    private static boolean isTenantSession(RealtimeSession meta) {
+        if (meta == null || "SUPER_ADMIN".equals(meta.roleId())) {
+            return false;
+        }
+        String businessId = meta.businessId();
+        return businessId != null
+                && !businessId.isBlank()
+                && !RealtimeScopes.PLATFORM.equals(businessId)
+                && !RealtimeScopes.GUEST.equals(businessId);
     }
 
     /**

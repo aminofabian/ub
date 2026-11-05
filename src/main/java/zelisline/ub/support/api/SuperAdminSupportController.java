@@ -119,7 +119,12 @@ public class SuperAdminSupportController {
         return Map.of("count", supportService.adminUnreadCount());
     }
 
-    /** Live presence: tenant threads keyed by businessId, visitor threads keyed by guestId. */
+    /**
+     * Live presence: tenant threads keyed by businessId, visitor threads keyed by
+     * guestId. {@code tenantSessions} lists every tenant with an open realtime
+     * socket (open connections per businessId) and {@code tenantLastSeen} the last
+     * activity per tenant, so the Tenants list can filter by who is online.
+     */
     @GetMapping("/presence")
     public Map<String, Object> presence() {
         List<SupportConversationDto> tenants = supportService.listForAdmin(null, "TENANT");
@@ -139,13 +144,16 @@ public class SuperAdminSupportController {
         long visitorsOnSupport = guestPresence.values().stream()
                 .filter(v -> v instanceof Map<?, ?> m && Boolean.TRUE.equals(m.get("online")))
                 .count();
+        Map<String, Integer> tenantSessions = supportPresenceService.onlineTenantSessionCounts();
         return Map.of(
                 "presence", tenantPresence,
                 "guestPresence", guestPresence,
-                "tenantsOnline", supportPresenceService.countLoggedInTenants(),
+                "tenantsOnline", tenantSessions.size(),
                 "visitorsOnline", supportPresenceService.countOnlineGuests(),
                 "tenantsOnSupport", tenantsOnSupport,
-                "visitorsOnSupport", visitorsOnSupport);
+                "visitorsOnSupport", visitorsOnSupport,
+                "tenantSessions", tenantSessions,
+                "tenantLastSeen", supportPresenceService.tenantLastSeen());
     }
 
     private SuperAdmin requireSuperAdmin() {

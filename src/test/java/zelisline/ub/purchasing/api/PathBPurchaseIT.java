@@ -29,6 +29,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
+import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.domain.ItemPackOption;
@@ -677,6 +678,123 @@ class PathBPurchaseIT {
         JsonNode json2 = objectMapper.readTree(r2.getResponse().getContentAsString());
         assertThat(json2.get("invoiceNumber").asText()).isEqualTo("PB-2");
         assertThat(json2.get("sessionStatus").asText()).isEqualTo("posted");
+    }
+
+    @Test
+    void postPathB_makesTheSupplyUnitCostTheDefaultBuyingPrice() throws Exception {
+        // Product created with a buying price of 50; its supplier link was seeded with the same default.
+        var item = itemRepository.findById(itemId).orElseThrow();
+        item.setBuyingPrice(new BigDecimal("50.00"));
+        itemRepository.save(item);
+        SupplierProduct link = new SupplierProduct();
+        link.setSupplierId(supplierId);
+        link.setItemId(itemId);
+        link.setDefaultCostPrice(new BigDecimal("50.0000"));
+        link.setActive(true);
+        supplierProductRepository.save(link);
+
+        // 10 units for 1,200 is 120 each. Neither the product nor the supplier link may stay on 50.
+        postSupply(itemId, "1200.00", 10, 0);
+        assertDefaultBuyingPrice("120.00");
+
+        // The next supply, at another price, moves the defaults again.
+        postSupply(itemId, "1100.00", 10, 0);
+        assertDefaultBuyingPrice("110.00");
+    }
+
+    @Test
+    void postPathB_withoutSupplierLink_stillUpdatesTheCatalogBuyingPrice() throws Exception {
+        var item = itemRepository.findById(itemId).orElseThrow();
+        item.setBuyingPrice(new BigDecimal("50.00"));
+        itemRepository.save(item);
+
+        postSupply(itemId, "600.00", 5, 0);
+
+        assertThat(itemRepository.findById(itemId).orElseThrow().getBuyingPrice())
+                .isEqualByComparingTo("120.00");
+    }
+
+    @Test
+    void postPathB_wastageDoesNotInflateTheDefaultBuyingPrice() throws Exception {
+        // 100 paid for 100 units received, 10 of which spoiled: 1.00 each, not 100 / 90.
+        postSupply(itemId, "100.00", 90, 10);
+
+        assertThat(itemRepository.findById(itemId).orElseThrow().getBuyingPrice())
+                .isEqualByComparingTo("1.00");
+    }
+
+    @Test
+    void postPathB_packageVariantDefaultsToThePricePerPackNotPerBaseUnit() throws Exception {
+        String parentId = itemCatalogService.createItem(
+                TENANT,
+                new CreateItemRequest(
+                        "SKU-EGG", null, "Eggs", null, goodsTypeId, null, null, null,
+                        false, true, true,
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null, null),
+                null
+        ).body().id();
+        String trayId = itemCatalogService.createVariant(
+                TENANT,
+                parentId,
+                new CreateVariantRequest(
+                        "SKU-EGG-TRAY",
+                        "Tray of 30",
+                        null,
+                        "Eggs Tray",
+                        null,
+                        null,
+                        null,
+                        null,
+                        false,
+                        true,
+                        false,
+                        true,
+                        "tray",
+                        new BigDecimal("30"),
+                        null,
+                        null,
+                        new BigDecimal("300"),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                ),
+                null
+        ).id();
+
+        // 2 trays for 560 is 280 a tray. The stock batch sits on the parent at about 9.33 an egg, but the
+        // tray's own default buying price is per tray.
+        postSupply(trayId, "560.00", 2, 0);
+
+        assertThat(itemRepository.findById(trayId).orElseThrow().getBuyingPrice())
+                .isEqualByComparingTo("280.00");
+        assertThat(itemRepository.findById(parentId).orElseThrow().getBuyingPrice()).isNull();
+    }
+
+    private void postSupply(String purchasedItemId, String amount, int usableQty, int wastageQty) throws Exception {
+        String sessionId = createSession();
+        String lineId = addLine(sessionId, "Supply", amount);
+        String postBody = """
+                {"lines":[{"lineId":"%s","itemId":"%s","usableQty":%d,"wastageQty":%d}]}
+                """.formatted(lineId, purchasedItemId, usableQty, wastageQty);
+        mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/post")
+                        .contentType(APPLICATION_JSON)
+                        .content(postBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+    }
+
+    private void assertDefaultBuyingPrice(String expected) {
+        assertThat(itemRepository.findById(itemId).orElseThrow().getBuyingPrice())
+                .isEqualByComparingTo(expected);
+        SupplierProduct link = supplierProductRepository.findBySupplierIdAndItemId(supplierId, itemId).orElseThrow();
+        assertThat(link.getDefaultCostPrice()).isEqualByComparingTo(expected);
+        assertThat(link.getLastCostPrice()).isEqualByComparingTo(expected);
     }
 
     private String createSession() throws Exception {

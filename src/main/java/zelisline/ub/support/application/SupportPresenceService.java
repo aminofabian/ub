@@ -85,6 +85,19 @@ public class SupportPresenceService implements SupportPresenceListener {
         return sessionRegistry.countDistinctOnlineTenantBusinesses();
     }
 
+    /** Open realtime connections per tenant that is online right now (any channel). */
+    public Map<String, Integer> onlineTenantSessionCounts() {
+        return sessionRegistry.openSessionCountsByTenantBusiness();
+    }
+
+    /** ISO-8601 last activity per tenant, for "last seen" labels on the Tenants list. */
+    public Map<String, String> tenantLastSeen() {
+        Map<String, String> result = new LinkedHashMap<>();
+        sessionRegistry.tenantLastSeenSnapshot()
+                .forEach((businessId, seenAt) -> result.put(businessId, seenAt.toString()));
+        return result;
+    }
+
     /** Guests with an open visitor/buyer socket. */
     public int countOnlineGuests() {
         return sessionRegistry.countDistinctOnlineGuests();

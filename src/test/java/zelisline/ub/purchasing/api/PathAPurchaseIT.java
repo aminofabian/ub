@@ -63,6 +63,7 @@ import zelisline.ub.purchasing.repository.StockMovementRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.suppliers.domain.Supplier;
+import zelisline.ub.suppliers.domain.SupplierProduct;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
@@ -331,6 +332,41 @@ class PathAPurchaseIT {
         assertThat(batches).hasSize(1);
         assertThat(batches.getFirst().getQuantityRemaining()).isEqualByComparingTo(new BigDecimal("60.0000"));
         assertThat(batches.getFirst().getUnitCost()).isEqualByComparingTo(new BigDecimal("10.0000"));
+    }
+
+    @Test
+    void goodsReceipt_makesThePurchaseOrderUnitCostTheDefaultBuyingPrice() throws Exception {
+        var rice = itemRepository.findById(itemId).orElseThrow();
+        rice.setBuyingPrice(new BigDecimal("50.00"));
+        itemRepository.save(rice);
+        SupplierProduct link = new SupplierProduct();
+        link.setSupplierId(supplierId);
+        link.setItemId(itemId);
+        link.setDefaultCostPrice(new BigDecimal("50.0000"));
+        link.setActive(true);
+        supplierProductRepository.save(link);
+
+        String poId = createPo();
+        String poLineId = addPoLine(poId, "2", "75");
+        sendPo(poId);
+        String grnBody = """
+                {"purchaseOrderId":"%s","branchId":"%s","receivedAt":"%s","lines":[
+                  {"purchaseOrderLineId":"%s","qtyReceived":2}
+                ]}
+                """.formatted(poId, branchId, Instant.parse("2026-07-02T08:00:00Z"), poLineId);
+        mockMvc.perform(post("/api/v1/purchasing/path-a/goods-receipts")
+                        .contentType(APPLICATION_JSON)
+                        .content(grnBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        assertThat(itemRepository.findById(itemId).orElseThrow().getBuyingPrice())
+                .isEqualByComparingTo("75.00");
+        SupplierProduct after = supplierProductRepository.findBySupplierIdAndItemId(supplierId, itemId).orElseThrow();
+        assertThat(after.getDefaultCostPrice()).isEqualByComparingTo("75.00");
+        assertThat(after.getLastCostPrice()).isEqualByComparingTo("75.00");
     }
 
     @Test

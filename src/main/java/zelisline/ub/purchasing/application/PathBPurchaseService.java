@@ -2,7 +2,6 @@ package zelisline.ub.purchasing.application;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -69,8 +68,6 @@ import zelisline.ub.purchasing.repository.SupplierInvoiceLineRepository;
 import zelisline.ub.purchasing.repository.SupplierInvoiceRepository;
 import zelisline.ub.purchasing.repository.SupplierPaymentAllocationRepository;
 import zelisline.ub.sales.repository.SaleItemRepository;
-import zelisline.ub.suppliers.domain.SupplierProduct;
-import zelisline.ub.suppliers.repository.SupplierProductRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
 import zelisline.ub.suppliers.application.SupplierPortalNotifyService;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -96,7 +93,7 @@ public class PathBPurchaseService {
     private final ItemRepository itemRepository;
     private final ItemPackOptionRepository itemPackOptionRepository;
     private final SupplierRepository supplierRepository;
-    private final SupplierProductRepository supplierProductRepository;
+    private final SupplyCostDefaultsService supplyCostDefaultsService;
     private final BranchRepository branchRepository;
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
@@ -509,7 +506,11 @@ public class PathBPurchaseService {
             itemRepository.save(holder);
 
             line.setInventoryBatchId(b.getId());
-            touchSupplierProduct(session.getSupplierId(), p.itemId(), unitCost);
+            // The supply's price becomes the product's default buying price. It is quoted per catalog unit of the
+            // purchased item (a tray, not an egg); `unitCost` above is per base stock unit, for the batch only.
+            BigDecimal catalogUnitCost = s.inventoryMoney().divide(p.usableQty(), UNIT_SCALE, RoundingMode.HALF_UP);
+            supplyCostDefaultsService.recordSupplyCost(
+                    businessId, session.getSupplierId(), p.itemId(), catalogUnitCost);
         }
         if (p.wastageQty().signum() > 0) {
             BigDecimal wUnit = s.wastageMoney().divide(p.wastageQty(), UNIT_SCALE, RoundingMode.HALF_UP);
@@ -550,18 +551,6 @@ public class PathBPurchaseService {
         line.setWastageQty(p.wastageQty());
         line.setLineStatus(PurchasingConstants.LINE_POSTED);
         lineRepository.save(line);
-    }
-
-    private void touchSupplierProduct(String supplierId, String itemId, BigDecimal unitCost) {
-        Optional<SupplierProduct> opt = supplierProductRepository.findBySupplierIdAndItemId(supplierId, itemId);
-        opt.ifPresent(sp -> {
-            if (sp.getDeletedAt() != null || !sp.isActive()) {
-                return;
-            }
-            sp.setLastCostPrice(unitCost);
-            sp.setLastPurchaseAt(Instant.now());
-            supplierProductRepository.save(sp);
-        });
     }
 
     private static void validateBreakdown(List<RawPurchaseLine> dbLines, PostPathBRequest req) {

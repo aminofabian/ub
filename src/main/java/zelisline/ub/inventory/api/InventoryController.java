@@ -30,6 +30,7 @@ import zelisline.ub.inventory.api.dto.InventoryValuationResponse;
 import zelisline.ub.inventory.api.dto.ItemStockThresholdsResponse;
 import zelisline.ub.inventory.api.dto.PatchItemStockThresholdsRequest;
 import zelisline.ub.inventory.api.dto.PostBatchDecreaseRequest;
+import zelisline.ub.inventory.api.dto.PostVariantStockFoldRequest;
 import zelisline.ub.inventory.api.dto.PostOpeningBalanceRequest;
 import zelisline.ub.inventory.api.dto.PostStandaloneWastageRequest;
 import zelisline.ub.inventory.api.dto.PostSupplierReturnRequest;
@@ -110,6 +111,25 @@ public class InventoryController {
     ) {
         var user = CurrentTenantUser.requireHuman(request);
         return inventoryLedgerService.recordStockIncrease(
+                TenantRequestIds.resolveBusinessId(request),
+                body,
+                user.userId()
+        );
+    }
+
+    /**
+     * Moves a family option's own on-hand into its base product's shared pool
+     * (stranded-stock repair; pack rows convert by packagingUnitQty, value conserved).
+     */
+    @PostMapping("/variant-stock-fold")
+    @PreAuthorize("hasPermission(null, 'inventory.write')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public InventoryLedgerService.VariantStockFoldResponse variantStockFold(
+            @Valid @RequestBody PostVariantStockFoldRequest body,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.requireHuman(request);
+        return inventoryLedgerService.recordVariantStockFold(
                 TenantRequestIds.resolveBusinessId(request),
                 body,
                 user.userId()

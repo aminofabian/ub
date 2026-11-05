@@ -21,6 +21,7 @@ public class SuperAdminGlobalCatalogPromoteLineExecutor {
 
     private final GlobalProductRepository globalProductRepository;
     private final GlobalProductImageGalleryService galleryService;
+    private final GlobalCatalogProductGraphWriter graphWriter;
 
     public record SavedProduct(GlobalProduct product, boolean created) {
     }
@@ -31,7 +32,12 @@ public class SuperAdminGlobalCatalogPromoteLineExecutor {
         return new SavedProduct(saved, created);
     }
 
-    /** Updates (or clears) the parent link after both parent and child exist in global. */
+    /**
+     * Updates (or clears) the parent link after both parent and child exist in global.
+     * Validation goes through {@link GlobalCatalogProductGraphWriter} so promote enforces
+     * the same invariants as CSV import (same catalog, parent not a variant, no self-link);
+     * a violation throws so the caller can surface it on the line instead of only logging.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void updateVariantParent(String productId, String variantOfGlobalProductId) {
         if (productId == null || productId.isBlank()) {
@@ -44,14 +50,13 @@ public class SuperAdminGlobalCatalogPromoteLineExecutor {
         String next = variantOfGlobalProductId == null || variantOfGlobalProductId.isBlank()
                 ? null
                 : variantOfGlobalProductId.trim();
-        if (next != null && next.equals(productId)) {
-            next = null;
-        }
         String current = product.getVariantOfGlobalProductId();
         if (current == null ? next == null : current.equals(next)) {
             return;
         }
-        product.setVariantOfGlobalProductId(next);
+        // Promote links draft trees legitimately (publish is a separate step), so the
+        // published-parent rule is relaxed here; the structural rules are not.
+        graphWriter.applyParent(product, next, true);
         globalProductRepository.saveAndFlush(product);
     }
 

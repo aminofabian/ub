@@ -16,6 +16,11 @@ public interface GlobalProductRepository extends JpaRepository<GlobalProduct, St
 
     Optional<GlobalProduct> findByIdAndCatalogIdAndStatus(String id, String catalogId, String status);
 
+    List<GlobalProduct> findByCatalogId(String catalogId);
+
+    List<GlobalProduct> findByCatalogIdAndStatusAndVariantOfGlobalProductIdIn(
+            String catalogId, String status, Collection<String> parentIds);
+
     List<GlobalProduct> findByCatalogIdAndStatusOrderBySortOrderAscNameAsc(String catalogId, String status);
 
     @Query("""
@@ -43,6 +48,11 @@ public interface GlobalProductRepository extends JpaRepository<GlobalProduct, St
             @Param("storeKitsEmpty") boolean storeKitsEmpty,
             Pageable pageable);
 
+    /**
+     * SA Curate search. {@code structure}: {@code all} | {@code parents} (no parent link) |
+     * {@code variants} (has a parent link) | {@code orphans} (parent link points at a
+     * missing or archived product).
+     */
     @Query("""
             select gp from GlobalProduct gp
              where gp.catalogId = :catalogId
@@ -55,6 +65,18 @@ public interface GlobalProductRepository extends JpaRepository<GlobalProduct, St
                     or lower(gp.name) like lower(concat('%', :q, '%'))
                     or lower(coalesce(gp.brand, '')) like lower(concat('%', :q, '%'))
                     or lower(coalesce(gp.barcode, '')) like lower(concat('%', :q, '%')))
+               and (:structure = 'all'
+                    or (:structure = 'parents'
+                        and (gp.variantOfGlobalProductId is null or gp.variantOfGlobalProductId = ''))
+                    or (:structure = 'variants'
+                        and gp.variantOfGlobalProductId is not null
+                        and gp.variantOfGlobalProductId <> '')
+                    or (:structure = 'orphans'
+                        and gp.variantOfGlobalProductId is not null
+                        and gp.variantOfGlobalProductId <> ''
+                        and not exists (select 1 from GlobalProduct par
+                                         where par.id = gp.variantOfGlobalProductId
+                                           and par.status <> 'archived')))
             """)
     Page<GlobalProduct> searchForSuperAdmin(
             @Param("catalogId") String catalogId,
@@ -62,7 +84,14 @@ public interface GlobalProductRepository extends JpaRepository<GlobalProduct, St
             @Param("categoryId") String categoryId,
             @Param("q") String q,
             @Param("missingImage") boolean missingImage,
+            @Param("structure") String structure,
             Pageable pageable);
+
+    List<GlobalProduct> findByCatalogIdAndVariantOfGlobalProductIdInOrderBySortOrderAscNameAsc(
+            String catalogId, Collection<String> parentIds);
+
+    List<GlobalProduct> findByCatalogIdAndVariantOfGlobalProductIdOrderBySortOrderAscNameAsc(
+            String catalogId, String parentId);
 
     long countByCatalogIdAndBarcodeAndStatusNotAndIdNot(
             String catalogId, String barcode, String status, String id);

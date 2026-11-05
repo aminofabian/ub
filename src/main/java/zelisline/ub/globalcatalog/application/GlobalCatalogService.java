@@ -5,6 +5,8 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -43,6 +45,7 @@ import zelisline.ub.globalcatalog.api.dto.GlobalCategoryResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductImageResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductPackDetailResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductPackSummaryResponse;
+import zelisline.ub.globalcatalog.api.dto.GlobalProductFamilyResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductResponse;
 import zelisline.ub.globalcatalog.api.dto.PreviewAdoptRequest;
 import zelisline.ub.globalcatalog.domain.GlobalCatalog;
@@ -224,6 +227,48 @@ public class GlobalCatalogService {
 
         TenantCatalogMatchIndex matchIndex = tenantCatalogMatchIndex(businessId);
         return toProductResponse(gp, matchIndex, galleryService.listForProduct(gp.getId()));
+    }
+
+    /**
+     * The published family around one product: its root (itself, or its parent when it is
+     * a variant) plus the root's published variants. Powers the add-product flow's
+     * "also add its pack sizes" offer (GLOBAL_CATALOG_IMPORT_SCOPE §7.4, tenant browse).
+     */
+    @Transactional(readOnly = true)
+    public GlobalProductFamilyResponse getProductFamily(String businessId, String globalProductId) {
+        GlobalCatalog catalog = resolveCatalog(businessId);
+        GlobalProduct gp = globalProductRepository
+                .findByIdAndCatalogIdAndStatus(globalProductId, catalog.getId(), STATUS_PUBLISHED)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Global product not found"));
+
+        GlobalProduct root = gp;
+        String parentId = blankToNull(gp.getVariantOfGlobalProductId());
+        if (parentId != null) {
+            root = globalProductRepository
+                    .findByIdAndCatalogIdAndStatus(parentId, catalog.getId(), STATUS_PUBLISHED)
+                    .orElse(null);
+        }
+        List<GlobalProduct> variants = root == null
+                ? List.of()
+                : globalProductRepository.findByCatalogIdAndStatusAndVariantOfGlobalProductIdIn(
+                        catalog.getId(), STATUS_PUBLISHED, List.of(root.getId()));
+
+        List<GlobalProduct> all = new ArrayList<>(variants.size() + 1);
+        if (root != null) {
+            all.add(root);
+        }
+        all.addAll(variants);
+        TenantCatalogMatchIndex matchIndex = tenantCatalogMatchIndex(businessId);
+        Map<String, List<GlobalProductImage>> imagesByProduct = imagesByProductId(all);
+        return new GlobalProductFamilyResponse(
+                root == null
+                        ? null
+                        : toProductResponse(root, matchIndex,
+                                imagesByProduct.getOrDefault(root.getId(), List.of())),
+                variants.stream()
+                        .map(v -> toProductResponse(v, matchIndex,
+                                imagesByProduct.getOrDefault(v.getId(), List.of())))
+                        .toList());
     }
 
     @Transactional(readOnly = true)
@@ -419,6 +464,7 @@ public class GlobalCatalogService {
                 true,
                 null,
                 Boolean.TRUE.equals(request.createMissingCategories()),
+                Boolean.TRUE.equals(request.includeVariants()),
                 null
         );
     }
@@ -440,6 +486,7 @@ public class GlobalCatalogService {
                 false,
                 actorUserId,
                 Boolean.TRUE.equals(request.createMissingCategories()),
+                Boolean.TRUE.equals(request.includeVariants()),
                 progressListener
         );
         if (request.packId() != null && !request.packId().isBlank()) {
@@ -490,6 +537,7 @@ public class GlobalCatalogService {
             boolean dryRun,
             String actorUserId,
             boolean createMissingCategories,
+            boolean includeVariants,
             AdoptProgressListener progressListener
     ) {
         GlobalCatalog catalog = resolveCatalog(businessId);
@@ -504,7 +552,12 @@ public class GlobalCatalogService {
                         .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "No default item type found for business")))
                 .getId();
 
-        lines = expandLinesWithMissingParents(lines, catalog.getId());
+        if (includeVariants) {
+            lines = expandLinesWithVariants(lines, catalog.getId());
+        }
+        ParentExpansion expansion = expandLinesWithMissingParents(lines, catalog.getId());
+        lines = expansion.lines();
+        Map<String, String> unavailableParents = expansion.unavailableParentById();
         List<String> requestedIds = lines.stream().map(AdoptLineRequest::globalProductId).distinct().toList();
         List<String> publishedIds = globalProductRepository.findPublishedIdsByCatalogAndIdIn(
                 catalog.getId(), STATUS_PUBLISHED, requestedIds);
@@ -687,9 +740,28 @@ public class GlobalCatalogService {
                 );
                 String parentTenantId = resolveAdoptParentItemId(
                         gp, adoptedGlobalIdToItemId, matchIndex, globalById);
-                String message = parentTenantId != null
-                        ? "Will import as variant"
-                        : "Will import";
+                String parentGlobalId = blankToNull(gp.getVariantOfGlobalProductId());
+                boolean parentInBatch = parentGlobalId != null && publishedIdSet.contains(parentGlobalId);
+                if (parentGlobalId != null && parentTenantId == null && !parentInBatch
+                        && !Boolean.TRUE.equals(line.adoptAsStandalone())) {
+                    // Parent unavailable and no explicit standalone opt-in: block, never flatten.
+                    results.add(new AdoptResultLineResponse(
+                            gpId, "error_parent_unavailable", null, sku,
+                            parentUnavailableMessage(parentGlobalId, unavailableParents, globalById)));
+                    skippedCount++;
+                    continue;
+                }
+                String message;
+                if (parentTenantId != null) {
+                    message = "Will link to parent " + parentDisplayName(parentGlobalId, globalById);
+                } else if (parentInBatch) {
+                    message = "Will link to parent " + parentDisplayName(parentGlobalId, globalById)
+                            + " (adopted in this batch)";
+                } else if (parentGlobalId != null) {
+                    message = "Will import as a standalone product (parent unavailable — explicit opt-in)";
+                } else {
+                    message = "Will import";
+                }
                 if (categoryResult.wouldCreate()) {
                     message = message + " (create category " + slugHint.trim() + ")";
                 }
@@ -729,6 +801,18 @@ public class GlobalCatalogService {
 
             String parentTenantId = resolveAdoptParentItemId(
                     gp, adoptedGlobalIdToItemId, matchIndex, globalById);
+            String parentGlobalId = blankToNull(gp.getVariantOfGlobalProductId());
+            if (parentGlobalId != null && parentTenantId == null
+                    && !Boolean.TRUE.equals(line.adoptAsStandalone())) {
+                // The parent is unpublished/archived, failed earlier in this batch, or is not
+                // in the shop. Refuse with an explicit error instead of silently flattening
+                // the variant into a standalone SKU (scope §7.4 / finding 15).
+                results.add(new AdoptResultLineResponse(
+                        gpId, "error_parent_unavailable", null, sku,
+                        parentUnavailableMessage(parentGlobalId, unavailableParents, globalById)));
+                skippedCount++;
+                continue;
+            }
 
             reserveSkuForBatch(skuToItemId, sku);
 
@@ -751,7 +835,8 @@ public class GlobalCatalogService {
                                     line.webPublished()),
                             effectiveActor);
                 } else {
-                    // Orphan package rows (no resolvable parent) stay flat stockable SKUs.
+                    // Reached only for true roots, or for a variant whose line explicitly opted
+                    // into standalone adoption. Deliberate standalone package rows stay stockable.
                     boolean stocked = gp.isStocked() || gp.isPackageVariant();
                     CreateItemRequest createReq = new CreateItemRequest(
                             sku,
@@ -796,6 +881,20 @@ public class GlobalCatalogService {
                 }
                 imported = adoptLineExecutor.attachGalleryAfterCommit(
                         businessId, imported, gp.getId(), gp.getImageUrl(), false);
+                // Honest line messages (scope §7.4): say what structurally happened.
+                if ("imported".equals(imported.status())) {
+                    if (parentTenantId != null) {
+                        imported = new AdoptResultLineResponse(
+                                imported.globalProductId(), imported.status(), imported.itemId(),
+                                imported.sku(),
+                                "Imported and linked to parent " + parentDisplayName(parentGlobalId, globalById));
+                    } else if (parentGlobalId != null) {
+                        imported = new AdoptResultLineResponse(
+                                imported.globalProductId(), imported.status(), imported.itemId(),
+                                imported.sku(),
+                                "Imported as a standalone product (parent unavailable — explicit opt-in)");
+                    }
+                }
                 if (imported.sku() != null && !imported.sku().isBlank()) {
                     skuToItemId.put(imported.sku().trim(), imported.itemId());
                 }
@@ -1110,13 +1209,23 @@ public class GlobalCatalogService {
         );
     }
 
+    /** Upward expansion result: lines plus the parents that could NOT be synthesized. */
+    record ParentExpansion(
+            List<AdoptLineRequest> lines,
+            /** parent global id → "Name (status)" for unavailable (non-published) parents. */
+            Map<String, String> unavailableParentById
+    ) {
+    }
+
+    /** Hard cap after expansion so "include variants" cannot explode a request. */
+    private static final int MAX_EXPANDED_ADOPT_LINES = 1_000;
+
     /**
-     * A selected variant must never arrive without its parent, or the adopt loop
-     * flattens it into a standalone SKU. Synthesizes an adopt line for every missing
-     * published parent (walking up multi-level chains); parents already in the shop
-     * are matched and skipped by the normal loop, so this is safe to do eagerly.
+     * Downward expansion (scope §7.4): every selected product also brings its
+     * <b>published</b> variants, walking chains with a hard line cap. Synthesized child
+     * lines inherit the parent line's {@code webPublished}.
      */
-    private List<AdoptLineRequest> expandLinesWithMissingParents(
+    private List<AdoptLineRequest> expandLinesWithVariants(
             List<AdoptLineRequest> lines,
             String catalogId
     ) {
@@ -1124,6 +1233,51 @@ public class GlobalCatalogService {
         for (AdoptLineRequest line : lines) {
             byId.putIfAbsent(line.globalProductId(), line);
         }
+        Collection<String> frontier = new ArrayList<>(byId.keySet());
+        while (!frontier.isEmpty()) {
+            List<GlobalProduct> children = globalProductRepository
+                    .findByCatalogIdAndStatusAndVariantOfGlobalProductIdIn(
+                            catalogId, STATUS_PUBLISHED, frontier);
+            List<String> next = new ArrayList<>();
+            for (GlobalProduct child : children) {
+                if (byId.containsKey(child.getId())) {
+                    continue;
+                }
+                AdoptLineRequest parentLine = byId.get(child.getVariantOfGlobalProductId());
+                byId.put(child.getId(), new AdoptLineRequest(
+                        child.getId(),
+                        null, null, null, null, null, null, null, null, null, null,
+                        parentLine != null ? parentLine.webPublished() : null,
+                        null));
+                next.add(child.getId());
+            }
+            if (byId.size() > MAX_EXPANDED_ADOPT_LINES) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Including variants expands this selection past " + MAX_EXPANDED_ADOPT_LINES
+                                + " lines — narrow the selection or adopt in batches");
+            }
+            frontier = next;
+        }
+        return new ArrayList<>(byId.values());
+    }
+
+    /**
+     * A selected variant must never arrive without its parent, or the adopt loop would
+     * flatten it into a standalone SKU. Synthesizes an adopt line for every missing
+     * <b>published</b> parent (walking up multi-level chains). A non-published parent is
+     * recorded as unavailable so the loop can refuse the child with
+     * {@code error_parent_unavailable} instead of silently flattening (scope §7.4).
+     */
+    private ParentExpansion expandLinesWithMissingParents(
+            List<AdoptLineRequest> lines,
+            String catalogId
+    ) {
+        LinkedHashMap<String, AdoptLineRequest> byId = new LinkedHashMap<>();
+        for (AdoptLineRequest line : lines) {
+            byId.putIfAbsent(line.globalProductId(), line);
+        }
+        Map<String, String> unavailable = new LinkedHashMap<>();
         Collection<String> frontier = new ArrayList<>(byId.keySet());
         while (!frontier.isEmpty()) {
             // parent id → one of its children in the batch (for webPublished inheritance)
@@ -1137,44 +1291,89 @@ public class GlobalCatalogService {
             if (parentToChild.isEmpty()) {
                 break;
             }
-            List<String> publishedParentIds = globalProductRepository.findPublishedIdsByCatalogAndIdIn(
-                    catalogId, STATUS_PUBLISHED, List.copyOf(parentToChild.keySet()));
             List<String> next = new ArrayList<>();
-            for (String parentId : publishedParentIds) {
-                AdoptLineRequest childLine = byId.get(parentToChild.get(parentId));
-                byId.put(parentId, new AdoptLineRequest(
-                        parentId,
-                        null, null, null, null, null, null, null, null, null, null,
-                        childLine != null ? childLine.webPublished() : null));
-                next.add(parentId);
+            for (GlobalProduct parent : globalProductRepository.findAllById(parentToChild.keySet())) {
+                if (STATUS_PUBLISHED.equals(parent.getStatus()) && catalogId.equals(parent.getCatalogId())) {
+                    AdoptLineRequest childLine = byId.get(parentToChild.get(parent.getId()));
+                    byId.put(parent.getId(), new AdoptLineRequest(
+                            parent.getId(),
+                            null, null, null, null, null, null, null, null, null, null,
+                            childLine != null ? childLine.webPublished() : null,
+                            null));
+                    next.add(parent.getId());
+                } else {
+                    unavailable.put(parent.getId(),
+                            "'" + parent.getName() + "' (" + parent.getStatus() + ")");
+                }
             }
             frontier = next;
         }
-        return new ArrayList<>(byId.values());
+        return new ParentExpansion(new ArrayList<>(byId.values()), unavailable);
     }
 
     /**
-     * Parents (no variant link) before children so adopt can resolve
-     * {@code variant_of_global_product_id} within the same batch.
+     * Topological order: a line runs only after its in-batch parent, whatever the row
+     * order and chain depth (scope §8 fix 1 — the old 2-bucket split mis-ordered chains
+     * deeper than one level). Lines whose parent is not in the batch count as roots;
+     * anything unresolvable (a cycle) is appended and fails loudly at write time.
      */
     static List<AdoptLineRequest> orderParentsBeforeVariants(
             List<AdoptLineRequest> lines,
             Map<String, GlobalProduct> globalById
     ) {
-        List<AdoptLineRequest> roots = new ArrayList<>();
-        List<AdoptLineRequest> children = new ArrayList<>();
+        Map<String, AdoptLineRequest> byId = new LinkedHashMap<>();
         for (AdoptLineRequest line : lines) {
-            GlobalProduct gp = globalById.get(line.globalProductId());
-            if (gp != null && blankToNull(gp.getVariantOfGlobalProductId()) != null) {
-                children.add(line);
-            } else {
-                roots.add(line);
+            byId.putIfAbsent(line.globalProductId(), line);
+        }
+        List<AdoptLineRequest> ordered = new ArrayList<>(lines.size());
+        Set<String> placed = new HashSet<>();
+        List<AdoptLineRequest> remaining = new ArrayList<>(lines);
+        boolean progress = true;
+        while (!remaining.isEmpty() && progress) {
+            progress = false;
+            Iterator<AdoptLineRequest> it = remaining.iterator();
+            while (it.hasNext()) {
+                AdoptLineRequest line = it.next();
+                GlobalProduct gp = globalById.get(line.globalProductId());
+                String parentId = gp == null ? null : blankToNull(gp.getVariantOfGlobalProductId());
+                if (parentId == null || !byId.containsKey(parentId) || placed.contains(parentId)) {
+                    ordered.add(line);
+                    placed.add(line.globalProductId());
+                    it.remove();
+                    progress = true;
+                }
             }
         }
-        List<AdoptLineRequest> ordered = new ArrayList<>(roots.size() + children.size());
-        ordered.addAll(roots);
-        ordered.addAll(children);
+        ordered.addAll(remaining);
         return ordered;
+    }
+
+    private String parentDisplayName(String parentGlobalId, Map<String, GlobalProduct> globalById) {
+        if (parentGlobalId == null) {
+            return "";
+        }
+        GlobalProduct parent = globalById.get(parentGlobalId);
+        if (parent == null) {
+            parent = globalProductRepository.findById(parentGlobalId).orElse(null);
+            if (parent != null) {
+                globalById.put(parent.getId(), parent);
+            }
+        }
+        return parent != null ? "'" + parent.getName() + "'" : parentGlobalId;
+    }
+
+    private String parentUnavailableMessage(
+            String parentGlobalId,
+            Map<String, String> unavailableParents,
+            Map<String, GlobalProduct> globalById
+    ) {
+        String described = unavailableParents.get(parentGlobalId);
+        if (described == null) {
+            described = parentDisplayName(parentGlobalId, globalById)
+                    + " (not adopted in this batch)";
+        }
+        return "Parent " + described + " is unavailable — publish and select it, "
+                + "or re-send this line with adoptAsStandalone=true to import it flat on purpose";
     }
 
     private String resolveAdoptParentItemId(

@@ -16,6 +16,12 @@ import zelisline.ub.globalcatalog.domain.GlobalProduct;
 
 class GlobalCatalogVariantParentTest {
 
+    private static AdoptLineRequest line(String globalProductId) {
+        return new AdoptLineRequest(
+                globalProductId,
+                null, null, null, null, null, null, null, null, null, null, null, null);
+    }
+
     @Test
     void orderParentsBeforeVariantsPutsChildrenLast() {
         GlobalProduct parent = new GlobalProduct();
@@ -26,13 +32,65 @@ class GlobalCatalogVariantParentTest {
 
         Map<String, GlobalProduct> byId = Map.of("parent", parent, "child", child);
         List<AdoptLineRequest> ordered = GlobalCatalogService.orderParentsBeforeVariants(
-                List.of(
-                        new AdoptLineRequest("child", null, null, null, null, null, null, null, null, null, null, null),
-                        new AdoptLineRequest("parent", null, null, null, null, null, null, null, null, null, null, null)),
+                List.of(line("child"), line("parent")),
                 byId);
 
         assertEquals("parent", ordered.get(0).globalProductId());
         assertEquals("child", ordered.get(1).globalProductId());
+    }
+
+    @Test
+    void orderParentsBeforeVariantsIsTopologicalForDeepChains() {
+        // grandparent ← parent ← child, submitted child-first: the old 2-bucket split
+        // mis-ordered this (scope §8 fix 1); the topological order must not.
+        GlobalProduct grandparent = new GlobalProduct();
+        grandparent.setId("a");
+        GlobalProduct parent = new GlobalProduct();
+        parent.setId("b");
+        parent.setVariantOfGlobalProductId("a");
+        GlobalProduct child = new GlobalProduct();
+        child.setId("c");
+        child.setVariantOfGlobalProductId("b");
+
+        Map<String, GlobalProduct> byId = Map.of("a", grandparent, "b", parent, "c", child);
+        List<AdoptLineRequest> ordered = GlobalCatalogService.orderParentsBeforeVariants(
+                List.of(line("c"), line("b"), line("a")),
+                byId);
+
+        assertEquals(
+                List.of("a", "b", "c"),
+                ordered.stream().map(AdoptLineRequest::globalProductId).toList());
+    }
+
+    @Test
+    void orderParentsBeforeVariantsTreatsOutOfBatchParentsAsRoots() {
+        GlobalProduct child = new GlobalProduct();
+        child.setId("child");
+        child.setVariantOfGlobalProductId("not-in-batch");
+
+        List<AdoptLineRequest> ordered = GlobalCatalogService.orderParentsBeforeVariants(
+                List.of(line("child")),
+                Map.of("child", child));
+
+        assertEquals(1, ordered.size());
+        assertEquals("child", ordered.get(0).globalProductId());
+    }
+
+    @Test
+    void orderParentsBeforeVariantsSurvivesCycles() {
+        GlobalProduct a = new GlobalProduct();
+        a.setId("a");
+        a.setVariantOfGlobalProductId("b");
+        GlobalProduct b = new GlobalProduct();
+        b.setId("b");
+        b.setVariantOfGlobalProductId("a");
+
+        // A cycle cannot be ordered; both lines must still come back (they fail at write).
+        List<AdoptLineRequest> ordered = GlobalCatalogService.orderParentsBeforeVariants(
+                List.of(line("a"), line("b")),
+                Map.of("a", a, "b", b));
+
+        assertEquals(2, ordered.size());
     }
 
     @Test

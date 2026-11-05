@@ -1547,6 +1547,7 @@ public class ItemCatalogService {
             if (parent.getItemTypeId() != null && !parent.getItemTypeId().isBlank()) {
                 child.setItemTypeId(parent.getItemTypeId());
             }
+            applyAttachSellShape(child, line);
             itemRepository.save(child);
             supplierLinkProvisioner.afterItemChanged(businessId, child);
             publishItemEvent(
@@ -1557,14 +1558,30 @@ public class ItemCatalogService {
                     compactDiff(oldState, itemSnapshot(child)));
         }
 
+        // Shared selling units (pack lines) deduct from the PARENT's pool, so the base
+        // must stay/become a stock holder; pure option families keep the label row unstocked.
+        boolean hasSharedUnits = lines.stream().anyMatch(l ->
+                l.unitsPerPack() != null || Boolean.TRUE.equals(l.sellsAsPack()));
+
         boolean makeNonSellable = request.makeParentNonSellable() == null || Boolean.TRUE.equals(request.makeParentNonSellable());
-        if (makeNonSellable && parent.isSellable()) {
-            Map<String, Object> parentOld = itemSnapshot(parent);
+        Map<String, Object> parentOld = itemSnapshot(parent);
+        boolean wasSellable = parent.isSellable();
+        boolean parentChanged = false;
+        if (makeNonSellable && wasSellable) {
             parent.setSellable(false);
-            // Family label rows are not stock holders for option-variant catalogs.
-            if (parent.isStocked()) {
-                parent.setStocked(false);
+            parentChanged = true;
+        }
+        if (hasSharedUnits) {
+            if (!parent.isStocked()) {
+                parent.setStocked(true);
+                parentChanged = true;
             }
+        } else if (makeNonSellable && wasSellable && parent.isStocked()) {
+            // Family label rows are not stock holders for option-variant catalogs.
+            parent.setStocked(false);
+            parentChanged = true;
+        }
+        if (parentChanged) {
             itemRepository.save(parent);
             publishItemEvent(
                     businessId,
@@ -1576,6 +1593,28 @@ public class ItemCatalogService {
 
         notifyOnboardingCatalogChanged(businessId);
         return toResponseWithVariants(businessId, parent);
+    }
+
+    /** Regroup pack shape (PACKAGE_FLOW_GAPS G1): mirrors the UI's variantSellShape rules. */
+    // Package-private for unit tests.
+    static void applyAttachSellShape(Item child, AttachVariantLineRequest line) {
+        BigDecimal units = line.unitsPerPack();
+        boolean explicitPack = Boolean.TRUE.equals(line.sellsAsPack());
+        if (units == null && !explicitPack) {
+            return; // plain flavor option — keeps its own stock
+        }
+        BigDecimal qty = units == null || units.signum() <= 0 ? BigDecimal.ONE : units;
+        child.setPackageVariant(explicitPack || qty.compareTo(BigDecimal.ONE) > 0);
+        child.setPackagingUnitQty(qty);
+        String unitName = line.packUnitName() != null && !line.packUnitName().isBlank()
+                ? line.packUnitName().trim()
+                : (line.variantName() == null ? null : line.variantName().trim());
+        child.setPackagingUnitName(unitName);
+        // Shared selling units never hold their own stock — the base pool does.
+        child.setStocked(false);
+        if (qty.compareTo(BigDecimal.ONE) > 0) {
+            child.setWeighed(false);
+        }
     }
 
     /**

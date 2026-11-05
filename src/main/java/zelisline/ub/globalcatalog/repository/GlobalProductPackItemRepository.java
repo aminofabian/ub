@@ -21,4 +21,10 @@ public interface GlobalProductPackItemRepository extends JpaRepository<GlobalPro
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("delete from GlobalProductPackItem p where p.globalProductId in :productIds")
     void deleteByGlobalProductIdIn(@Param("productIds") Collection<String> productIds);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("delete from GlobalProductPackItem p where p.packId = :packId and p.globalProductId in :productIds")
+    void deleteByPackIdAndGlobalProductIdIn(
+            @Param("packId") String packId,
+            @Param("productIds") Collection<String> productIds);
 }

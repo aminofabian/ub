@@ -392,7 +392,7 @@ public class SuperAdminGlobalCatalogPromoteService {
         }
 
         if (!dryRun && !sourceItemIdToGlobalId.isEmpty()) {
-            linkVariantParents(businessId, byId, sourceItemIdToGlobalId, matchIndex);
+            linkVariantParents(businessId, byId, sourceItemIdToGlobalId, matchIndex, lines);
         }
 
         return new PromoteResponse(created, updated, skipped, imageRehosts, lines);
@@ -444,7 +444,8 @@ public class SuperAdminGlobalCatalogPromoteService {
             String businessId,
             Map<String, Item> byId,
             Map<String, String> sourceItemIdToGlobalId,
-            GlobalMatchIndex matchIndex
+            GlobalMatchIndex matchIndex,
+            List<PromoteLineResult> lines
     ) {
         for (Map.Entry<String, String> entry : sourceItemIdToGlobalId.entrySet()) {
             Item item = byId.get(entry.getKey());
@@ -468,6 +469,23 @@ public class SuperAdminGlobalCatalogPromoteService {
                         entry.getKey(),
                         desiredParentGlobalId,
                         ex.toString());
+                // §8 fix 2: a failed link is a visible warning on the line, never only a log —
+                // the operator must know the row landed flat.
+                String warning = "Saved, but the parent link failed: "
+                        + (ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
+                for (int i = 0; i < lines.size(); i++) {
+                    PromoteLineResult line = lines.get(i);
+                    if (entry.getKey().equals(line.sourceItemId())
+                            && ("created".equals(line.action()) || "updated".equals(line.action()))) {
+                        lines.set(i, new PromoteLineResult(
+                                line.sourceItemId(),
+                                line.globalProductId(),
+                                line.action(),
+                                warning,
+                                line.imageRehosted()));
+                        break;
+                    }
+                }
             }
         }
     }

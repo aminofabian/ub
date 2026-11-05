@@ -15,6 +15,10 @@ public interface GlobalProductPackRepository extends JpaRepository<GlobalProduct
 
     Optional<GlobalProductPack> findByIdAndCatalogId(String id, String catalogId);
 
+    Optional<GlobalProductPack> findByCatalogIdAndCode(String catalogId, String code);
+
+    List<GlobalProductPack> findByCatalogIdOrderBySortOrderAsc(String catalogId);
+
     @Query("""
             select p.globalProductId from GlobalProductPackItem p
              where p.packId = :packId

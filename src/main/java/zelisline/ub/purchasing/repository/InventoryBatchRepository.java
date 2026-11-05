@@ -113,6 +113,23 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             @Param("minRemaining") BigDecimal minRemaining
     );
 
+    /** Every active batch an item holds across all branches — stranded-stock fold repair. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select b from InventoryBatch b
+             where b.businessId = :businessId
+               and b.itemId = :itemId
+               and b.status = :status
+               and b.quantityRemaining > :minRemaining
+             order by b.branchId asc, b.id asc
+            """)
+    List<InventoryBatch> lockActiveBatchesForItemAllBranches(
+            @Param("businessId") String businessId,
+            @Param("itemId") String itemId,
+            @Param("status") String status,
+            @Param("minRemaining") BigDecimal minRemaining
+    );
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             select b from InventoryBatch b

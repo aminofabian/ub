@@ -13,6 +13,8 @@ public record AdoptRequest(
         /** When true, create tenant categories from global {@code tenantCategorySlugHint}. Default false. */
         Boolean createMissingCategories,
         /** Optional pack id when adopt was started from a starter pack (telemetry). */
-        @Size(max = 36) String packId
+        @Size(max = 36) String packId,
+        /** When true, selected parents also bring their published variants (expand down). */
+        Boolean includeVariants
 ) {
 }

@@ -92,7 +92,7 @@ public class GlobalCatalogReplaceService {
 
         AdoptResponse adopt = globalCatalogService.adopt(
                 businessId,
-                new AdoptRequest(request.openingBranchId(), lines, true, request.packId()),
+                new AdoptRequest(request.openingBranchId(), lines, true, request.packId(), null),
                 actorUserId);
         return new ReplaceCatalogResponse(softDeleted, adopt);
     }
@@ -103,6 +103,7 @@ public class GlobalCatalogReplaceService {
         for (String productId : productIds) {
             lines.add(new AdoptLineRequest(
                     productId,
+                    null,
                     null,
                     null,
                     null,

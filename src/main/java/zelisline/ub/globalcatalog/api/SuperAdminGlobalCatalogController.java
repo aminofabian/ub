@@ -36,9 +36,11 @@ import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.BackfillIm
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.BackfillImagesResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.CatalogSummaryResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.CategoryResponse;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.CreatePackRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.CreateProductRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.CreateSupplierTemplateRequest;
-import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.CsvImportResponse;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ImportCommitResponse;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ImportPreviewResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.MetaResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PackDetailResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PackSummaryResponse;
@@ -47,6 +49,7 @@ import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PatchProdu
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PatchSupplierTemplateRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductSupplierLinkResponse;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductTreeResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PromoteRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PromoteResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishProductsRequest;
@@ -62,6 +65,7 @@ import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.UpsertCate
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.UpsertProductSupplierLinkRequest;
 import zelisline.ub.globalcatalog.application.GlobalCatalogJobService;
 import zelisline.ub.globalcatalog.application.SuperAdminGlobalCatalogCsvService;
+import zelisline.ub.globalcatalog.application.SuperAdminGlobalCatalogImportService;
 import zelisline.ub.globalcatalog.application.SuperAdminGlobalCatalogPromoteService;
 import zelisline.ub.globalcatalog.application.SuperAdminGlobalCatalogService;
 
@@ -84,6 +88,7 @@ public class SuperAdminGlobalCatalogController {
     private final SuperAdminGlobalCatalogService superAdminGlobalCatalogService;
     private final SuperAdminGlobalCatalogPromoteService promoteService;
     private final SuperAdminGlobalCatalogCsvService csvService;
+    private final SuperAdminGlobalCatalogImportService importService;
     private final GlobalCatalogJobService globalCatalogJobService;
 
     @GetMapping("/catalogs")
@@ -116,11 +121,35 @@ public class SuperAdminGlobalCatalogController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String categoryId,
             @RequestParam(required = false, defaultValue = "false") boolean missingImage,
+            @RequestParam(required = false, defaultValue = "all") String structure,
             @RequestParam(required = false, defaultValue = "0") int page,
             @RequestParam(required = false, defaultValue = "50") int size
     ) {
         return superAdminGlobalCatalogService.listProducts(
+                catalogId, q, status, categoryId, missingImage, structure, page, size);
+    }
+
+    /** Curate tree: parents paginated, each with its children nested (scope §7.2). */
+    @GetMapping("/products/tree")
+    public Page<ProductTreeResponse> listProductTree(
+            @RequestParam(required = false) String catalogId,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String categoryId,
+            @RequestParam(required = false, defaultValue = "false") boolean missingImage,
+            @RequestParam(required = false, defaultValue = "0") int page,
+            @RequestParam(required = false, defaultValue = "50") int size
+    ) {
+        return superAdminGlobalCatalogService.listProductTree(
                 catalogId, q, status, categoryId, missingImage, page, size);
+    }
+
+    @GetMapping("/products/{id}/children")
+    public List<ProductResponse> listProductChildren(
+            @PathVariable String id,
+            @RequestParam(required = false) String catalogId
+    ) {
+        return superAdminGlobalCatalogService.listProductChildren(id, catalogId);
     }
 
     @GetMapping("/products/{id}")
@@ -220,25 +249,70 @@ public class SuperAdminGlobalCatalogController {
         return superAdminGlobalCatalogService.backfillAdoptedImages(null, catalogId, body);
     }
 
+    /**
+     * Whole-catalog export by default; the Curate filters apply only with
+     * {@code applyFilters=true} (GLOBAL_CATALOG_IMPORT_SCOPE §5.8).
+     */
     @GetMapping(value = "/products/export.csv", produces = "text/csv")
     public ResponseEntity<byte[]> exportProductsCsv(
             @RequestParam(required = false) String catalogId,
             @RequestParam(required = false) String status,
-            @RequestParam(required = false, defaultValue = "false") boolean missingImage
+            @RequestParam(required = false, defaultValue = "false") boolean missingImage,
+            @RequestParam(required = false, defaultValue = "false") boolean applyFilters
     ) {
-        byte[] body = csvService.exportCsv(catalogId, status, missingImage);
+        SuperAdminGlobalCatalogCsvService.ExportFile file =
+                csvService.exportCsv(catalogId, status, missingImage, applyFilters);
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"global-catalog-products.csv\"")
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.fileName() + "\"")
+                .contentType(MediaType.parseMediaType("text/csv; charset=UTF-8"))
+                .body(file.content());
+    }
+
+    @GetMapping(value = "/products/import/template.csv", produces = "text/csv")
+    public ResponseEntity<byte[]> importTemplateCsv(
+            @RequestParam(required = false, defaultValue = "products") String mode
+    ) {
+        byte[] body = importService.templateCsv(mode);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"global-catalog-import-template.csv\"")
                 .contentType(MediaType.parseMediaType("text/csv; charset=UTF-8"))
                 .body(body);
     }
 
-    @PostMapping(value = "/products/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public CsvImportResponse importProductsCsv(
+    /** Parse + normalise + plan. Makes no writes; returns the full per-row plan. */
+    @PostMapping(value = "/products/import/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ImportPreviewResponse previewProductsImport(
             @RequestParam(required = false) String catalogId,
+            @RequestParam(required = false) String defaultStatus,
+            @RequestParam(required = false, defaultValue = "false") boolean createCategories,
+            @RequestParam(required = false, defaultValue = "true") boolean reviveArchived,
+            @RequestParam(required = false, defaultValue = "false") boolean force,
+            @RequestParam(required = false, defaultValue = "false") boolean allowDraftParent,
+            @RequestParam(required = false) String defaultStoreKitId,
             @RequestPart("file") MultipartFile file
     ) {
-        return csvService.importCsv(catalogId, file);
+        return importService.preview(catalogId, file,
+                new SuperAdminGlobalCatalogImportService.ImportOptions(
+                        defaultStatus, createCategories, reviveArchived, force,
+                        allowDraftParent, defaultStoreKitId));
+    }
+
+    @PostMapping(value = "/products/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ImportCommitResponse importProductsCsv(
+            @RequestParam(required = false) String catalogId,
+            @RequestParam(required = false) String defaultStatus,
+            @RequestParam(required = false, defaultValue = "false") boolean createCategories,
+            @RequestParam(required = false, defaultValue = "true") boolean reviveArchived,
+            @RequestParam(required = false, defaultValue = "false") boolean force,
+            @RequestParam(required = false, defaultValue = "false") boolean allowDraftParent,
+            @RequestParam(required = false) String defaultStoreKitId,
+            @RequestPart("file") MultipartFile file
+    ) {
+        return importService.commit(catalogId, file,
+                new SuperAdminGlobalCatalogImportService.ImportOptions(
+                        defaultStatus, createCategories, reviveArchived, force,
+                        allowDraftParent, defaultStoreKitId));
     }
 
     @GetMapping("/categories")
@@ -277,6 +351,15 @@ public class SuperAdminGlobalCatalogController {
         return superAdminGlobalCatalogService.getPack(id, catalogId);
     }
 
+    @PostMapping("/packs")
+    @ResponseStatus(HttpStatus.CREATED)
+    public PackDetailResponse createPack(
+            @RequestParam(required = false) String catalogId,
+            @Valid @RequestBody CreatePackRequest body
+    ) {
+        return superAdminGlobalCatalogService.createPack(catalogId, body);
+    }
+
     @PatchMapping("/packs/{id}")
     public PackDetailResponse patchPack(
             @PathVariable String id,
@@ -284,6 +367,24 @@ public class SuperAdminGlobalCatalogController {
             @Valid @RequestBody PatchPackRequest body
     ) {
         return superAdminGlobalCatalogService.patchPack(id, catalogId, body);
+    }
+
+    @DeleteMapping("/packs/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deletePack(
+            @PathVariable String id,
+            @RequestParam(required = false) String catalogId
+    ) {
+        superAdminGlobalCatalogService.deletePack(id, catalogId);
+    }
+
+    /** Pack members with full product detail in one call (no more N+1 from the panel). */
+    @GetMapping("/packs/{id}/products")
+    public List<ProductResponse> listPackProducts(
+            @PathVariable String id,
+            @RequestParam(required = false) String catalogId
+    ) {
+        return superAdminGlobalCatalogService.listPackProducts(id, catalogId);
     }
 
     @GetMapping("/suppliers")

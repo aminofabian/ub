@@ -287,6 +287,130 @@ public class InventoryLedgerService {
         return new InventoryMutationResponse(jeId, mv.getId(), batch.getId());
     }
 
+    /** Result of folding an option/pack row's own stock into its base product's pool. */
+    public record VariantStockFoldResponse(
+            String parentItemId,
+            String parentItemName,
+            BigDecimal movedRowUnits,
+            BigDecimal movedBaseUnits,
+            int batchesMoved
+    ) {
+    }
+
+    /**
+     * Repairs stranded stock (PACKAGE_FLOW_GAPS G1/G4/G7): moves every active batch held
+     * by a family option into its base product's pool, branch by branch. Pack rows
+     * convert by {@code packagingUnitQty} with the unit cost divided to match, so value
+     * is conserved and no journal is posted — a reclassification, not a gain or loss.
+     */
+    @Transactional
+    /**
+     * Base units each row unit of this option converts to when folding its own
+     * stock into the base pool. Mirrors {@code PackageVariantStockResolver}:
+     * a pack row (packageVariant, or packagingUnitQty set and != 1) converts by
+     * packagingUnitQty; a plain flavor option (or qty 1 "Single") converts 1:1.
+     * Package-private for unit tests.
+     */
+    static BigDecimal variantFoldFactor(Item variant) {
+        BigDecimal packQty = variant.getPackagingUnitQty();
+        if (packQty != null && packQty.signum() > 0
+                && (variant.isPackageVariant() || packQty.compareTo(BigDecimal.ONE) != 0)) {
+            return packQty;
+        }
+        return BigDecimal.ONE;
+    }
+
+    public VariantStockFoldResponse recordVariantStockFold(
+            String businessId,
+            zelisline.ub.inventory.api.dto.PostVariantStockFoldRequest req,
+            String userId
+    ) {
+        Item variant = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(req.itemId(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
+        String parentId = variant.getVariantOfItemId() == null || variant.getVariantOfItemId().isBlank()
+                ? null
+                : variant.getVariantOfItemId().trim();
+        if (parentId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Only a family option can fold its stock into the base product");
+        }
+        Item parent = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(parentId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Base product not found"));
+
+        BigDecimal factor = variantFoldFactor(variant);
+
+        List<InventoryBatch> batches = inventoryBatchRepository.lockActiveBatchesForItemAllBranches(
+                businessId, variant.getId(), InventoryConstants.BATCH_STATUS_ACTIVE, BigDecimal.ZERO);
+        if (batches.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "This option holds no stock to move");
+        }
+
+        // After a fold the base is the stock holder by definition.
+        if (!parent.isStocked()) {
+            parent.setStocked(true);
+            itemRepository.save(parent);
+        }
+
+        String optionLabel = variant.getVariantName() != null && !variant.getVariantName().isBlank()
+                ? variant.getVariantName()
+                : variant.getName();
+        String note = req.notes() != null && !req.notes().isBlank()
+                ? req.notes().trim()
+                : "Stock fold: " + optionLabel + " → base pool";
+
+        BigDecimal movedRow = BigDecimal.ZERO;
+        BigDecimal movedBase = BigDecimal.ZERO;
+        int moved = 0;
+        for (InventoryBatch vb : batches) {
+            BigDecimal remaining = vb.getQuantityRemaining();
+            if (remaining == null || remaining.signum() <= 0) {
+                continue;
+            }
+            String opId = UUID.randomUUID().toString();
+            BigDecimal baseQty = remaining.multiply(factor).setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            BigDecimal rowCost = vb.getUnitCost() == null ? BigDecimal.ZERO : vb.getUnitCost();
+            BigDecimal baseCost = factor.compareTo(BigDecimal.ONE) == 0
+                    ? rowCost
+                    : rowCost.divide(factor, 4, RoundingMode.HALF_UP);
+
+            // Out of the option row's batch…
+            vb.setQuantityRemaining(BigDecimal.ZERO);
+            inventoryBatchRepository.save(vb);
+            supplyBatchLifecycleService.checkAndTransitionToSoldoutIfNeeded(businessId, vb.getSupplyBatchId());
+            persistMovement(
+                    businessId, vb.getBranchId(), variant.getId(), vb.getId(),
+                    InventoryConstants.MOVEMENT_ADJUSTMENT, opId,
+                    remaining.negate(), rowCost, note, userId);
+            applyStockDelta(variant, remaining.negate(), true);
+
+            // …into the base pool at the same branch, value conserved.
+            InventoryBatch pb = saveInboundBatch(
+                    businessId, vb.getBranchId(), parent.getId(),
+                    InventoryConstants.BATCH_SOURCE_STOCK_GAIN, opId, baseQty, baseCost, opId);
+            SupplyBatch sb = createSupplyBatchForSoloBatch(pb, opId, "Stock fold");
+            pb.setSupplyBatchId(sb.getId());
+            inventoryBatchRepository.save(pb);
+            persistMovement(
+                    businessId, vb.getBranchId(), parent.getId(), pb.getId(),
+                    InventoryConstants.MOVEMENT_ADJUSTMENT, opId,
+                    baseQty, baseCost, note, userId);
+            applyStockDelta(parent, baseQty);
+
+            movedRow = movedRow.add(remaining);
+            movedBase = movedBase.add(baseQty);
+            moved++;
+        }
+        if (moved == 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "This option holds no stock to move");
+        }
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.StockAdjustedEvent(
+                businessId, batches.get(0).getBranchId(), parent.getId(), parent.getName(),
+                "stock_increase", movedBase));
+        return new VariantStockFoldResponse(parent.getId(), parent.getName(), movedRow, movedBase, moved);
+    }
+
     @Transactional
     public InventoryMutationResponse recordStandaloneWastage(
             String businessId,

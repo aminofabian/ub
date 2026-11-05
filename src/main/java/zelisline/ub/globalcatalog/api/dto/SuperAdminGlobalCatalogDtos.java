@@ -2,6 +2,7 @@ package zelisline.ub.globalcatalog.api.dto;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -95,6 +96,7 @@ public final class SuperAdminGlobalCatalogDtos {
             String variantOfGlobalProductId,
             String packagingUnitName,
             BigDecimal packagingUnitQty,
+            String storeKitId,
             BigDecimal recommendedBuyingPrice,
             BigDecimal recommendedSellingPrice,
             BigDecimal suggestedMarginPct,
@@ -143,6 +145,7 @@ public final class SuperAdminGlobalCatalogDtos {
             @Size(max = 255) String packagingUnitName,
             BigDecimal packagingUnitQty,
             String globalCategoryId,
+            @Size(max = 64) String storeKitId,
             @Size(max = 64) String itemTypeKeyHint,
             Integer sortOrder,
             BigDecimal recommendedBuyingPrice,
@@ -175,6 +178,7 @@ public final class SuperAdminGlobalCatalogDtos {
             @Size(max = 255) String packagingUnitName,
             BigDecimal packagingUnitQty,
             String globalCategoryId,
+            @Size(max = 64) String storeKitId,
             @Size(max = 64) String itemTypeKeyHint,
             Integer sortOrder,
             BigDecimal recommendedBuyingPrice,
@@ -249,7 +253,29 @@ public final class SuperAdminGlobalCatalogDtos {
             @Size(max = 64) String storeKitId,
             @Size(max = 16) String status,
             Integer sortOrder,
-            List<@NotBlank String> productIds
+            /** Full replacement of the member list (legacy). Prefer the diff fields below. */
+            List<@NotBlank String> productIds,
+            /** Diff save: members to append (ignored when {@code productIds} is sent). */
+            List<@NotBlank String> addProductIds,
+            /** Diff save: members to remove (ignored when {@code productIds} is sent). */
+            List<@NotBlank String> removeProductIds
+    ) {
+    }
+
+    public record CreatePackRequest(
+            @NotBlank @Size(max = 64) String code,
+            @NotBlank @Size(max = 255) String name,
+            String description,
+            @Size(max = 64) String storeKitId,
+            @Size(max = 16) String status,
+            Integer sortOrder
+    ) {
+    }
+
+    /** One parent with its nested children — the Curate tree row (scope §7.2). */
+    public record ProductTreeResponse(
+            ProductResponse parent,
+            List<ProductResponse> children
     ) {
     }
 
@@ -258,6 +284,120 @@ public final class SuperAdminGlobalCatalogDtos {
             int updatedCount,
             int skippedCount,
             List<String> warnings
+    ) {
+    }
+
+    // ---- CSV import v2 (GLOBAL_CATALOG_IMPORT_SCOPE, P0) ----
+
+    public record ImportIssueResponse(
+            String code,
+            String severity,
+            String message,
+            String field
+    ) {
+    }
+
+    public record ImportColumnsResponse(
+            List<String> mapped,
+            List<String> aliased,
+            List<String> ignored,
+            List<String> unknown
+    ) {
+    }
+
+    public record ImportSummaryResponse(
+            int create,
+            int update,
+            int unchanged,
+            int skipped,
+            int errors,
+            int warnings,
+            int willPublish,
+            int willStayDraft,
+            int blocked,
+            int parentLinks,
+            int packMemberships,
+            int syntheticParents,
+            int packCreate,
+            int packUpdate
+    ) {
+    }
+
+    /** How a row's parent was resolved: in_file | existing | synthetic. */
+    public record ImportParentPlanResponse(
+            String key,
+            String resolution,
+            String plannedId,
+            String state
+    ) {
+    }
+
+    public record ImportRowPlanResponse(
+            int line,
+            String rowType,
+            String ref,
+            String action,
+            String name,
+            String barcode,
+            String matchedProductId,
+            boolean revived,
+            ImportParentPlanResponse parent,
+            Map<String, List<String>> diff,
+            List<ImportIssueResponse> issues
+    ) {
+    }
+
+    public record ImportPackPlanResponse(
+            int line,
+            String ref,
+            String code,
+            String name,
+            String action,
+            boolean replace,
+            int memberCount,
+            List<ImportIssueResponse> issues
+    ) {
+    }
+
+    public record ImportPreviewResponse(
+            String fileName,
+            String mode,
+            Map<String, Integer> rowTypeCounts,
+            ImportColumnsResponse columns,
+            ImportSummaryResponse summary,
+            List<ImportRowPlanResponse> rows,
+            List<ImportPackPlanResponse> packs,
+            List<ImportIssueResponse> fileIssues
+    ) {
+    }
+
+    public record ImportRowResultResponse(
+            int line,
+            String rowType,
+            String action,
+            String productId,
+            String name,
+            List<ImportIssueResponse> issues
+    ) {
+    }
+
+    public record ImportPackResultResponse(
+            int line,
+            String code,
+            String packId,
+            String action,
+            int membersAdded,
+            int membersRemoved,
+            List<ImportIssueResponse> issues
+    ) {
+    }
+
+    public record ImportCommitResponse(
+            String fileName,
+            ImportSummaryResponse summary,
+            List<ImportRowResultResponse> rows,
+            List<ImportPackResultResponse> packs,
+            List<ImportIssueResponse> fileIssues
     ) {
     }
 

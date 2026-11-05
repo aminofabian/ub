@@ -43,8 +43,10 @@ import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PackSummar
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PatchPackRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PatchProductRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PatchSupplierTemplateRequest;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.CreatePackRequest;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductImageResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductResponse;
+import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductTreeResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.ProductSupplierLinkResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.RestoreAllArchivedResponse;
 import zelisline.ub.globalcatalog.api.dto.SuperAdminGlobalCatalogDtos.PublishAllDraftsResponse;
@@ -353,6 +355,7 @@ public class SuperAdminGlobalCatalogService {
             String status,
             String categoryId,
             boolean missingImage,
+            String structure,
             int page,
             int size
     ) {
@@ -371,9 +374,86 @@ public class SuperAdminGlobalCatalogService {
                 blankToNull(categoryId),
                 blankToNull(q),
                 missingImage,
+                normalizeStructure(structure),
                 pageable);
         Map<String, List<GlobalProductImage>> imagesByProduct = imagesByProductId(result.getContent());
         return result.map(gp -> toProduct(gp, imagesByProduct.getOrDefault(gp.getId(), List.of())));
+    }
+
+    private static String normalizeStructure(String structure) {
+        String normalized = structure == null || structure.isBlank()
+                ? "all"
+                : structure.trim().toLowerCase(Locale.ROOT);
+        if (!Set.of("all", "parents", "variants", "orphans").contains(normalized)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Invalid structure filter (all|parents|variants|orphans)");
+        }
+        return normalized;
+    }
+
+    /**
+     * Curate tree: paginates <b>parents only</b> (children never count against page size,
+     * so a family cannot break across a page boundary — scope §7.2) and returns each
+     * page's children nested in the same response.
+     */
+    @Transactional(readOnly = true)
+    public Page<ProductTreeResponse> listProductTree(
+            String catalogId,
+            String q,
+            String status,
+            String categoryId,
+            boolean missingImage,
+            int page,
+            int size
+    ) {
+        GlobalCatalog catalog = requireCatalog(catalogId);
+        String statusFilter = blankToNull(status);
+        if (statusFilter != null && !GlobalProductStatus.isAllowed(statusFilter)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid status filter");
+        }
+        PageRequest pageable = PageRequest.of(
+                Math.max(page, 0),
+                Math.min(Math.max(size, 1), 100),
+                Sort.by(Sort.Order.asc("sortOrder"), Sort.Order.asc("name")));
+        Page<GlobalProduct> parents = globalProductRepository.searchForSuperAdmin(
+                catalog.getId(),
+                statusFilter,
+                blankToNull(categoryId),
+                blankToNull(q),
+                missingImage,
+                "parents",
+                pageable);
+        List<String> parentIds = parents.getContent().stream().map(GlobalProduct::getId).toList();
+        Map<String, List<GlobalProduct>> childrenByParent = new HashMap<>();
+        if (!parentIds.isEmpty()) {
+            for (GlobalProduct child : globalProductRepository
+                    .findByCatalogIdAndVariantOfGlobalProductIdInOrderBySortOrderAscNameAsc(
+                            catalog.getId(), parentIds)) {
+                childrenByParent
+                        .computeIfAbsent(child.getVariantOfGlobalProductId(), k -> new ArrayList<>())
+                        .add(child);
+            }
+        }
+        List<GlobalProduct> all = new ArrayList<>(parents.getContent());
+        childrenByParent.values().forEach(all::addAll);
+        Map<String, List<GlobalProductImage>> imagesByProduct = imagesByProductId(all);
+        return parents.map(parent -> new ProductTreeResponse(
+                toProduct(parent, imagesByProduct.getOrDefault(parent.getId(), List.of())),
+                childrenByParent.getOrDefault(parent.getId(), List.of()).stream()
+                        .map(child -> toProduct(child, imagesByProduct.getOrDefault(child.getId(), List.of())))
+                        .toList()));
+    }
+
+    @Transactional(readOnly = true)
+    public List<ProductResponse> listProductChildren(String id, String catalogId) {
+        GlobalProduct product = requireProduct(id, catalogId);
+        List<GlobalProduct> children = globalProductRepository
+                .findByCatalogIdAndVariantOfGlobalProductIdOrderBySortOrderAscNameAsc(
+                        product.getCatalogId(), product.getId());
+        Map<String, List<GlobalProductImage>> imagesByProduct = imagesByProductId(children);
+        return children.stream()
+                .map(child -> toProduct(child, imagesByProduct.getOrDefault(child.getId(), List.of())))
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -400,6 +480,18 @@ public class SuperAdminGlobalCatalogService {
         }
         applyPatchFields(product, req);
         assertBarcodeAvailable(product.getCatalogId(), product.getBarcode(), product.getStatus(), product.getId());
+        // §4.3.6: a parent may not be archived while it still has non-archived variants.
+        if (req.status() != null && GlobalProductStatus.ARCHIVED.equals(product.getStatus())) {
+            boolean hasLiveChildren = globalProductRepository
+                    .findByCatalogIdAndVariantOfGlobalProductIdOrderBySortOrderAscNameAsc(
+                            product.getCatalogId(), product.getId())
+                    .stream()
+                    .anyMatch(child -> !GlobalProductStatus.ARCHIVED.equals(child.getStatus()));
+            if (hasLiveChildren) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "This product still has non-archived variants — archive or detach them first");
+            }
+        }
         try {
             GlobalProduct saved = globalProductRepository.saveAndFlush(product);
             return toProduct(saved, galleryService.listForProduct(saved.getId()));
@@ -762,6 +854,7 @@ public class SuperAdminGlobalCatalogService {
         globalProductPackRepository.save(pack);
 
         if (req.productIds() != null) {
+            // Legacy full replace.
             Set<String> unique = new HashSet<>();
             List<String> ordered = new ArrayList<>();
             for (String productId : req.productIds()) {
@@ -783,8 +876,87 @@ public class SuperAdminGlobalCatalogService {
                 row.setSortOrder(sort++);
                 globalProductPackItemRepository.save(row);
             }
+        } else {
+            // Diff save (scope §7.3): add/remove only, so two editors cannot silently drop
+            // each other's rows the way a full replace does.
+            if (req.removeProductIds() != null && !req.removeProductIds().isEmpty()) {
+                globalProductPackItemRepository.deleteByPackIdAndGlobalProductIdIn(
+                        pack.getId(), req.removeProductIds());
+            }
+            if (req.addProductIds() != null && !req.addProductIds().isEmpty()) {
+                Set<String> current = new HashSet<>(
+                        globalProductPackRepository.findProductIdsByPackId(pack.getId()));
+                int sort = current.size();
+                for (String productId : req.addProductIds()) {
+                    if (productId == null || productId.isBlank() || current.contains(productId)) {
+                        continue;
+                    }
+                    GlobalProduct product = globalProductRepository.findById(productId)
+                            .filter(p -> catalog.getId().equals(p.getCatalogId()))
+                            .orElseThrow(() -> new ResponseStatusException(
+                                    HttpStatus.BAD_REQUEST, "Unknown product in pack: " + productId));
+                    GlobalProductPackItem row = new GlobalProductPackItem();
+                    row.setPackId(pack.getId());
+                    row.setGlobalProductId(product.getId());
+                    row.setSortOrder(sort++);
+                    globalProductPackItemRepository.save(row);
+                    current.add(product.getId());
+                }
+            }
         }
         return getPack(pack.getId(), pack.getCatalogId());
+    }
+
+    @Transactional
+    public PackDetailResponse createPack(String catalogId, CreatePackRequest req) {
+        GlobalCatalog catalog = requireCatalog(catalogId);
+        String code = req.code().trim();
+        if (globalProductPackRepository.findByCatalogIdAndCode(catalog.getId(), code).isPresent()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Pack code already exists");
+        }
+        GlobalProductPack pack = new GlobalProductPack();
+        pack.setCatalogId(catalog.getId());
+        pack.setCode(code);
+        pack.setName(req.name().trim());
+        pack.setDescription(blankToNull(req.description()));
+        pack.setStoreKitId(blankToNull(req.storeKitId()));
+        if (blankToNull(req.status()) != null) {
+            pack.setStatus(req.status().trim().toLowerCase(Locale.ROOT));
+        }
+        if (req.sortOrder() != null) {
+            pack.setSortOrder(req.sortOrder());
+        }
+        GlobalProductPack saved = globalProductPackRepository.save(pack);
+        return getPack(saved.getId(), saved.getCatalogId());
+    }
+
+    @Transactional
+    public void deletePack(String id, String catalogId) {
+        GlobalProductPack pack = resolvePack(id, catalogId);
+        globalProductPackItemRepository.deleteByPackId(pack.getId());
+        globalProductPackRepository.delete(pack);
+    }
+
+    /** Pack members with full product detail in one call (replaces the panel's N+1 fetch). */
+    @Transactional(readOnly = true)
+    public List<ProductResponse> listPackProducts(String id, String catalogId) {
+        GlobalProductPack pack = resolvePack(id, catalogId);
+        List<String> orderedIds = globalProductPackRepository.findProductIdsByPackId(pack.getId());
+        if (orderedIds.isEmpty()) {
+            return List.of();
+        }
+        Map<String, GlobalProduct> byId = new HashMap<>();
+        for (GlobalProduct product : globalProductRepository.findAllById(orderedIds)) {
+            byId.put(product.getId(), product);
+        }
+        List<GlobalProduct> ordered = orderedIds.stream()
+                .map(byId::get)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        Map<String, List<GlobalProductImage>> imagesByProduct = imagesByProductId(ordered);
+        return ordered.stream()
+                .map(p -> toProduct(p, imagesByProduct.getOrDefault(p.getId(), List.of())))
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -961,6 +1133,9 @@ public class SuperAdminGlobalCatalogService {
         product.setPackagingUnitName(blankToNull(req.packagingUnitName()));
         product.setPackagingUnitQty(req.packagingUnitQty());
         product.setGlobalCategoryId(blankToNull(req.globalCategoryId()));
+        // Runtime writer for the vertical (scope finding 20): default to grocery, never
+        // silently NULL (= visible to every shop type) unless explicitly requested blank.
+        product.setStoreKitId(req.storeKitId() == null ? "grocery" : blankToNull(req.storeKitId()));
         product.setItemTypeKeyHint(blankToNull(req.itemTypeKeyHint()) != null ? req.itemTypeKeyHint().trim() : "goods");
         product.setSortOrder(req.sortOrder() != null ? req.sortOrder() : 0);
         product.setRecommendedBuyingPrice(req.recommendedBuyingPrice());
@@ -1031,6 +1206,9 @@ public class SuperAdminGlobalCatalogService {
         }
         if (req.globalCategoryId() != null) {
             product.setGlobalCategoryId(blankToNull(req.globalCategoryId()));
+        }
+        if (req.storeKitId() != null) {
+            product.setStoreKitId(blankToNull(req.storeKitId()));
         }
         if (req.itemTypeKeyHint() != null) {
             product.setItemTypeKeyHint(blankToNull(req.itemTypeKeyHint()) != null
@@ -1205,6 +1383,7 @@ public class SuperAdminGlobalCatalogService {
                 gp.getVariantOfGlobalProductId(),
                 gp.getPackagingUnitName(),
                 gp.getPackagingUnitQty(),
+                gp.getStoreKitId(),
                 gp.getRecommendedBuyingPrice(),
                 gp.getRecommendedSellingPrice(),
                 gp.getSuggestedMarginPct(),
@@ -1243,6 +1422,14 @@ public class SuperAdminGlobalCatalogService {
         }
         if (blankToNull(parent.getVariantOfGlobalProductId()) != null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot nest a variant under another variant");
+        }
+        // Depth ≤ 1 in the other direction too: a product that has variants of its own
+        // cannot itself become a variant (GLOBAL_CATALOG_IMPORT_SCOPE §4.3.3).
+        if (productId != null && !globalProductRepository
+                .findByCatalogIdAndVariantOfGlobalProductIdOrderBySortOrderAscNameAsc(catalogId, productId)
+                .isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "This product has variants of its own — detach them before making it a variant");
         }
         return parentId;
     }

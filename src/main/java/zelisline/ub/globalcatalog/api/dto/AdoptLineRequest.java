@@ -23,6 +23,13 @@ public record AdoptLineRequest(
          * When {@code false}, the created item is not storefront-visible.
          * Null / omitted defaults to published (legacy adopt behaviour).
          */
-        Boolean webPublished
+        Boolean webPublished,
+        /**
+         * Explicit opt-in to adopt a variant as a flat standalone SKU when its parent is
+         * unavailable (unpublished/archived and not selected). Without it, such a line is
+         * refused with {@code error_parent_unavailable} — never silently flattened
+         * (GLOBAL_CATALOG_IMPORT_SCOPE §7.4).
+         */
+        Boolean adoptAsStandalone
 ) {
 }

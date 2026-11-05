@@ -25,6 +25,7 @@ import zelisline.ub.globalcatalog.api.dto.GlobalCatalogJobDtos.CreateJobResponse
 import zelisline.ub.globalcatalog.api.dto.GlobalCatalogJobDtos.JobResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalCatalogMetaResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductPackDetailResponse;
+import zelisline.ub.globalcatalog.api.dto.GlobalProductFamilyResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductResponse;
 import zelisline.ub.globalcatalog.api.dto.PreviewAdoptRequest;
 import zelisline.ub.globalcatalog.api.dto.RefreshCatalogRequest;
@@ -89,6 +90,18 @@ public class GlobalCatalogController {
     ) {
         CurrentTenantUser.require(request);
         return globalCatalogService.getProduct(TenantRequestIds.resolveBusinessId(request), id);
+    }
+
+    /** Root + published variants around one product, for the "add its pack sizes too" offer. */
+    @GetMapping("/products/{id}/family")
+    @PreAuthorize("hasPermission(null, 'catalog.global.read')")
+    @ResponseStatus(HttpStatus.OK)
+    public GlobalProductFamilyResponse getProductFamily(
+            @PathVariable String id,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return globalCatalogService.getProductFamily(TenantRequestIds.resolveBusinessId(request), id);
     }
 
     @GetMapping("/lookup")

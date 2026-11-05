@@ -140,6 +140,7 @@ public final class AuditEventTypes {
     public static final String ITEM_UPDATED = "item.updated";
     public static final String ITEM_DELETED = "item.deleted";
     public static final String GLOBAL_PRODUCT_PROMOTED = "global_product.promoted";
+    public static final String GLOBAL_PRODUCT_IMPORTED = "global_product.imported";
     public static final String GLOBAL_PRODUCT_PUBLISHED = "global_product.published";
     public static final String GLOBAL_PRODUCT_IMAGE_UPLOADED = "global_product.image_uploaded";
     /**

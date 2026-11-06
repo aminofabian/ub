@@ -39,6 +39,8 @@ public record FeatureFlagsPatchRequest(
         /** Business hub live beeps on /business. */
         @Valid HubAlertsFeatureFlagsPatch hubAlerts,
         /** Which cashiers may draw out when {@code posCashierDrawout} is on. */
-        @Valid CashierDrawoutAccessPatch posCashierDrawoutAccess
+        @Valid CashierDrawoutAccessPatch posCashierDrawoutAccess,
+        /** Show the Kiosk opening screen while pages load (default on when absent). */
+        Boolean uiOpeningLoader
 ) {
 }

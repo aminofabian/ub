@@ -759,7 +759,8 @@ public class StorefrontSettingsService {
                         && patch.shiftsPrefillOpeningFromLastClose() == null
                         && patch.tillListen() == null
                         && patch.hubAlerts() == null
-                        && patch.posCashierDrawoutAccess() == null)) {
+                        && patch.posCashierDrawoutAccess() == null
+                        && patch.uiOpeningLoader() == null)) {
             return currentSettings;
         }
         ObjectNode root = parseRoot(currentSettings);
@@ -822,6 +823,11 @@ public class StorefrontSettingsService {
                 flags,
                 FeatureFlagService.FLAG_SHIFTS_PREFILL_OPENING_FROM_LAST_CLOSE,
                 patch.shiftsPrefillOpeningFromLastClose()
+        );
+        putFlagIfPresent(
+                flags,
+                FeatureFlagService.FLAG_UI_OPENING_LOADER,
+                patch.uiOpeningLoader()
         );
         if (patch.tillListen() != null) {
             applyTillListenFlags(flags, patch.tillListen());

@@ -148,6 +148,12 @@ public class FeatureFlagService {
     public static final String FLAG_HUB_ALERTS_BEEP_ON_SUPPLY = "hub.alerts.beep_on_supply";
 
     /**
+     * Show the Kiosk "Opening the shop" screen while pages load.
+     * Absent defaults to enabled; set {@code false} to hide it for this tenant.
+     */
+    public static final String FLAG_UI_OPENING_LOADER = "ui.opening_loader";
+
+    /**
      * When enabled, opening a shift prefills denomination quantities from the
      * most recently closed shift at that branch (cashier can still edit).
      */

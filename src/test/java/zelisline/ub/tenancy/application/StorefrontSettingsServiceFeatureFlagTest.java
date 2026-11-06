@@ -46,7 +46,16 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 shiftPrefill,
                 tillListen,
                 hubAlerts,
+                null,
                 null);
+    }
+
+    /** Patch that sets only {@code uiOpeningLoader}; every other component stays absent. */
+    private static FeatureFlagsPatchRequest openingLoader(Boolean enabled) {
+        return new FeatureFlagsPatchRequest(
+                null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null,
+                enabled);
     }
 
     @Test
@@ -184,7 +193,8 @@ class StorefrontSettingsServiceFeatureFlagTest {
                         null,
                         new zelisline.ub.tenancy.api.dto.CashierDrawoutAccessPatch(
                                 "selected",
-                                java.util.List.of("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))));
+                                java.util.List.of("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
+                        null));
 
         var tree = objectMapper.readTree(merged);
         assertThat(tree.path("featureFlags").path("pos.cashier_drawout").asBoolean()).isTrue();
@@ -195,5 +205,50 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")).isTrue();
         assertThat(service.readCashierDrawoutAccess(merged).allowsUser(
                 "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")).isFalse();
+    }
+
+    @Test
+    void mergeFeatureFlags_turnsOffOpeningLoader() throws Exception {
+        String merged = service.mergeFeatureFlags("{}", openingLoader(false));
+
+        var flags = objectMapper.readTree(merged).path("featureFlags");
+        assertThat(flags.has("ui.opening_loader")).isTrue();
+        assertThat(flags.path("ui.opening_loader").asBoolean(true)).isFalse();
+    }
+
+    @Test
+    void mergeFeatureFlags_turnsOpeningLoaderBackOn() throws Exception {
+        String merged = service.mergeFeatureFlags(
+                "{\"featureFlags\":{\"ui.opening_loader\":false}}",
+                openingLoader(true));
+
+        assertThat(objectMapper.readTree(merged)
+                        .path("featureFlags")
+                        .path("ui.opening_loader")
+                        .asBoolean())
+                .isTrue();
+    }
+
+    @Test
+    void mergeFeatureFlags_openingLoaderPatchKeepsOtherFlags() throws Exception {
+        String merged = service.mergeFeatureFlags(
+                "{\"featureFlags\":{\"pos_drafts.enabled\":true,\"butcher_pos.enabled\":true}}",
+                openingLoader(false));
+
+        var flags = objectMapper.readTree(merged).path("featureFlags");
+        assertThat(flags.path("pos_drafts.enabled").asBoolean()).isTrue();
+        assertThat(flags.path("butcher_pos.enabled").asBoolean()).isTrue();
+        assertThat(flags.path("ui.opening_loader").asBoolean(true)).isFalse();
+    }
+
+    @Test
+    void mergeFeatureFlags_otherPatchesDoNotWriteOpeningLoader() throws Exception {
+        // Tenants who never touched the switch must keep the default (on), so a
+        // save that doesn't mention it can't write the key.
+        String merged = service.mergeFeatureFlags(
+                "{}",
+                flags(true, null, null, null, null, null, null, null, null, null, null, null));
+
+        assertThat(objectMapper.readTree(merged).path("featureFlags").has("ui.opening_loader")).isFalse();
     }
 }

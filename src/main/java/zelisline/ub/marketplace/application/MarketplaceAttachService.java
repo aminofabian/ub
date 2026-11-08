@@ -19,6 +19,7 @@ import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.marketplace.api.dto.MarketplaceAttachNote;
 import zelisline.ub.marketplace.api.dto.MarketplaceAttachPreviewResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceAttachResponse;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnection;
@@ -50,10 +51,17 @@ import zelisline.ub.suppliers.repository.SupplierRepository;
  * whole active shelf (the original behaviour), an empty collection attaches the supplier only, and a
  * non-empty one pulls just those products. {@link #previewCatalogue} lets the caller see the shelf
  * before choosing.
+ *
+ * <p>Pulling never duplicates the shop's catalogue: a product the shop already has (same barcode, or the
+ * same name when a barcode cannot settle it) is linked to the supplier rather than created again, and the
+ * rows that were not added as new items come back as notes on the response.
  */
 @Service
 @RequiredArgsConstructor
 public class MarketplaceAttachService {
+
+    /** Most rows a response lists as notes; the rest are only counted. */
+    private static final int MAX_NOTES = 200;
 
     private final MarketplaceSupplierRepository marketplaceSupplierRepository;
     private final BusinessSupplierConnectionRepository connectionRepository;
@@ -185,16 +193,16 @@ public class MarketplaceAttachService {
         shelf.sort(Comparator.comparing(
                 (MarketplaceSupplierProduct p) -> p.getName() == null ? "" : p.getName().toLowerCase(Locale.ROOT)));
 
+        MarketplaceItemIndex index = MarketplaceItemIndex.load(itemRepository, businessId);
         List<MarketplaceAttachPreviewResponse.MarketplaceAttachPreviewProduct> rows = new ArrayList<>(shelf.size());
         for (MarketplaceSupplierProduct product : shelf) {
             String barcode = blankToNull(product.getBarcode());
-            Item localItem = barcode == null
-                    ? null
-                    : itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(businessId, barcode).orElse(null);
+            // The same matching the attach uses, so "in your shop" here is exactly what will not be created again.
+            MarketplaceItemIndex.Match localItem = index.find(barcode, blankToNull(product.getName()));
             boolean linked = connectedLocal != null
                     && localItem != null
                     && supplierProductRepository
-                            .findBySupplierIdAndItemId(connectedLocal.getId(), localItem.getId())
+                            .findBySupplierIdAndItemId(connectedLocal.getId(), localItem.item().id())
                             .filter(l -> l.getDeletedAt() == null)
                             .isPresent();
             MarketplaceSupplierPriceOffer offer = primaryOffer(product.getId());
@@ -345,26 +353,34 @@ public class MarketplaceAttachService {
             Set<String> onlyMarketplaceProductIds,
             Set<String> onlySeedLinkIds
     ) {
+        // One index of the shop's catalogue for the whole attach: an item created for one shelf row is
+        // then found by the next row and by the seed pass, instead of being created twice or missed.
+        AttachRun run = new AttachRun(MarketplaceItemIndex.load(itemRepository, businessId));
         ImportStats stats = importMarketplaceCatalogue(
-                businessId, localSupplierId, marketplaceSupplierId, onlyMarketplaceProductIds);
+                businessId, localSupplierId, marketplaceSupplierId, onlyMarketplaceProductIds, run);
         if (seedLocalSupplierId != null) {
             stats = stats.merge(importSeedLocalCatalogue(
-                    businessId, localSupplierId, seedLocalSupplierId, onlySeedLinkIds));
+                    businessId, localSupplierId, seedLocalSupplierId, onlySeedLinkIds, run));
         }
         return stats;
     }
 
+    /**
+     * Links the seed shop's products that this shop already stocks (by barcode). It only adds links the
+     * shelf pass did not make, so it counts and reports nothing else: whatever the shelf pass already
+     * linked, created or skipped is accounted for there.
+     */
     private ImportStats importSeedLocalCatalogue(
             String businessId,
             String localSupplierId,
             String sourceSupplierId,
-            Set<String> onlyLinkIds
+            Set<String> onlyLinkIds,
+            AttachRun run
     ) {
         List<SupplierProduct> sourceLinks =
                 supplierProductRepository.listActivePublicForSupplier(sourceSupplierId);
+        Notes notes = new Notes();
         int linkedExisting = 0;
-        int alreadyLinked = 0;
-        int skipped = 0;
         for (SupplierProduct sourceLink : sourceLinks) {
             if (onlyLinkIds != null && !onlyLinkIds.contains(sourceLink.getId())) {
                 continue;
@@ -375,20 +391,16 @@ public class MarketplaceAttachService {
                     || !sourceItem.isActive()
                     || sourceItem.getBarcode() == null
                     || sourceItem.getBarcode().isBlank()) {
-                skipped++;
                 continue;
             }
-            var localItem = itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(
-                    businessId, sourceItem.getBarcode().trim());
-            if (localItem.isEmpty()) {
-                skipped++;
+            MarketplaceItemIndex.Match local = run.index.find(sourceItem.getBarcode().trim(), null);
+            if (local == null) {
                 continue;
             }
-            String itemId = localItem.get().getId();
+            String itemId = local.item().id();
             SupplierProduct link = supplierProductRepository.findBySupplierIdAndItemId(localSupplierId, itemId)
                     .orElseGet(SupplierProduct::new);
             if (link.getId() != null && link.getDeletedAt() == null) {
-                alreadyLinked++;
                 continue;
             }
             link.setSupplierId(localSupplierId);
@@ -404,15 +416,24 @@ public class MarketplaceAttachService {
             link.setDeletedAt(null);
             supplierProductRepository.save(link);
             linkedExisting++;
+            notes.add(sourceItem.getName(), sourceItem.getBarcode().trim(),
+                    MarketplaceAttachNote.EXISTING_LINKED, existingReason(local));
         }
-        return new ImportStats(linkedExisting, 0, alreadyLinked, skipped);
+        return new ImportStats(linkedExisting, 0, 0, 0, notes.list(), notes.omitted());
     }
 
+    /**
+     * Pulls the supplier's active shelf (or the chosen part of it) into the shop. For each product:
+     * a matching item the shop already has (same barcode, or the same name when a barcode cannot settle
+     * it) is linked to the supplier and never created again; anything else becomes a new item that is
+     * linked straight away. Rows that were not added as new items are recorded in the stats' notes.
+     */
     private ImportStats importMarketplaceCatalogue(
             String businessId,
             String localSupplierId,
             String marketplaceSupplierId,
-            Set<String> onlyProductIds
+            Set<String> onlyProductIds,
+            AttachRun run
     ) {
         String defaultItemTypeId = itemTypeRepository.findByBusinessIdAndTypeKey(businessId, "goods")
                 .or(() -> itemTypeRepository.findByBusinessIdAndIsDefaultTrue(businessId))
@@ -423,6 +444,7 @@ public class MarketplaceAttachService {
                 marketplaceProductRepository.findByMarketplaceSupplierIdAndStatus(
                         marketplaceSupplierId, MarketplaceSupplierProductStatuses.ACTIVE);
 
+        Notes notes = new Notes();
         int linkedExisting = 0;
         int createdItems = 0;
         int alreadyLinked = 0;
@@ -431,89 +453,70 @@ public class MarketplaceAttachService {
         if (onlyProductIds != null) {
             // A selection was made: pull only those. Ids that are no longer on the shelf (removed,
             // inactive, or another supplier's) are reported as skipped and never imported.
-            List<MarketplaceSupplierProduct> chosen = products.stream()
-                    .filter(p -> onlyProductIds.contains(p.getId()))
-                    .toList();
-            skipped += onlyProductIds.size() - chosen.size();
+            List<MarketplaceSupplierProduct> chosen = new ArrayList<>();
+            Set<String> found = new HashSet<>();
+            for (MarketplaceSupplierProduct candidate : products) {
+                if (onlyProductIds.contains(candidate.getId())) {
+                    chosen.add(candidate);
+                    found.add(candidate.getId());
+                }
+            }
+            for (String wanted : onlyProductIds) {
+                if (!found.contains(wanted)) {
+                    skipped++;
+                    notes.add(null, null, MarketplaceAttachNote.SKIPPED, "No longer on this supplier's shelf");
+                }
+            }
             products = chosen;
         }
 
         for (MarketplaceSupplierProduct product : products) {
-            String barcode = product.getBarcode() != null ? product.getBarcode().trim() : null;
-            Item localItem = null;
-            if (barcode != null && !barcode.isBlank()) {
-                localItem = itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(businessId, barcode)
-                        .orElse(null);
-            }
+            String barcode = blankToNull(product.getBarcode());
+            String name = blankToNull(product.getName());
+            String sku = blankToNull(product.getSku());
+            String label = name != null ? name : (barcode != null ? barcode : "Unnamed product");
 
+            String itemId;
             boolean created = false;
-            if (localItem == null) {
+            MarketplaceItemIndex.Match existing = run.index.find(barcode, name);
+            if (existing != null) {
+                itemId = existing.item().id();
+            } else {
+                if (name == null) {
+                    skipped++;
+                    notes.add(label, barcode, MarketplaceAttachNote.SKIPPED, "No name on the supplier's shelf");
+                    continue;
+                }
                 if (defaultItemTypeId == null) {
                     skipped++;
+                    notes.add(label, barcode, MarketplaceAttachNote.SKIPPED, "No default item type in your shop");
                     continue;
                 }
-                if ((barcode == null || barcode.isBlank())
-                        && (product.getName() == null || product.getName().isBlank())) {
+                String createdId = createShelfItem(businessId, product, defaultItemTypeId, barcode, name, sku, run);
+                if (createdId == null) {
                     skipped++;
+                    notes.add(label, barcode, MarketplaceAttachNote.SKIPPED,
+                            "Could not be created in your catalogue");
                     continue;
                 }
-                try {
-                    BigDecimal buyingPrice = primaryOfferPrice(product.getId());
-                    CreateItemRequest createReq = new CreateItemRequest(
-                            blankToNull(product.getSku()),
-                            blankToNull(barcode),
-                            product.getName().trim(),
-                            blankToNull(product.getDescription()),
-                            defaultItemTypeId,
-                            null,
-                            null,
-                            product.getPackUnit() != null ? product.getPackUnit() : "pcs",
-                            false,
-                            true,
-                            true,
-                            product.getPackUnit(),
-                            product.getPackSize(),
-                            null,
-                            null,
-                            buyingPrice,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null
-                    );
-                    String createdId = itemImportHelper.createItemOrNull(businessId, createReq);
-                    if (createdId == null) {
-                        skipped++;
-                        continue;
-                    }
-                    localItem = itemRepository.findById(createdId).orElse(null);
-                    if (localItem == null) {
-                        skipped++;
-                        continue;
-                    }
-                    created = true;
-                } catch (RuntimeException ex) {
-                    skipped++;
-                    continue;
-                }
+                itemId = createdId;
+                created = true;
+                // Straight into the index, using the id it was created with: the next row for the same
+                // product finds it here instead of making a second one.
+                run.index.add(createdId, name, barcode);
             }
 
             SupplierProduct link = supplierProductRepository
-                    .findBySupplierIdAndItemId(localSupplierId, localItem.getId())
+                    .findBySupplierIdAndItemId(localSupplierId, itemId)
                     .orElseGet(SupplierProduct::new);
             if (link.getId() != null && link.getDeletedAt() == null) {
                 alreadyLinked++;
+                notes.add(label, barcode, MarketplaceAttachNote.ALREADY_LINKED, "Already linked to this supplier");
                 continue;
             }
             link.setSupplierId(localSupplierId);
-            link.setItemId(localItem.getId());
-            link.setSupplierSku(blankToNull(product.getSku()));
+            link.setItemId(itemId);
+            link.setSupplierSku(sku);
             link.setPackSize(product.getPackSize());
             link.setPackUnit(product.getPackUnit());
             link.setMinOrderQty(product.getMinOrderQty());
@@ -528,10 +531,78 @@ public class MarketplaceAttachService {
                 createdItems++;
             } else {
                 linkedExisting++;
+                notes.add(label, barcode, MarketplaceAttachNote.EXISTING_LINKED, existingReason(existing));
             }
         }
 
-        return new ImportStats(linkedExisting, createdItems, alreadyLinked, skipped);
+        return new ImportStats(linkedExisting, createdItems, alreadyLinked, skipped, notes.list(), notes.omitted());
+    }
+
+    /**
+     * Creates the shop item for a shelf product in its own transaction and returns its id, or null when it
+     * could not be created. The supplier's own code is only borrowed as the item's SKU while the shop has
+     * not used it (SKUs are unique per shop); otherwise the catalogue issues one, and the supplier's code
+     * still rides on the supplier link.
+     */
+    private String createShelfItem(
+            String businessId,
+            MarketplaceSupplierProduct product,
+            String itemTypeId,
+            String barcode,
+            String name,
+            String sku,
+            AttachRun run
+    ) {
+        String itemSku = null;
+        if (sku != null) {
+            String skuKey = sku.toLowerCase(Locale.ROOT);
+            if (!run.skusTaken.contains(skuKey) && !itemRepository.existsByBusinessIdAndSku(businessId, sku)) {
+                itemSku = sku;
+                run.skusTaken.add(skuKey);
+            }
+        }
+        try {
+            BigDecimal buyingPrice = primaryOfferPrice(product.getId());
+            CreateItemRequest createReq = new CreateItemRequest(
+                    itemSku,
+                    barcode,
+                    name,
+                    blankToNull(product.getDescription()),
+                    itemTypeId,
+                    null,
+                    null,
+                    product.getPackUnit() != null ? product.getPackUnit() : "pcs",
+                    false,
+                    true,
+                    true,
+                    product.getPackUnit(),
+                    product.getPackSize(),
+                    null,
+                    null,
+                    buyingPrice,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+            );
+            return itemImportHelper.createItemOrNull(businessId, createReq);
+        } catch (RuntimeException ex) {
+            return null;
+        }
+    }
+
+    private static String existingReason(MarketplaceItemIndex.Match match) {
+        String how = MarketplaceItemIndex.BY_BARCODE.equals(match.by()) ? "same barcode" : "same name";
+        String shopName = match.item().name();
+        return shopName == null || shopName.isBlank()
+                ? "Already in your shop (" + how + ")"
+                : "Already in your shop as \"" + shopName.trim() + "\" (" + how + ")";
     }
 
     private BigDecimal primaryOfferPrice(String productId) {
@@ -636,7 +707,9 @@ public class MarketplaceAttachService {
                 stats.createdItems(),
                 stats.alreadyLinked(),
                 stats.skipped(),
-                "active");
+                "active",
+                stats.notes(),
+                stats.notesOmitted());
     }
 
     private static String blankToNull(String value) {
@@ -646,13 +719,65 @@ public class MarketplaceAttachService {
         return value.trim();
     }
 
-    private record ImportStats(int linkedExisting, int createdItems, int alreadyLinked, int skipped) {
+    private record ImportStats(
+            int linkedExisting,
+            int createdItems,
+            int alreadyLinked,
+            int skipped,
+            List<MarketplaceAttachNote> notes,
+            int notesOmitted
+    ) {
         ImportStats merge(ImportStats other) {
+            List<MarketplaceAttachNote> merged = new ArrayList<>(notes);
+            int omitted = notesOmitted + other.notesOmitted;
+            for (MarketplaceAttachNote note : other.notes) {
+                if (merged.size() >= MAX_NOTES) {
+                    omitted++;
+                } else {
+                    merged.add(note);
+                }
+            }
             return new ImportStats(
                     linkedExisting + other.linkedExisting,
                     createdItems + other.createdItems,
                     alreadyLinked + other.alreadyLinked,
-                    skipped + other.skipped);
+                    skipped + other.skipped,
+                    merged,
+                    omitted);
+        }
+    }
+
+    /** State shared by the passes of one attach: the shop's catalogue index, and the SKUs this run has used. */
+    private static final class AttachRun {
+
+        private final MarketplaceItemIndex index;
+        private final Set<String> skusTaken = new HashSet<>();
+
+        AttachRun(MarketplaceItemIndex index) {
+            this.index = index;
+        }
+    }
+
+    /** Collects the rows that were not added as new items, up to a cap so a huge shelf cannot bloat the response. */
+    private static final class Notes {
+
+        private final List<MarketplaceAttachNote> items = new ArrayList<>();
+        private int omitted;
+
+        void add(String name, String barcode, String outcome, String reason) {
+            if (items.size() >= MAX_NOTES) {
+                omitted++;
+                return;
+            }
+            items.add(new MarketplaceAttachNote(name, barcode, outcome, reason));
+        }
+
+        List<MarketplaceAttachNote> list() {
+            return items;
+        }
+
+        int omitted() {
+            return omitted;
         }
     }
 }

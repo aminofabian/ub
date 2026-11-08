@@ -68,8 +68,9 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
  * {@code GET /marketplace/suppliers/{id}/attach-preview} and the optional {@code productIds}
  * on the three attach endpoints.
  *
- * <p>Every shop in these scenarios already stocks the products it pulls (matched by barcode), so
- * the attach takes the deterministic "link an existing item" path rather than creating items.
+ * <p>Most scenarios have the shop already stocking what it pulls (matched by barcode), so the attach links
+ * existing items; the "creating, and not duplicating" group covers products the shop lacks, and the ways
+ * a product the shop has is recognised (barcode, then name) so that it is linked rather than created again.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -359,6 +360,152 @@ class MarketplaceAttachSelectionIT {
         assertThat(linkedBarcodes(TENANT_A, localSupplierId)).containsExactly(UNGA);
     }
 
+    // ------------------------------------------------------------------ creating, and not duplicating
+
+    @Test
+    void productsTheShopLacksAreCreatedAndLinkedToTheSupplier() throws Exception {
+        // Shop A stocks nothing yet, so every chosen product has to be created.
+        Passport mama = passportWithShelf("S-9001", "Mama Njeri Wholesalers");
+
+        MvcResult result = attach(TENANT_A, ROLE_OWNER, mama.passport().getId(),
+                body(mama.id(UNGA), mama.id(SUGAR)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.createdItems").value(2))
+                .andExpect(jsonPath("$.linkedExisting").value(0))
+                .andExpect(jsonPath("$.alreadyLinked").value(0))
+                .andExpect(jsonPath("$.skipped").value(0))
+                .andExpect(jsonPath("$.notes.length()").value(0))
+                .andReturn();
+
+        String localSupplierId = JsonPath.read(result.getResponse().getContentAsString(), "$.localSupplierId");
+        // The new items exist and are linked to this supplier, not left floating in the catalogue.
+        assertThat(linkedBarcodes(TENANT_A, localSupplierId)).containsExactly(UNGA, SUGAR);
+        assertThat(itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(TENANT_A, UNGA)).isPresent();
+        assertThat(itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(TENANT_A, OIL)).isEmpty();
+    }
+
+    @Test
+    void aProductTheShopAlreadyHasIsLinkedNotCreatedAgainAndReported() throws Exception {
+        stockShopA(UNGA);
+        Passport mama = passportWithShelf("S-9001", "Mama Njeri Wholesalers");
+
+        MvcResult result = attach(TENANT_A, ROLE_OWNER, mama.passport().getId(),
+                body(mama.id(UNGA), mama.id(SUGAR)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.createdItems").value(1))
+                .andExpect(jsonPath("$.linkedExisting").value(1))
+                .andExpect(jsonPath("$.skipped").value(0))
+                .andExpect(jsonPath("$.notes.length()").value(1))
+                .andExpect(jsonPath("$.notes[0].outcome").value("existing_linked"))
+                .andExpect(jsonPath("$.notes[0].name").value("Unga 2kg"))
+                .andExpect(jsonPath("$.notes[0].barcode").value(UNGA))
+                .andExpect(jsonPath("$.notes[0].reason")
+                        .value("Already in your shop as \"Shop A 6001\" (same barcode)"))
+                .andReturn();
+
+        String localSupplierId = JsonPath.read(result.getResponse().getContentAsString(), "$.localSupplierId");
+        assertThat(linkedBarcodes(TENANT_A, localSupplierId)).containsExactly(UNGA, SUGAR);
+        // The shop's own unga plus the new sugar: nothing was duplicated.
+        assertThat(itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A)).hasSize(2);
+    }
+
+    @Test
+    void theSameProductListedTwiceOnAShelfIsCreatedOnce() throws Exception {
+        Passport doubled = passport("S-9005", "Double Entry Traders");
+        doubled.add("Unga 2kg", UNGA, "120.00", MarketplaceSupplierProductStatuses.ACTIVE);
+        doubled.add("Unga Jogoo 2kg", UNGA, "125.00", MarketplaceSupplierProductStatuses.ACTIVE);
+
+        MvcResult result = attach(TENANT_A, ROLE_OWNER, doubled.passport().getId(), null)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.createdItems").value(1))
+                .andExpect(jsonPath("$.alreadyLinked").value(1))
+                .andExpect(jsonPath("$.skipped").value(0))
+                .andExpect(jsonPath("$.notes.length()").value(1))
+                .andExpect(jsonPath("$.notes[0].outcome").value("already_linked"))
+                .andReturn();
+
+        String localSupplierId = JsonPath.read(result.getResponse().getContentAsString(), "$.localSupplierId");
+        assertThat(linkedBarcodes(TENANT_A, localSupplierId)).containsExactly(UNGA);
+        assertThat(itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A)).hasSize(1);
+    }
+
+    @Test
+    void aProductWithNoBarcodeIsMatchedToTheSameNameInTheShop() throws Exception {
+        saveItem(TENANT_A, "SKU-A-NAMED", null, "Unga 2kg");
+        Passport mama = passport("S-9006", "Name Only Traders");
+        mama.add("Unga 2kg", null, "120.00", MarketplaceSupplierProductStatuses.ACTIVE);
+
+        MvcResult first = attach(TENANT_A, ROLE_OWNER, mama.passport().getId(), null)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.createdItems").value(0))
+                .andExpect(jsonPath("$.linkedExisting").value(1))
+                .andExpect(jsonPath("$.notes[0].outcome").value("existing_linked"))
+                .andExpect(jsonPath("$.notes[0].reason")
+                        .value("Already in your shop as \"Unga 2kg\" (same name)"))
+                .andReturn();
+
+        String localSupplierId = JsonPath.read(first.getResponse().getContentAsString(), "$.localSupplierId");
+        assertThat(supplierProductRepository.listForSupplier(TENANT_A, localSupplierId)).hasSize(1);
+
+        // Attaching again neither creates it nor links it twice.
+        attach(TENANT_A, ROLE_OWNER, mama.passport().getId(), null)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.createdItems").value(0))
+                .andExpect(jsonPath("$.alreadyLinked").value(1));
+        assertThat(itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A)).hasSize(1);
+        assertThat(supplierProductRepository.listForSupplier(TENANT_A, localSupplierId)).hasSize(1);
+    }
+
+    @Test
+    void twoDifferentBarcodesAreNeverTreatedAsTheSameProduct() throws Exception {
+        saveItem(TENANT_A, "SKU-A-OTHER", "9999", "Unga 2kg");
+        Passport mama = passport("S-9007", "Look-alike Traders");
+        mama.add("Unga 2kg", UNGA, "120.00", MarketplaceSupplierProductStatuses.ACTIVE);
+
+        attach(TENANT_A, ROLE_OWNER, mama.passport().getId(), null)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.createdItems").value(1))
+                .andExpect(jsonPath("$.linkedExisting").value(0))
+                .andExpect(jsonPath("$.notes.length()").value(0));
+
+        assertThat(itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A)).hasSize(2);
+    }
+
+    @Test
+    void aShelfBarcodeWrittenWithSeparatorsStillMatchesTheShopsItem() throws Exception {
+        stockShopA(UNGA);
+        Passport mama = passport("S-9009", "Dashed Traders");
+        mama.add("Unga 2kg", "60-01", "120.00", MarketplaceSupplierProductStatuses.ACTIVE);
+
+        attach(TENANT_A, ROLE_OWNER, mama.passport().getId(), null)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.createdItems").value(0))
+                .andExpect(jsonPath("$.linkedExisting").value(1));
+
+        assertThat(itemRepository.findByBusinessIdAndDeletedAtIsNull(TENANT_A)).hasSize(1);
+    }
+
+    @Test
+    void aSupplierCodeTheShopAlreadyUsesDoesNotStopTheProductBeingAdded() throws Exception {
+        saveItem(TENANT_A, "MAMA-001", RICE, "Shop A rice");
+        Passport mama = passport("S-9008", "Coded Traders");
+        mama.add("Unga 2kg", UNGA, "MAMA-001", "120.00", MarketplaceSupplierProductStatuses.ACTIVE);
+
+        MvcResult result = attach(TENANT_A, ROLE_OWNER, mama.passport().getId(), null)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.createdItems").value(1))
+                .andExpect(jsonPath("$.skipped").value(0))
+                .andReturn();
+
+        String localSupplierId = JsonPath.read(result.getResponse().getContentAsString(), "$.localSupplierId");
+        SupplierProduct link = supplierProductRepository.listForSupplier(TENANT_A, localSupplierId).get(0);
+        // The supplier's own code stays on the link; the new item was issued a code of its own.
+        assertThat(link.getSupplierSku()).isEqualTo("MAMA-001");
+        assertThat(itemRepository.findById(link.getItemId()).orElseThrow().getSku()).isNotEqualTo("MAMA-001");
+        assertThat(itemRepository.findByBusinessIdAndSku(TENANT_A, "MAMA-001").orElseThrow().getBarcode())
+                .isEqualTo(RICE);
+    }
+
     // ------------------------------------------------------------------ preview
 
     @Test
@@ -412,6 +559,19 @@ class MarketplaceAttachSelectionIT {
                 .andExpect(jsonPath("$.products[3].name").value("Unga 2kg"))
                 .andExpect(jsonPath("$.products[3].inShop").value(false))
                 .andExpect(jsonPath("$.products[3].alreadyLinked").value(false));
+    }
+
+    @Test
+    void previewTreatsAnItemWithTheSameNameAndNoBarcodeAsInTheShop() throws Exception {
+        saveItem(TENANT_A, "SKU-A-NAMED", null, "Unga 2kg");
+        Passport mama = passportWithShelf("S-9001", "Mama Njeri Wholesalers");
+
+        preview(TENANT_A, ROLE_OWNER, mama.passport().getId())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.products[0].name").value("Cooking Oil 3L"))
+                .andExpect(jsonPath("$.products[0].inShop").value(false))
+                .andExpect(jsonPath("$.products[3].name").value("Unga 2kg"))
+                .andExpect(jsonPath("$.products[3].inShop").value(true));
     }
 
     @Test
@@ -522,10 +682,15 @@ class MarketplaceAttachSelectionIT {
         }
 
         void add(String name, String barcode, String price, String status) {
+            add(name, barcode, null, price, status);
+        }
+
+        void add(String name, String barcode, String sku, String price, String status) {
             MarketplaceSupplierProduct product = new MarketplaceSupplierProduct();
             product.setMarketplaceSupplierId(passport.getId());
             product.setName(name);
             product.setBarcode(barcode);
+            product.setSku(sku);
             product.setStatus(status);
             product = marketplaceProductRepository.save(product);
             productIdByBarcode.put(barcode, product.getId());

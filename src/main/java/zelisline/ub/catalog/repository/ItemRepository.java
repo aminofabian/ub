@@ -102,6 +102,21 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     Optional<Item> findByBusinessIdAndBarcodeAndDeletedAtIsNull(String businessId, String barcode);
 
+    /** Id, name and barcode of one live catalogue row; enough to spot a duplicate without loading the item. */
+    interface ItemIdentityRow {
+
+        String getId();
+
+        String getName();
+
+        String getBarcode();
+    }
+
+    /** A shop's whole live catalogue as identity rows (used to match a supplier's shelf against it). */
+    @Query("select i.id as id, i.name as name, i.barcode as barcode from Item i "
+            + "where i.businessId = :businessId and i.deletedAt is null")
+    List<ItemIdentityRow> findIdentitiesByBusinessId(@Param("businessId") String businessId);
+
     Optional<Item> findByBusinessIdAndPluCodeAndDeletedAtIsNull(String businessId, String pluCode);
 
     /** First published item matching scale PLU across all businesses. */

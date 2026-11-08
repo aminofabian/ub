@@ -16,6 +16,8 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.api.dto.AttachMarketplaceSupplierByNumberRequest;
 import zelisline.ub.marketplace.api.dto.AttachMarketplaceSupplierFromSeedRequest;
+import zelisline.ub.marketplace.api.dto.AttachMarketplaceSupplierRequest;
+import zelisline.ub.marketplace.api.dto.MarketplaceAttachPreviewResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceAttachResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceConnectResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceSupplierDetailResponse;
@@ -49,16 +51,38 @@ public class MarketplaceSupplierController {
         return marketplaceConnectService.connect(TenantRequestIds.resolveBusinessId(request), id);
     }
 
+    /**
+     * Read-only look at the supplier's shelf as it would land in the caller's shop, so the user can
+     * choose which products to pull before calling {@code /attach}.
+     */
+    @GetMapping("/{marketplaceSupplierId}/attach-preview")
+    @PreAuthorize("hasPermission(null, 'marketplace.suppliers.connect')")
+    public MarketplaceAttachPreviewResponse attachPreview(
+            @PathVariable String marketplaceSupplierId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return marketplaceAttachService.previewCatalogue(
+                TenantRequestIds.resolveBusinessId(request), marketplaceSupplierId);
+    }
+
+    /**
+     * The body is optional: no body pulls the supplier's whole active shelf, {@code productIds}
+     * limits it to the chosen products (an empty list attaches the supplier only).
+     */
     @PostMapping("/{marketplaceSupplierId}/attach")
     @PreAuthorize("hasPermission(null, 'marketplace.suppliers.connect')")
     @ResponseStatus(HttpStatus.CREATED)
     public MarketplaceAttachResponse attach(
             @PathVariable String marketplaceSupplierId,
+            @Valid @RequestBody(required = false) AttachMarketplaceSupplierRequest body,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
         return marketplaceAttachService.attachByMarketplaceId(
-                TenantRequestIds.resolveBusinessId(request), marketplaceSupplierId);
+                TenantRequestIds.resolveBusinessId(request),
+                marketplaceSupplierId,
+                body != null ? body.productIds() : null);
     }
 
     @PostMapping("/attach-by-number")
@@ -70,7 +94,7 @@ public class MarketplaceSupplierController {
     ) {
         CurrentTenantUser.require(request);
         return marketplaceAttachService.attachBySupplierNumber(
-                TenantRequestIds.resolveBusinessId(request), body.supplierNumber());
+                TenantRequestIds.resolveBusinessId(request), body.supplierNumber(), body.productIds());
     }
 
     @PostMapping("/attach-from-seed")
@@ -82,6 +106,6 @@ public class MarketplaceSupplierController {
     ) {
         CurrentTenantUser.require(request);
         return marketplaceAttachService.attachFromPlatformSeed(
-                TenantRequestIds.resolveBusinessId(request), body.sourceLocalSupplierId());
+                TenantRequestIds.resolveBusinessId(request), body.sourceLocalSupplierId(), body.productIds());
     }
 }

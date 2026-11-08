@@ -1,7 +1,13 @@
 package zelisline.ub.marketplace.application;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -13,6 +19,7 @@ import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.catalog.repository.ItemTypeRepository;
+import zelisline.ub.marketplace.api.dto.MarketplaceAttachPreviewResponse;
 import zelisline.ub.marketplace.api.dto.MarketplaceAttachResponse;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnection;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnectionStatuses;
@@ -38,6 +45,11 @@ import zelisline.ub.suppliers.repository.SupplierRepository;
 /**
  * Attaches a shop to a marketplace supplier by marketplace id or S-number,
  * importing catalogue links and creating missing local items.
+ *
+ * <p>Every attach entry point takes an optional product selection. {@code null} pulls the supplier's
+ * whole active shelf (the original behaviour), an empty collection attaches the supplier only, and a
+ * non-empty one pulls just those products. {@link #previewCatalogue} lets the caller see the shelf
+ * before choosing.
  */
 @Service
 @RequiredArgsConstructor
@@ -60,13 +72,21 @@ public class MarketplaceAttachService {
     private final SupplierContactUniquenessService contactUniquenessService;
 
     @Transactional
-    public MarketplaceAttachResponse attachByMarketplaceId(String businessId, String marketplaceSupplierId) {
+    public MarketplaceAttachResponse attachByMarketplaceId(
+            String businessId,
+            String marketplaceSupplierId,
+            Collection<String> productIds
+    ) {
         MarketplaceSupplier marketplace = requireFindableMarketplace(marketplaceSupplierId);
-        return attachMarketplace(businessId, marketplace, null);
+        return attachMarketplace(businessId, marketplace, null, toIdSet(productIds), null);
     }
 
     @Transactional
-    public MarketplaceAttachResponse attachBySupplierNumber(String businessId, String supplierNumberRaw) {
+    public MarketplaceAttachResponse attachBySupplierNumber(
+            String businessId,
+            String supplierNumberRaw,
+            Collection<String> productIds
+    ) {
         String number = SupplierNumberFormat.normalize(supplierNumberRaw);
         if (number == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid supplier number");
@@ -74,15 +94,23 @@ public class MarketplaceAttachService {
         MarketplaceSupplier marketplace = marketplaceSupplierRepository.findBySupplierNumber(number)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
         assertFindable(marketplace);
-        return attachMarketplace(businessId, marketplace, null);
+        return attachMarketplace(businessId, marketplace, null, toIdSet(productIds), null);
     }
 
     /**
      * Attach using another shop's local supplier row (platform discovery).
      * Promotes that seed to a global passport if needed, then attaches.
+     *
+     * <p>Here {@code productIds} are the seed shop's supplier-product link ids (what the public
+     * supplier detail lists), because the passport's own product ids do not exist until the seed is
+     * promoted. They are mapped onto the passport's products by barcode (by name when it has none).
      */
     @Transactional
-    public MarketplaceAttachResponse attachFromPlatformSeed(String businessId, String sourceLocalSupplierId) {
+    public MarketplaceAttachResponse attachFromPlatformSeed(
+            String businessId,
+            String sourceLocalSupplierId,
+            Collection<String> productIds
+    ) {
         Supplier source = supplierRepository.findByIdAndDeletedAtIsNull(sourceLocalSupplierId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
         if (businessId.equals(source.getBusinessId())) {
@@ -127,13 +155,81 @@ public class MarketplaceAttachService {
             passportService.upgradeNameIfPlaceholder(marketplace, source.getName());
         }
 
-        return attachMarketplace(businessId, marketplace, source.getId());
+        Set<String> seedLinkIds = toIdSet(productIds);
+        Set<String> marketplaceProductIds = seedLinkIds == null
+                ? null
+                : mapSeedLinksToMarketplaceProducts(marketplace.getId(), source.getId(), seedLinkIds);
+        return attachMarketplace(businessId, marketplace, source.getId(), marketplaceProductIds, seedLinkIds);
+    }
+
+    /**
+     * Read-only look at what an attach would pull, for the caller's shop: the supplier's active shelf,
+     * each product flagged when this shop already stocks the barcode ({@code inShop}) or already has it
+     * linked to its copy of the supplier ({@code alreadyLinked}). Uses the same visibility rules as the
+     * attach itself, and every shop-side lookup is scoped by {@code businessId}.
+     */
+    @Transactional(readOnly = true)
+    public MarketplaceAttachPreviewResponse previewCatalogue(String businessId, String marketplaceSupplierId) {
+        MarketplaceSupplier marketplace = requireFindableMarketplace(marketplaceSupplierId);
+
+        Supplier connectedLocal = connectionRepository
+                .findByBusinessIdAndMarketplaceSupplierId(businessId, marketplace.getId())
+                .filter(c -> BusinessSupplierConnectionStatuses.ACTIVE.equals(c.getStatus()))
+                .flatMap(c -> supplierRepository.findByIdAndDeletedAtIsNull(c.getLocalSupplierId()))
+                .filter(s -> businessId.equals(s.getBusinessId()))
+                .orElse(null);
+
+        List<MarketplaceSupplierProduct> shelf = new ArrayList<>(
+                marketplaceProductRepository.findByMarketplaceSupplierIdAndStatus(
+                        marketplace.getId(), MarketplaceSupplierProductStatuses.ACTIVE));
+        shelf.sort(Comparator.comparing(
+                (MarketplaceSupplierProduct p) -> p.getName() == null ? "" : p.getName().toLowerCase(Locale.ROOT)));
+
+        List<MarketplaceAttachPreviewResponse.MarketplaceAttachPreviewProduct> rows = new ArrayList<>(shelf.size());
+        for (MarketplaceSupplierProduct product : shelf) {
+            String barcode = blankToNull(product.getBarcode());
+            Item localItem = barcode == null
+                    ? null
+                    : itemRepository.findByBusinessIdAndBarcodeAndDeletedAtIsNull(businessId, barcode).orElse(null);
+            boolean linked = connectedLocal != null
+                    && localItem != null
+                    && supplierProductRepository
+                            .findBySupplierIdAndItemId(connectedLocal.getId(), localItem.getId())
+                            .filter(l -> l.getDeletedAt() == null)
+                            .isPresent();
+            MarketplaceSupplierPriceOffer offer = primaryOffer(product.getId());
+            rows.add(new MarketplaceAttachPreviewResponse.MarketplaceAttachPreviewProduct(
+                    product.getId(),
+                    product.getName(),
+                    barcode,
+                    blankToNull(product.getSku()),
+                    blankToNull(product.getCategoryName()),
+                    product.getPackSize(),
+                    blankToNull(product.getPackUnit()),
+                    product.getMinOrderQty(),
+                    offer != null ? offer.getUnitPrice() : null,
+                    offer != null ? offer.getCurrency() : null,
+                    localItem != null,
+                    linked));
+        }
+
+        return new MarketplaceAttachPreviewResponse(
+                marketplace.getId(),
+                marketplace.getSupplierNumber(),
+                marketplace.getName(),
+                marketplace.getContactPhone(),
+                marketplace.getContactEmail(),
+                connectedLocal != null,
+                connectedLocal != null ? connectedLocal.getId() : null,
+                rows);
     }
 
     private MarketplaceAttachResponse attachMarketplace(
             String businessId,
             MarketplaceSupplier marketplace,
-            String seedLocalSupplierId
+            String seedLocalSupplierId,
+            Set<String> onlyMarketplaceProductIds,
+            Set<String> onlySeedLinkIds
     ) {
         var existingConn = connectionRepository.findByBusinessIdAndMarketplaceSupplierId(
                 businessId, marketplace.getId());
@@ -143,10 +239,9 @@ public class MarketplaceAttachService {
                 Supplier local = supplierRepository.findByIdAndDeletedAtIsNull(conn.getLocalSupplierId())
                         .orElseThrow(() -> new ResponseStatusException(
                                 HttpStatus.CONFLICT, "Existing connection points to a missing local supplier"));
-                ImportStats stats = importMarketplaceCatalogue(businessId, local.getId(), marketplace.getId());
-                if (seedLocalSupplierId != null) {
-                    stats = stats.merge(importSeedLocalCatalogue(businessId, local.getId(), seedLocalSupplierId));
-                }
+                ImportStats stats = pullCatalogue(
+                        businessId, local.getId(), marketplace.getId(), seedLocalSupplierId,
+                        onlyMarketplaceProductIds, onlySeedLinkIds);
                 return toResponse(conn.getId(), local, marketplace, stats);
             }
             conn.setStatus(BusinessSupplierConnectionStatuses.ACTIVE);
@@ -154,10 +249,9 @@ public class MarketplaceAttachService {
             Supplier local = supplierRepository.findByIdAndDeletedAtIsNull(conn.getLocalSupplierId())
                     .orElseThrow(() -> new ResponseStatusException(
                             HttpStatus.CONFLICT, "Existing connection points to a missing local supplier"));
-            ImportStats stats = importMarketplaceCatalogue(businessId, local.getId(), marketplace.getId());
-            if (seedLocalSupplierId != null) {
-                stats = stats.merge(importSeedLocalCatalogue(businessId, local.getId(), seedLocalSupplierId));
-            }
+            ImportStats stats = pullCatalogue(
+                    businessId, local.getId(), marketplace.getId(), seedLocalSupplierId,
+                    onlyMarketplaceProductIds, onlySeedLinkIds);
             return toResponse(conn.getId(), local, marketplace, stats);
         }
 
@@ -230,10 +324,9 @@ public class MarketplaceAttachService {
         connection.setCanViewPurchaseHistory(true);
         connectionRepository.save(connection);
 
-        ImportStats stats = importMarketplaceCatalogue(businessId, local.getId(), marketplace.getId());
-        if (seedLocalSupplierId != null) {
-            stats = stats.merge(importSeedLocalCatalogue(businessId, local.getId(), seedLocalSupplierId));
-        }
+        ImportStats stats = pullCatalogue(
+                businessId, local.getId(), marketplace.getId(), seedLocalSupplierId,
+                onlyMarketplaceProductIds, onlySeedLinkIds);
 
         try {
             shopLinkService.ensureLinksAndCatalogue(marketplace.getId());
@@ -244,10 +337,28 @@ public class MarketplaceAttachService {
         return toResponse(connection.getId(), local, marketplace, stats);
     }
 
+    private ImportStats pullCatalogue(
+            String businessId,
+            String localSupplierId,
+            String marketplaceSupplierId,
+            String seedLocalSupplierId,
+            Set<String> onlyMarketplaceProductIds,
+            Set<String> onlySeedLinkIds
+    ) {
+        ImportStats stats = importMarketplaceCatalogue(
+                businessId, localSupplierId, marketplaceSupplierId, onlyMarketplaceProductIds);
+        if (seedLocalSupplierId != null) {
+            stats = stats.merge(importSeedLocalCatalogue(
+                    businessId, localSupplierId, seedLocalSupplierId, onlySeedLinkIds));
+        }
+        return stats;
+    }
+
     private ImportStats importSeedLocalCatalogue(
             String businessId,
             String localSupplierId,
-            String sourceSupplierId
+            String sourceSupplierId,
+            Set<String> onlyLinkIds
     ) {
         List<SupplierProduct> sourceLinks =
                 supplierProductRepository.listActivePublicForSupplier(sourceSupplierId);
@@ -255,6 +366,9 @@ public class MarketplaceAttachService {
         int alreadyLinked = 0;
         int skipped = 0;
         for (SupplierProduct sourceLink : sourceLinks) {
+            if (onlyLinkIds != null && !onlyLinkIds.contains(sourceLink.getId())) {
+                continue;
+            }
             Item sourceItem = itemRepository.findById(sourceLink.getItemId()).orElse(null);
             if (sourceItem == null
                     || sourceItem.getDeletedAt() != null
@@ -297,7 +411,8 @@ public class MarketplaceAttachService {
     private ImportStats importMarketplaceCatalogue(
             String businessId,
             String localSupplierId,
-            String marketplaceSupplierId
+            String marketplaceSupplierId,
+            Set<String> onlyProductIds
     ) {
         String defaultItemTypeId = itemTypeRepository.findByBusinessIdAndTypeKey(businessId, "goods")
                 .or(() -> itemTypeRepository.findByBusinessIdAndIsDefaultTrue(businessId))
@@ -312,6 +427,16 @@ public class MarketplaceAttachService {
         int createdItems = 0;
         int alreadyLinked = 0;
         int skipped = 0;
+
+        if (onlyProductIds != null) {
+            // A selection was made: pull only those. Ids that are no longer on the shelf (removed,
+            // inactive, or another supplier's) are reported as skipped and never imported.
+            List<MarketplaceSupplierProduct> chosen = products.stream()
+                    .filter(p -> onlyProductIds.contains(p.getId()))
+                    .toList();
+            skipped += onlyProductIds.size() - chosen.size();
+            products = chosen;
+        }
 
         for (MarketplaceSupplierProduct product : products) {
             String barcode = product.getBarcode() != null ? product.getBarcode().trim() : null;
@@ -410,12 +535,70 @@ public class MarketplaceAttachService {
     }
 
     private BigDecimal primaryOfferPrice(String productId) {
+        MarketplaceSupplierPriceOffer offer = primaryOffer(productId);
+        return offer != null ? offer.getUnitPrice() : null;
+    }
+
+    private MarketplaceSupplierPriceOffer primaryOffer(String productId) {
         List<MarketplaceSupplierPriceOffer> offers = priceOfferRepository.findByProductId(productId);
         return offers.stream()
                 .filter(MarketplaceSupplierPriceOffer::isAvailable)
-                .map(MarketplaceSupplierPriceOffer::getUnitPrice)
                 .findFirst()
                 .orElse(null);
+    }
+
+    /** {@code null} = no selection given (pull everything); empty = pull nothing. */
+    private static Set<String> toIdSet(Collection<String> ids) {
+        if (ids == null) {
+            return null;
+        }
+        Set<String> out = new HashSet<>();
+        for (String id : ids) {
+            if (id != null && !id.isBlank()) {
+                out.add(id.trim());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Finds the passport products that correspond to the seed shop's chosen links: same barcode, or
+     * the same name when the item has no barcode (mirrors how the passport catalogue was built from
+     * the seed's links in {@code SupplierPortalShopLinkService}).
+     */
+    private Set<String> mapSeedLinksToMarketplaceProducts(
+            String marketplaceSupplierId,
+            String seedSupplierId,
+            Set<String> seedLinkIds
+    ) {
+        Set<String> out = new HashSet<>();
+        if (seedLinkIds.isEmpty()) {
+            return out;
+        }
+        List<MarketplaceSupplierProduct> shelf = marketplaceProductRepository
+                .findByMarketplaceSupplierIdAndStatus(marketplaceSupplierId, MarketplaceSupplierProductStatuses.ACTIVE);
+        for (SupplierProduct link : supplierProductRepository.listActivePublicForSupplier(seedSupplierId)) {
+            if (!seedLinkIds.contains(link.getId())) {
+                continue;
+            }
+            Item item = itemRepository.findById(link.getItemId()).orElse(null);
+            if (item == null) {
+                continue;
+            }
+            String barcode = blankToNull(item.getBarcode());
+            String name = blankToNull(item.getName());
+            for (MarketplaceSupplierProduct product : shelf) {
+                boolean sameBarcode = barcode != null && barcode.equalsIgnoreCase(blankToNull(product.getBarcode()));
+                boolean sameName = barcode == null
+                        && name != null
+                        && blankToNull(product.getBarcode()) == null
+                        && name.equalsIgnoreCase(blankToNull(product.getName()));
+                if (sameBarcode || sameName) {
+                    out.add(product.getId());
+                }
+            }
+        }
+        return out;
     }
 
     private MarketplaceSupplier requireFindableMarketplace(String marketplaceSupplierId) {

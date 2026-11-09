@@ -3,12 +3,21 @@ package zelisline.ub.exports.application;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.YearMonth;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.LinkedHashMap;
@@ -31,15 +40,39 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.domain.Category;
+import zelisline.ub.catalog.repository.CategoryRepository;
 import zelisline.ub.exports.api.dto.ExportCreateRequest;
 import zelisline.ub.exports.api.dto.ExportJobResponse;
+import zelisline.ub.exports.application.ReportTable.Align;
+import zelisline.ub.exports.application.ReportTable.Column;
 import zelisline.ub.exports.domain.ExportJob;
 import zelisline.ub.exports.repository.ExportJobRepository;
 import zelisline.ub.identity.application.TokenHasher;
 import zelisline.ub.notifications.application.NotificationService;
+import zelisline.ub.reporting.api.dto.InventoryValuationResponse;
 import zelisline.ub.reporting.api.dto.SalesRegisterResponse;
+import zelisline.ub.reporting.api.dto.SupplierMonthlySpendResponse;
+import zelisline.ub.reporting.application.InventoryReportsService;
 import zelisline.ub.reporting.application.SalesReportsService;
+import zelisline.ub.reporting.application.SupplierReportsService;
+import zelisline.ub.sales.api.dto.RevenueByCategoryRow;
+import zelisline.ub.sales.application.SalesIntelligenceService;
+import zelisline.ub.tenancy.domain.Branch;
+import zelisline.ub.tenancy.domain.Business;
+import zelisline.ub.tenancy.repository.BranchRepository;
+import zelisline.ub.tenancy.repository.BusinessRepository;
 
+/**
+ * Builds downloadable reports (CSV / XLSX / PDF) and serves them through a tokened,
+ * short-lived link. The legacy {@code sales_register} report keeps its own writers;
+ * every other report is produced as a neutral {@link ReportTable} and rendered by the
+ * shared {@link ReportTableWriters}, so adding a report is a matter of one builder.
+ *
+ * <p>All data is scoped by the caller's {@code businessId} (resolved from the request
+ * host/headers, never the body). The export permission ({@code reports.export}) gates
+ * every report; it is an owner/admin-tier permission.</p>
+ */
 @Service
 @RequiredArgsConstructor
 public class ExportService {
@@ -47,15 +80,26 @@ public class ExportService {
     private static final Logger log = LoggerFactory.getLogger(ExportService.class);
 
     public static final String REPORT_SALES_REGISTER = "sales_register";
+    public static final String REPORT_SALES_BY_CATEGORY = "sales_by_category";
+    public static final String REPORT_SUPPLIER_SPEND = "supplier_spend";
+    public static final String REPORT_INVENTORY_VALUATION = "inventory_valuation";
 
     private static final String STATUS_PROCESSING = "processing";
     private static final String STATUS_COMPLETED = "completed";
     private static final String STATUS_FAILED = "failed";
 
     private static final Duration DOWNLOAD_TTL = Duration.ofHours(1);
+    private static final String DEFAULT_CURRENCY = "KES";
+    private static final String ZONE = "Africa/Nairobi";
 
     private final ExportJobRepository exportJobRepository;
     private final SalesReportsService salesReportsService;
+    private final SalesIntelligenceService salesIntelligenceService;
+    private final SupplierReportsService supplierReportsService;
+    private final InventoryReportsService inventoryReportsService;
+    private final BranchRepository branchRepository;
+    private final BusinessRepository businessRepository;
+    private final CategoryRepository categoryRepository;
     private final ObjectMapper objectMapper;
     private final NotificationService notificationService;
 
@@ -75,7 +119,9 @@ public class ExportService {
             }
         }
 
-        ExportJobParams params = new ExportJobParams(req.from(), req.to(), blankToNull(req.branchId()));
+        ExportJobParams params = new ExportJobParams(
+                req.from(), req.to(), blankToNull(req.branchId()),
+                blankToNull(req.categoryId()), blankToNull(req.itemTypeId()));
         ExportJob job = new ExportJob();
         job.setBusinessId(businessId);
         job.setReportKey(reportKey);
@@ -136,29 +182,249 @@ public class ExportService {
         if (!Files.isRegularFile(path)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Export file missing");
         }
-        MediaType mt = "xlsx".equals(job.getFormat())
-                ? MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                : MediaType.parseMediaType("text/csv");
-        String filename = "export-" + jobId + "." + job.getFormat();
+        MediaType mt = switch (job.getFormat()) {
+            case "xlsx" -> MediaType.parseMediaType(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            case "pdf" -> MediaType.APPLICATION_PDF;
+            default -> MediaType.parseMediaType("text/csv");
+        };
+        String filename = downloadFilename(job);
         return new ExportDownload(new FileSystemResource(path.toFile()), mt, filename);
     }
+
+    // ---- report dispatch -------------------------------------------------
 
     private void run(ExportJob job, ExportJobParams params) throws IOException {
         if (REPORT_SALES_REGISTER.equals(job.getReportKey())) {
             runSalesRegister(job, params);
             return;
         }
-        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported report");
+        ReportTable table = switch (job.getReportKey()) {
+            case REPORT_SALES_BY_CATEGORY -> salesByCategoryTable(job.getBusinessId(), params);
+            case REPORT_SUPPLIER_SPEND -> supplierSpendTable(job.getBusinessId(), params);
+            case REPORT_INVENTORY_VALUATION -> inventoryValuationTable(job.getBusinessId(), params);
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported report");
+        };
+        writeTable(job, table);
     }
+
+    private void writeTable(ExportJob job, ReportTable table) throws IOException {
+        Path file = newExportFile(job);
+        switch (job.getFormat()) {
+            case "csv" -> ReportTableWriters.writeCsv(file, table);
+            case "xlsx" -> ReportTableWriters.writeXlsx(file, table);
+            case "pdf" -> ReportTableWriters.writePdf(file, table);
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported format");
+        }
+        finalizeDownload(job, file);
+    }
+
+    private Path newExportFile(ExportJob job) throws IOException {
+        Path dir = Paths.get(System.getProperty("java.io.tmpdir"), "ub-exports", job.getBusinessId());
+        Files.createDirectories(dir);
+        return dir.resolve(job.getId() + "." + job.getFormat());
+    }
+
+    private void finalizeDownload(ExportJob job, Path file) {
+        job.setStoragePath(file.toAbsolutePath().toString());
+        job.setDownloadToken(UUID.randomUUID().toString());
+        job.setExpiresAt(Instant.now().plus(DOWNLOAD_TTL));
+    }
+
+    // ---- report builders -------------------------------------------------
+
+    private ReportTable salesByCategoryTable(String businessId, ExportJobParams params) {
+        Meta meta = resolveMeta(businessId);
+        List<RevenueByCategoryRow> rows = salesIntelligenceService.netRevenueByCategory(
+                businessId, params.from(), params.to(),
+                params.categoryId(), params.branchId(), params.itemTypeId());
+
+        List<List<ReportTable.Cell>> body = new ArrayList<>();
+        BigDecimal totalRevenue = BigDecimal.ZERO;
+        BigDecimal totalProfit = BigDecimal.ZERO;
+        for (RevenueByCategoryRow row : rows) {
+            BigDecimal rev = nz(row.netRevenue());
+            BigDecimal profit = nz(row.netProfit());
+            totalRevenue = totalRevenue.add(rev);
+            totalProfit = totalProfit.add(profit);
+            body.add(List.of(
+                    text(categoryName(row.categoryName())),
+                    money(row.netRevenue(), meta.currency()),
+                    money(row.netProfit(), meta.currency()),
+                    pct(row.netRevenue(), row.netProfit())));
+        }
+        List<Column> columns = List.of(
+                new Column("Category", Align.LEFT, 3.4f),
+                new Column("Net revenue", Align.RIGHT, 1.5f),
+                new Column("Net profit", Align.RIGHT, 1.5f),
+                new Column("Margin", Align.RIGHT, 1.0f));
+        List<ReportTable.Cell> totals = List.of(
+                text("Total"), money(totalRevenue, meta.currency()),
+                money(totalProfit, meta.currency()), pct(totalRevenue, totalProfit));
+        List<String> metaLines = List.of(
+                periodDays(params.from(), params.to()),
+                branchLabel(businessId, params.branchId()) + "  ·  "
+                        + categoryLabel(businessId, params.categoryId()));
+        return new ReportTable("Sales by category", meta.businessName(), metaLines,
+                generatedAt(), meta.currency(), columns, body, totals);
+    }
+
+    private ReportTable supplierSpendTable(String businessId, ExportJobParams params) {
+        Meta meta = resolveMeta(businessId);
+        SupplierMonthlySpendResponse resp = supplierReportsService.monthlySpend(
+                businessId, params.from(), params.to());
+
+        List<List<ReportTable.Cell>> body = new ArrayList<>();
+        for (SupplierMonthlySpendResponse.Row row : resp.rows()) {
+            body.add(List.of(
+                    text(row.supplierName() == null || row.supplierName().isBlank()
+                            ? "Unknown supplier" : row.supplierName()),
+                    text(row.calendarMonth() == null ? "" : YearMonth.from(row.calendarMonth()).toString()),
+                    money(row.spend(), meta.currency()),
+                    num(row.qty()),
+                    num(BigDecimal.valueOf(row.invoiceCount()))));
+        }
+        List<Column> columns = List.of(
+                new Column("Supplier", Align.LEFT, 2.8f),
+                new Column("Month", Align.LEFT, 1.1f),
+                new Column("Spend", Align.RIGHT, 1.6f),
+                new Column("Qty", Align.RIGHT, 1.0f),
+                new Column("Invoices", Align.RIGHT, 1.0f));
+        List<ReportTable.Cell> totals = List.of(
+                text("Total"), blank(), money(resp.totalSpend(), meta.currency()),
+                num(resp.totalQty()), blank());
+        List<String> metaLines = List.of(periodMonths(params.from(), params.to()), "All suppliers");
+        return new ReportTable("Supplier spend", meta.businessName(), metaLines,
+                generatedAt(), meta.currency(), columns, body, totals);
+    }
+
+    private ReportTable inventoryValuationTable(String businessId, ExportJobParams params) {
+        Meta meta = resolveMeta(businessId);
+        InventoryValuationResponse resp = inventoryReportsService.valuation(businessId, params.branchId());
+
+        List<List<ReportTable.Cell>> body = new ArrayList<>();
+        for (InventoryValuationResponse.Row row : resp.rows()) {
+            body.add(List.of(
+                    text(row.itemName() == null || row.itemName().isBlank() ? "Item" : row.itemName()),
+                    num(row.qtyOnHand()),
+                    money(row.fifoValue(), meta.currency()),
+                    text(row.earliestExpiry() == null ? "—" : row.earliestExpiry().toString())));
+        }
+        List<Column> columns = List.of(
+                new Column("Item", Align.LEFT, 3.2f),
+                new Column("Qty on hand", Align.RIGHT, 1.3f),
+                new Column("FIFO value", Align.RIGHT, 1.6f),
+                new Column("Earliest expiry", Align.RIGHT, 1.3f));
+        List<ReportTable.Cell> totals = List.of(
+                text("Total"), num(resp.totalQty()), money(resp.totalFifoValue(), meta.currency()), blank());
+        String asOf = "As of " + generatedAt();
+        List<String> metaLines = List.of(branchLabel(businessId, params.branchId()), asOf);
+        return new ReportTable("Inventory valuation", meta.businessName(), metaLines,
+                generatedAt(), meta.currency(), columns, body, totals);
+    }
+
+    // ---- meta + label resolution ----------------------------------------
+
+    private record Meta(String businessName, String currency) {
+    }
+
+    private Meta resolveMeta(String businessId) {
+        Business business = businessRepository.findByIdAndDeletedAtIsNull(businessId).orElse(null);
+        if (business == null) {
+            return new Meta(null, DEFAULT_CURRENCY);
+        }
+        String currency = business.getCurrency() != null && !business.getCurrency().isBlank()
+                ? business.getCurrency().trim() : DEFAULT_CURRENCY;
+        return new Meta(business.getName(), currency);
+    }
+
+    private String branchLabel(String businessId, String branchId) {
+        if (branchId == null) {
+            return "All branches";
+        }
+        return branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(branchId, businessId)
+                .map(Branch::getName)
+                .orElse("Branch");
+    }
+
+    private String categoryLabel(String businessId, String categoryId) {
+        if (categoryId == null) {
+            return "All categories";
+        }
+        return categoryRepository.findByIdAndBusinessId(categoryId, businessId)
+                .map(Category::getName)
+                .orElse("Category");
+    }
+
+    private static String generatedAt() {
+        return DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm", Locale.ENGLISH)
+                .format(Instant.now().atZone(ZoneId.of(ZONE))) + " EAT";
+    }
+
+    private static String periodDays(LocalDate from, LocalDate to) {
+        DateTimeFormatter f = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH);
+        return f.format(from) + " to " + f.format(to);
+    }
+
+    private static String periodMonths(LocalDate from, LocalDate to) {
+        DateTimeFormatter f = DateTimeFormatter.ofPattern("MMM yyyy", Locale.ENGLISH);
+        return f.format(from) + " to " + f.format(to);
+    }
+
+    // ---- cell factories --------------------------------------------------
+
+    private static ReportTable.Cell text(String value) {
+        return new ReportTable.Cell.Text(value);
+    }
+
+    private static ReportTable.Cell blank() {
+        return new ReportTable.Cell.Blank();
+    }
+
+    private static ReportTable.Cell money(BigDecimal amount, String currency) {
+        if (amount == null) {
+            return new ReportTable.Cell.Money(null, "—");
+        }
+        return new ReportTable.Cell.Money(amount,
+                currency + " " + moneyFormat().format(amount.setScale(2, RoundingMode.HALF_UP)));
+    }
+
+    private static ReportTable.Cell num(BigDecimal value) {
+        if (value == null) {
+            return new ReportTable.Cell.Num(null, "—");
+        }
+        return new ReportTable.Cell.Num(value, value.stripTrailingZeros().toPlainString());
+    }
+
+    private static ReportTable.Cell pct(BigDecimal revenue, BigDecimal profit) {
+        if (revenue == null || revenue.signum() == 0 || profit == null) {
+            return new ReportTable.Cell.Blank();
+        }
+        BigDecimal p = profit.multiply(BigDecimal.valueOf(100)).divide(revenue, 1, RoundingMode.HALF_UP);
+        return new ReportTable.Cell.Num(p, p.toPlainString() + "%");
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
+    }
+
+    private static DecimalFormat moneyFormat() {
+        DecimalFormat format = new DecimalFormat("#,##0.00", DecimalFormatSymbols.getInstance(Locale.US));
+        format.setRoundingMode(RoundingMode.HALF_UP);
+        return format;
+    }
+
+    private static String categoryName(String name) {
+        return name == null || name.isBlank() ? "Uncategorised" : name;
+    }
+
+    // ---- legacy sales_register (unchanged output contract) ---------------
 
     private void runSalesRegister(ExportJob job, ExportJobParams params) throws IOException {
         SalesRegisterResponse resp = salesReportsService.salesRegister(
                 job.getBusinessId(), params.from(), params.to(), params.branchId());
 
-        Path dir = Paths.get(System.getProperty("java.io.tmpdir"), "ub-exports", job.getBusinessId());
-        Files.createDirectories(dir);
-        Path file = dir.resolve(job.getId() + "." + job.getFormat());
-
+        Path file = newExportFile(job);
         if ("csv".equals(job.getFormat())) {
             writeCsv(file, resp);
         } else if ("xlsx".equals(job.getFormat())) {
@@ -166,10 +432,7 @@ public class ExportService {
         } else {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported format");
         }
-
-        job.setStoragePath(file.toAbsolutePath().toString());
-        job.setDownloadToken(UUID.randomUUID().toString());
-        job.setExpiresAt(Instant.now().plus(DOWNLOAD_TTL));
+        finalizeDownload(job, file);
     }
 
     private static void writeCsv(Path file, SalesRegisterResponse resp) throws IOException {
@@ -257,6 +520,8 @@ public class ExportService {
         return v == null ? "0.0000" : v.toPlainString();
     }
 
+    // ---- shared helpers --------------------------------------------------
+
     private ExportJobResponse toResponse(ExportJob job) {
         String url = null;
         if (STATUS_COMPLETED.equals(job.getStatus()) && job.getDownloadToken() != null) {
@@ -272,14 +537,32 @@ public class ExportService {
                 job.getErrorMessage());
     }
 
-    private static void validateWindow(java.time.LocalDate from, java.time.LocalDate to) {
+    private String downloadFilename(ExportJob job) {
+        String base = job.getReportKey().replace('_', '-');
+        String period = "";
+        try {
+            ExportJobParams p = objectMapper.readValue(job.getParamsJson(), ExportJobParams.class);
+            if (p.from() != null && p.to() != null) {
+                period = "-" + p.from() + "_" + p.to();
+            }
+        } catch (Exception ignored) {
+            // fall back to the bare report name
+        }
+        return base + period + "." + job.getFormat();
+    }
+
+    private static void validateWindow(LocalDate from, LocalDate to) {
         if (to.isBefore(from)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "to must be on or after from");
         }
     }
 
     private static void validateReportKey(String reportKey) {
-        if (!REPORT_SALES_REGISTER.equals(reportKey)) {
+        boolean known = REPORT_SALES_REGISTER.equals(reportKey)
+                || REPORT_SALES_BY_CATEGORY.equals(reportKey)
+                || REPORT_SUPPLIER_SPEND.equals(reportKey)
+                || REPORT_INVENTORY_VALUATION.equals(reportKey);
+        if (!known) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown reportKey");
         }
     }

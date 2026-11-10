@@ -121,6 +121,64 @@ public class TenantOpsAlertDispatcher {
     }
 
     /**
+     * Send an ad-hoc owner message (e.g. a report summary) to the verified ops-alert
+     * phone on a chosen channel. {@code channel}: {@code sms} | {@code whatsapp} |
+     * {@code both}/{@code auto} (auto = SMS-first-both when SMS is configured, else WhatsApp).
+     */
+    public OpsAlertTestSendResponse sendOwnerMessage(String businessId, String channel, String message) {
+        if (message == null || message.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nothing to send");
+        }
+        BusinessOpsAlertSettings settings = settingsService.resolveForBusiness(businessId);
+        String phone = toSmsMsisdn(settings.getPhone());
+        if (phone == null || phone.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Verify an alert phone number first in ops-alert settings");
+        }
+        TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(
+                businessId, SmsSendReason.OPS_ALERT);
+        if (!messaging.secretsReadable()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    messaging.secretsReadError() != null
+                            ? messaging.secretsReadError()
+                            : "Messaging credentials are not readable");
+        }
+        if (!messaging.smsConfigured() && !messaging.metaWhatsAppConfigured()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "WhatsApp or SMS must be configured");
+        }
+        String body = message.trim();
+        String ch = channel == null ? "auto" : channel.trim().toLowerCase(java.util.Locale.ROOT);
+        CustomerMessageDispatcher.DeliveryResult delivery = switch (ch) {
+            case "sms" -> {
+                if (!messaging.smsConfigured()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "SMS is not configured");
+                }
+                yield customerMessageDispatcher.deliverSmsOnly(messaging, phone, body);
+            }
+            case "whatsapp" -> {
+                if (!messaging.metaWhatsAppConfigured()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "WhatsApp is not configured");
+                }
+                yield customerMessageDispatcher.deliver(messaging, phone, body);
+            }
+            default -> deliverOpsAlert(messaging, phone, body);
+        };
+        if ("failed".equals(delivery.outcome()) || "skipped".equals(delivery.outcome())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    delivery.detail() != null && !delivery.detail().isBlank()
+                            ? delivery.detail()
+                            : "Message delivery failed");
+        }
+        return new OpsAlertTestSendResponse(
+                delivery.channel(),
+                delivery.outcome(),
+                delivery.detail(),
+                BusinessOpsAlertSettingsService.maskPhone(phone));
+    }
+
+    /**
      * Owner alerts must arrive even when Meta's 24h free-form window is closed.
      *
      * <p>SMS-first when configured (same reliability model as OTP). Free-form WhatsApp alone

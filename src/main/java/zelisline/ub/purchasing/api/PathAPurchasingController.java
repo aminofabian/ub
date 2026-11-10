@@ -24,6 +24,8 @@ import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.purchasing.api.dto.AddPathAPurchaseOrderLineRequest;
 import zelisline.ub.purchasing.api.dto.CreatePathAPurchaseOrderRequest;
+import zelisline.ub.purchasing.api.dto.NotifyPurchaseOrderRequest;
+import zelisline.ub.purchasing.api.dto.NotifyPurchaseOrderResponse;
 import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderDetailResponse;
 import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderLineResponse;
 import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderListRow;
@@ -34,6 +36,7 @@ import zelisline.ub.purchasing.api.dto.PostGrnSupplierInvoiceResponse;
 import zelisline.ub.purchasing.api.dto.UpdatePathAPurchaseOrderLineRequest;
 import zelisline.ub.purchasing.api.dto.PathAPurchaseOrderSupplierResponse;
 import zelisline.ub.purchasing.application.PathAPurchaseService;
+import zelisline.ub.purchasing.application.PurchaseOrderNotifyService;
 import zelisline.ub.marketplace.application.MarketplacePurchaseOrderService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.application.BranchResolutionService;
@@ -45,6 +48,7 @@ import zelisline.ub.tenancy.application.BranchResolutionService;
 public class PathAPurchasingController {
 
     private final PathAPurchaseService pathAPurchaseService;
+    private final PurchaseOrderNotifyService purchaseOrderNotifyService;
     private final MarketplacePurchaseOrderService marketplacePurchaseOrderService;
     private final BranchResolutionService branchResolutionService;
 
@@ -157,6 +161,22 @@ public class PathAPurchasingController {
         CurrentTenantUser.require(request);
         return marketplacePurchaseOrderService.sendToSupplier(
                 TenantRequestIds.resolveBusinessId(request), purchaseOrderId);
+    }
+
+    /**
+     * Optional WhatsApp / SMS copy of the order list to the admin and/or the supplier.
+     * Delivery problems come back per recipient in the body; they are never an HTTP error.
+     */
+    @PostMapping("/purchase-orders/{purchaseOrderId}/notify")
+    @PreAuthorize("hasPermission(null, 'purchasing.path_a.write')")
+    public NotifyPurchaseOrderResponse notifyParties(
+            @PathVariable String purchaseOrderId,
+            @Valid @RequestBody NotifyPurchaseOrderRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return purchaseOrderNotifyService.notifyParties(
+                TenantRequestIds.resolveBusinessId(request), purchaseOrderId, body);
     }
 
     @GetMapping("/purchase-orders/{purchaseOrderId}/supplier-response")

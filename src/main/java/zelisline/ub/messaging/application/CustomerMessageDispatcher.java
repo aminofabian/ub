@@ -221,6 +221,28 @@ public class CustomerMessageDispatcher {
     }
 
     /**
+     * Meta WhatsApp free-form text only: no RapidAPI lookup and no SMS fallback, so a caller that
+     * asked for "WhatsApp" gets exactly that. Free-form text only reaches numbers inside Meta's
+     * 24h session window; callers that need guaranteed delivery should also send SMS.
+     */
+    public DeliveryResult deliverWhatsAppOnly(TenantMessagingConfig messaging, String phoneDigits, String message) {
+        var lookup = RapidApiWhatsAppLookupClient.LookupResult.lookupSkipped("whatsapp_only");
+        if (!messaging.metaWhatsAppConfigured()) {
+            return new DeliveryResult(
+                    lookup,
+                    "whatsapp",
+                    "skipped",
+                    "Meta WhatsApp is not configured (phone number ID + access token).");
+        }
+        var send = metaWhatsAppClient.sendText(messaging, phoneDigits, message);
+        if (send.sent()) {
+            return new DeliveryResult(lookup, send.channel(), "sent", send.detail());
+        }
+        String prefix = send.skipped() ? "whatsapp_skipped:" : "whatsapp_failed:";
+        return new DeliveryResult(lookup, "whatsapp", "failed", prefix + send.detail());
+    }
+
+    /**
      * SMS-only send (no RapidAPI lookup, no Meta WhatsApp). Used for the standalone SMS admin test.
      */
     public DeliveryResult deliverSmsOnly(TenantMessagingConfig messaging, String phoneDigits, String message) {

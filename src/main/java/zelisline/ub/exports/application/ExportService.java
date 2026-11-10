@@ -199,13 +199,17 @@ public class ExportService {
             runSalesRegister(job, params);
             return;
         }
-        ReportTable table = switch (job.getReportKey()) {
-            case REPORT_SALES_BY_CATEGORY -> salesByCategoryTable(job.getBusinessId(), params);
-            case REPORT_SUPPLIER_SPEND -> supplierSpendTable(job.getBusinessId(), params);
-            case REPORT_INVENTORY_VALUATION -> inventoryValuationTable(job.getBusinessId(), params);
-            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported report");
+        writeTable(job, buildReportTable(job.getBusinessId(), job.getReportKey(), params));
+    }
+
+    /** Builds the neutral table for a tabular report (every report except legacy sales_register). */
+    public ReportTable buildReportTable(String businessId, String reportKey, ExportJobParams params) {
+        return switch (reportKey) {
+            case REPORT_SALES_BY_CATEGORY -> salesByCategoryTable(businessId, params);
+            case REPORT_SUPPLIER_SPEND -> supplierSpendTable(businessId, params);
+            case REPORT_INVENTORY_VALUATION -> inventoryValuationTable(businessId, params);
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Report has no table form");
         };
-        writeTable(job, table);
     }
 
     private void writeTable(ExportJob job, ReportTable table) throws IOException {
@@ -521,6 +525,112 @@ public class ExportService {
     }
 
     // ---- shared helpers --------------------------------------------------
+
+    // ---- summary (for display + WhatsApp/SMS) ----------------------------
+
+    /** A short, display-and-send summary: headline tiles, top rows, ASCII-safe body. */
+    public static ReportSummary summarize(ReportTable table) {
+        List<ReportSummary.Highlight> highlights = new ArrayList<>();
+        List<Column> cols = table.columns();
+        List<ReportTable.Cell> totals = table.totals();
+        if (totals != null) {
+            for (int i = 0; i < cols.size() && i < totals.size(); i++) {
+                Column col = cols.get(i);
+                if (col.align() != Align.RIGHT) {
+                    continue;
+                }
+                String v = totals.get(i) == null ? "" : totals.get(i).display();
+                if (v == null || v.isBlank() || "\u2014".equals(v)) {
+                    continue;
+                }
+                highlights.add(new ReportSummary.Highlight(col.header(), v));
+                if (highlights.size() >= 4) {
+                    break;
+                }
+            }
+        }
+        List<String[]> topPairs = new ArrayList<>();
+        List<List<ReportTable.Cell>> rows = table.rows() == null ? List.of() : table.rows();
+        int limit = Math.min(3, rows.size());
+        for (int r = 0; r < limit; r++) {
+            List<ReportTable.Cell> row = rows.get(r);
+            topPairs.add(new String[] {row.isEmpty() ? "" : row.get(0).display(), firstSummaryValue(row)});
+        }
+        List<String> topLines = new ArrayList<>();
+        for (String[] pair : topPairs) {
+            topLines.add(pair[1].isEmpty() ? pair[0] : pair[0] + " \u2014 " + pair[1]);
+        }
+
+        StringBuilder sb = new StringBuilder();
+        String name = table.businessName() == null || table.businessName().isBlank()
+                ? "Your shop" : table.businessName();
+        sb.append(asciiForMessage(name)).append(" - ")
+                .append(asciiForMessage(table.title() == null ? "" : table.title())).append("\n");
+        if (table.metaLines() != null && !table.metaLines().isEmpty()) {
+            List<String> metas = new ArrayList<>();
+            for (String meta : table.metaLines()) {
+                metas.add(asciiForMessage(meta));
+            }
+            sb.append(String.join(" | ", metas)).append("\n");
+        }
+        sb.append("\n");
+        for (ReportSummary.Highlight h : highlights) {
+            sb.append(asciiForMessage(h.label())).append(": ").append(asciiForMessage(h.value())).append("\n");
+        }
+        if (!topPairs.isEmpty()) {
+            sb.append("\nTop:\n");
+            for (String[] pair : topPairs) {
+                sb.append("- ").append(asciiForMessage(pair[0]));
+                if (!pair[1].isEmpty()) {
+                    sb.append(": ").append(asciiForMessage(pair[1]));
+                }
+                sb.append("\n");
+            }
+        }
+        if (table.generatedAtLabel() != null && !table.generatedAtLabel().isBlank()) {
+            sb.append("\nKiosk.ke - ").append(asciiForMessage(table.generatedAtLabel()));
+        }
+        return new ReportSummary(table.title() == null ? "" : table.title(), table.businessName(),
+                table.metaLines(), highlights, topLines, sb.toString().trim());
+    }
+
+    private static String firstSummaryValue(List<ReportTable.Cell> row) {
+        for (int i = 1; i < row.size(); i++) {
+            if (row.get(i) instanceof ReportTable.Cell.Money m && m.amount() != null) {
+                return m.display();
+            }
+        }
+        for (int i = 1; i < row.size(); i++) {
+            if (row.get(i) instanceof ReportTable.Cell.Num n && n.value() != null) {
+                return n.display();
+            }
+        }
+        return "";
+    }
+
+    /** ASCII-safe for SMS GSM-7: map typographic glyphs, drop other non-ASCII. */
+    private static String asciiForMessage(String s) {
+        if (s == null || s.isEmpty()) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '\u2018', '\u2019', '\u201A', '\u2032' -> out.append('\'');
+                case '\u201C', '\u201D', '\u201E', '\u2033' -> out.append('"');
+                case '\u2013', '\u2014', '\u2022', '\u00b7' -> out.append('-');
+                case '\u2026' -> out.append("...");
+                case '\u00A0', '\u202F', '\u2007' -> out.append(' ');
+                default -> {
+                    if (c == '\n' || (c >= 32 && c <= 126)) {
+                        out.append(c);
+                    }
+                }
+            }
+        }
+        return out.toString();
+    }
 
     private ExportJobResponse toResponse(ExportJob job) {
         String url = null;

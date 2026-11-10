@@ -35,6 +35,7 @@ public final class ReportTablePdfRenderer {
     private static final float CELL_PAD = 7f;
     private static final float ROW_MIN = 24f;
     private static final float LINE_H = 13f;
+    private static final float STRIP_H = 52f;
 
     private static final Color INK = rgb(0x24312A);
     private static final Color INK_SOFT = rgb(0x4A5A4E);
@@ -120,7 +121,7 @@ public final class ReportTablePdfRenderer {
 
     private static int countPages(ReportTable table, List<List<Cell>> rows, float[] edges) {
         int pages = 1;
-        float cursor = PAGE_H - heroDrop(table, true) - headsHeight();
+        float cursor = PAGE_H - heroDrop(table, true) - stripHeight(table, true) - headsHeight();
         for (List<Cell> row : rows) {
             float rowH = rowHeight(table, row, edges);
             if (cursor - rowH < FOOTER_H + 56f) {
@@ -178,7 +179,11 @@ public final class ReportTablePdfRenderer {
                 y -= 12f;
             }
         }
-        return paintHeads(cb, table, PAGE_H - drop - 14f, edges);
+        float strip = stripHeight(table, true);
+        if (strip > 0f) {
+            paintStrip(cb, table, PAGE_H - drop);
+        }
+        return paintHeads(cb, table, PAGE_H - drop - strip - 14f, edges);
     }
 
     private static float paintHeads(PdfContentByte cb, ReportTable table, float y, float[] edges) {
@@ -194,6 +199,79 @@ public final class ReportTablePdfRenderer {
         }
         stroke(cb, MARGIN, y - 6f, PAGE_W - MARGIN, y - 6f, FOREST, 0.8f);
         return y - 12f;
+    }
+
+    private static float stripHeight(ReportTable table, boolean first) {
+        return first && !highlights(table).isEmpty() ? STRIP_H : 0f;
+    }
+
+    /** Headline tiles derived from the right-aligned totalled columns (label + total value). */
+    private static List<String[]> highlights(ReportTable table) {
+        List<String[]> out = new ArrayList<>();
+        List<Column> cols = table.columns();
+        List<Cell> totals = table.totals();
+        if (totals == null) {
+            return out;
+        }
+        for (int i = 0; i < cols.size() && i < totals.size(); i++) {
+            Column col = cols.get(i);
+            Cell cell = totals.get(i);
+            if (col.align() != Align.RIGHT) {
+                continue;
+            }
+            String value = cell == null ? "" : cell.display();
+            if (value == null || value.isBlank() || "\u2014".equals(value)) {
+                continue;
+            }
+            out.add(new String[] {col.header() == null ? "" : col.header(), value});
+            if (out.size() >= 4) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    private static void paintStrip(PdfContentByte cb, ReportTable table, float topY) {
+        List<String[]> tiles = highlights(table);
+        int n = tiles.size();
+        if (n == 0) {
+            return;
+        }
+        float gap = 8f;
+        float tileH = STRIP_H - 14f;
+        float tileW = (CONTENT_W - (n - 1) * gap) / n;
+        float tileY = topY - 7f - tileH;
+        for (int i = 0; i < n; i++) {
+            float x = MARGIN + i * (tileW + gap);
+            cb.setColorFill(PAPER_RAISED);
+            cb.roundRectangle(x, tileY, tileW, tileH, 4f);
+            cb.fill();
+            cb.setColorStroke(LINE);
+            cb.setLineWidth(0.6f);
+            cb.roundRectangle(x, tileY, tileW, tileH, 4f);
+            cb.stroke();
+            cb.setColorFill(FOREST);
+            cb.rectangle(x, tileY, 2.4f, tileH);
+            cb.fill();
+            String label = tiles.get(i)[0];
+            String value = tiles.get(i)[1];
+            float innerX = x + 9f;
+            float innerW = tileW - 14f;
+            text(cb, innerX, tileY + tileH - 13f,
+                    truncate(label.toUpperCase(), HELVETICA_BOLD, 6.5f, innerW), HELVETICA_BOLD, 6.5f, INK_SOFT);
+            boolean negative = value.startsWith("-") || value.contains(" -");
+            float valueSize = fitSize(value, COURIER_BOLD, innerW, 12.5f, 8.5f);
+            text(cb, innerX, tileY + 7f, truncate(value, COURIER_BOLD, valueSize, innerW),
+                    COURIER_BOLD, valueSize, negative ? TOMATO : INK);
+        }
+    }
+
+    private static float fitSize(String text, BaseFont font, float maxWidth, float start, float min) {
+        float size = start;
+        while (size > min && width(font, text, size) > maxWidth) {
+            size -= 0.5f;
+        }
+        return size;
     }
 
     private static float rowHeight(ReportTable table, List<Cell> row, float[] edges) {

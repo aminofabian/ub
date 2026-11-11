@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.dto.BusinessResponse;
 import zelisline.ub.tenancy.api.dto.UpdateBusinessRequest;
 import zelisline.ub.tenancy.application.TenancyService;
@@ -34,7 +35,8 @@ public class BusinessMeController {
     ) {
         return tenancyService.updateBusinessForTenant(
                 TenantRequestIds.resolveBusinessId(request),
-                updateRequest
+                updateRequest,
+                CurrentTenantUser.auditActorId(request)
         );
     }
 }

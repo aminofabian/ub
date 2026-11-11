@@ -6,7 +6,9 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
@@ -15,6 +17,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.audit.AuditEventTypes;
+import zelisline.ub.audit.application.AuditEventBuilder;
+import zelisline.ub.audit.application.AuditEventPublisher;
+import zelisline.ub.audit.domain.AuditEventActorType;
+import zelisline.ub.audit.domain.AuditEventCategory;
+import zelisline.ub.audit.domain.AuditEventSeverity;
 import zelisline.ub.catalog.application.ProductDisplayName;
 import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
@@ -73,6 +81,8 @@ public class PosDraftService {
     private final SaleService saleService;
     private final OpenShiftResolver openShiftResolver;
     private final ApplicationEventPublisher eventPublisher;
+    private final AuditEventPublisher auditEventPublisher;
+    private final AuditEventBuilder auditEventBuilder;
 
     @Transactional
     public PosDraftResponse createDraft(
@@ -457,8 +467,55 @@ public class PosDraftService {
         }
         draft = draftRepository.save(draft);
         writeAudit(draft.getId(), userId, PosDraftConstants.AUDIT_CANCEL, null, null, null);
+        List<PosDraftLine> lines = loadActiveLines(draftId);
+        publishClearedToDiary(draft, lines, userId, request != null && Boolean.TRUE.equals(request.clearAll()));
         publishDraftCancelled(draft);
-        return toResponse(draft, loadActiveLines(draftId));
+        return toResponse(draft, lines);
+    }
+
+    /**
+     * A cashier abandoning an unpaid cart is a classic till leak, so it goes to
+     * the tenant diary (unified audit log) as well as the per-draft audit trail.
+     * An empty cart is not worth a row. The draft-level trail stays authoritative
+     * for line-by-line edits; the diary row carries only the shape of what was
+     * dropped: line count, units and value.
+     */
+    private void publishClearedToDiary(PosDraft draft, List<PosDraftLine> lines, String userId, boolean clearAll) {
+        if (lines.isEmpty()) {
+            return;
+        }
+        BigDecimal units = BigDecimal.ZERO;
+        BigDecimal value = BigDecimal.ZERO;
+        for (PosDraftLine line : lines) {
+            if (line.getQuantity() != null) {
+                units = units.add(line.getQuantity());
+            }
+            if (line.getLineTotal() != null) {
+                value = value.add(line.getLineTotal());
+            }
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("lineCount", lines.size());
+        metadata.put("units", units.stripTrailingZeros().toPlainString());
+        metadata.put("value", value.setScale(2, RoundingMode.HALF_UP).toPlainString());
+        metadata.put("currency", draft.getCurrency());
+        metadata.put("ticketNumber", draft.getTicketNumber());
+        metadata.put("clearAll", clearAll);
+        auditEventPublisher.publish(auditEventBuilder.builder(
+                        AuditEventCategory.SALES,
+                        clearAll ? AuditEventTypes.POS_SALES_CLEARED_ALL : AuditEventTypes.POS_SALE_CLEARED,
+                        AuditEventSeverity.INFO)
+                .businessId(draft.getBusinessId())
+                .branchId(draft.getBranchId())
+                .actor(userId, AuditEventActorType.USER)
+                .actorName(saleActorNameService.resolveSoldByName(draft.getBusinessId(), userId))
+                .target("pos_draft", draft.getId())
+                .targetLabel("Ticket " + draft.getTicketNumber())
+                .shiftId(draft.getShiftId())
+                .source("pos_terminal")
+                .reason(draft.getCancelledReason())
+                .metadata(metadata)
+                .build());
     }
 
     /**

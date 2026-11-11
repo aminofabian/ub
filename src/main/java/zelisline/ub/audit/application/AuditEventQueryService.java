@@ -1,8 +1,10 @@
 package zelisline.ub.audit.application;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -23,6 +25,9 @@ import zelisline.ub.audit.repository.AuditEventRepository;
 @Transactional(readOnly = true)
 public class AuditEventQueryService {
 
+    /** Upper bound on {@code eventTypes} so a client cannot send an unbounded IN list. */
+    private static final int MAX_EVENT_TYPES = 64;
+
     private final AuditEventRepository auditEventRepository;
 
     public Page<AuditEvent> search(
@@ -30,6 +35,7 @@ public class AuditEventQueryService {
             String branchId,
             AuditEventCategory category,
             String eventType,
+            String eventTypes,
             AuditEventSeverity severity,
             AuditEventSeverity minSeverity,
             String actorId,
@@ -40,11 +46,13 @@ public class AuditEventQueryService {
             Instant to,
             Pageable pageable
     ) {
+        List<String> types = eventTypeList(eventType, eventTypes);
         return auditEventRepository.search(
                 businessId,
                 branchId,
                 category,
-                eventType,
+                types.isEmpty(),
+                types.isEmpty() ? List.of("*") : types,
                 severityRange(severity, minSeverity),
                 actorId,
                 targetType,
@@ -57,40 +65,70 @@ public class AuditEventQueryService {
     }
 
     /**
-     * Period totals by severity and category, honoring the same filters as
-     * {@link #search} so dashboard cards match the visible table.
+     * Period totals by severity, category and event type, honoring the same
+     * filters as {@link #search} so header counts match the visible list.
      */
     public AuditEventSummaryResponse summarize(
             String businessId,
             String branchId,
             AuditEventCategory category,
             String eventType,
+            String eventTypes,
             AuditEventSeverity severity,
             AuditEventSeverity minSeverity,
             Instant from,
             Instant to
     ) {
-        List<Object[]> rows = auditEventRepository.countBySeverityAndCategory(
+        List<String> types = eventTypeList(eventType, eventTypes);
+        List<Object[]> rows = auditEventRepository.countBySeverityCategoryAndType(
                 businessId,
                 branchId,
                 category,
-                eventType,
+                types.isEmpty(),
+                types.isEmpty() ? List.of("*") : types,
                 severityRange(severity, minSeverity),
                 from,
                 to
         );
         Map<AuditEventSeverity, Long> bySeverity = new EnumMap<>(AuditEventSeverity.class);
         Map<AuditEventCategory, Long> byCategory = new EnumMap<>(AuditEventCategory.class);
+        Map<String, Long> byEventType = new LinkedHashMap<>();
         long total = 0;
         for (Object[] row : rows) {
             AuditEventSeverity sev = (AuditEventSeverity) row[0];
             AuditEventCategory cat = (AuditEventCategory) row[1];
-            long count = ((Number) row[2]).longValue();
+            String type = (String) row[2];
+            long count = ((Number) row[3]).longValue();
             bySeverity.merge(sev, count, Long::sum);
             byCategory.merge(cat, count, Long::sum);
+            byEventType.merge(type, count, Long::sum);
             total += count;
         }
-        return new AuditEventSummaryResponse(total, bySeverity, byCategory);
+        return new AuditEventSummaryResponse(total, bySeverity, byCategory, byEventType);
+    }
+
+    /**
+     * An exact {@code eventType} wins; otherwise {@code eventTypes} is split on
+     * commas, trimmed, de-duplicated and capped. Empty means "any type".
+     */
+    static List<String> eventTypeList(String eventType, String eventTypes) {
+        if (eventType != null && !eventType.isBlank()) {
+            return List.of(eventType.trim());
+        }
+        if (eventTypes == null || eventTypes.isBlank()) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>();
+        for (String raw : eventTypes.split(",")) {
+            String t = raw.trim();
+            if (!t.isEmpty() && !out.contains(t)) {
+                out.add(t);
+            }
+            if (out.size() >= MAX_EVENT_TYPES) {
+                break;
+            }
+        }
+        return out;
     }
 
     /**

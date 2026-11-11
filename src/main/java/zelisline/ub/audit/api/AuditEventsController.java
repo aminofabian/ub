@@ -1,6 +1,11 @@
 package zelisline.ub.audit.api;
 
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -23,6 +28,8 @@ import zelisline.ub.audit.application.AuditEventQueryService;
 import zelisline.ub.audit.domain.AuditEvent;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
+import zelisline.ub.identity.domain.User;
+import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -34,6 +41,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class AuditEventsController {
 
     private final AuditEventQueryService queryService;
+    private final UserRepository userRepository;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'audit.read')")
@@ -58,6 +66,7 @@ public class AuditEventsController {
                 branchId,
                 filter.category(),
                 filter.eventType(),
+                filter.eventTypes(),
                 filter.severity(),
                 filter.minSeverity(),
                 filter.actorId(),
@@ -69,10 +78,46 @@ public class AuditEventsController {
                 pageable
         );
 
-        return page.map(this::toResponse);
+        Map<String, String> names = staffNames(businessId, page.getContent());
+        return page.map(e -> toResponse(e, names));
     }
 
-    /** Period totals for the activity-log header cards (same filters as the list). */
+    /**
+     * Most emitters store only {@code actorId}; the diary reads sentences, so
+     * resolve staff names for the page in one query. Scoped to the caller's
+     * business: a foreign user id resolves to nothing.
+     */
+    private Map<String, String> staffNames(String businessId, List<AuditEvent> events) {
+        Set<String> ids = new HashSet<>();
+        for (AuditEvent e : events) {
+            if (e.getActorType() == zelisline.ub.audit.domain.AuditEventActorType.USER
+                    && e.getActorId() != null
+                    && (e.getActorName() == null || e.getActorName().isBlank())) {
+                ids.add(e.getActorId());
+            }
+            if ("user".equals(e.getTargetType()) && e.getTargetId() != null) {
+                ids.add(e.getTargetId());
+            }
+        }
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> names = new HashMap<>();
+        for (User u : userRepository.findAllById(ids)) {
+            if (!businessId.equals(u.getBusinessId())) {
+                continue;
+            }
+            String name = u.getName() != null && !u.getName().isBlank()
+                    ? u.getName().trim()
+                    : u.getEmail();
+            if (name != null && !name.isBlank()) {
+                names.put(u.getId(), name.trim());
+            }
+        }
+        return names;
+    }
+
+    /** Period totals for the activity-log header (same filters as the list). */
     @GetMapping("/summary")
     @PreAuthorize("hasPermission(null, 'audit.read')")
     public AuditEventSummaryResponse summary(
@@ -88,6 +133,7 @@ public class AuditEventsController {
                 branchId,
                 filter.category(),
                 filter.eventType(),
+                filter.eventTypes(),
                 filter.severity(),
                 filter.minSeverity(),
                 filter.from(),
@@ -117,7 +163,14 @@ public class AuditEventsController {
         return Sort.by(direction, parts[0]);
     }
 
-    private AuditEventResponse toResponse(AuditEvent e) {
+    private AuditEventResponse toResponse(AuditEvent e, Map<String, String> names) {
+        String actorName = e.getActorName();
+        if ((actorName == null || actorName.isBlank()) && e.getActorId() != null) {
+            actorName = names.get(e.getActorId());
+        }
+        String targetName = "user".equals(e.getTargetType()) && e.getTargetId() != null
+                ? names.get(e.getTargetId())
+                : null;
         return new AuditEventResponse(
                 e.getId(),
                 e.getBusinessId(),
@@ -127,10 +180,11 @@ public class AuditEventsController {
                 e.getSeverity(),
                 e.getActorId(),
                 e.getActorType(),
-                e.getActorName(),
+                actorName,
                 e.getTargetType(),
                 e.getTargetId(),
                 e.getTargetLabel(),
+                targetName,
                 e.getSessionId(),
                 e.getCorrelationId(),
                 e.getIpAddress(),

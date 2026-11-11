@@ -187,10 +187,16 @@ public class SaleVoidService {
                 .branchId(sale.getBranchId())
                 .actor(userId, AuditEventActorType.USER)
                 .target("sale", sale.getId())
-                .targetLabel("Sale " + sale.getId().substring(0, 8))
+                .targetLabel(sale.getReceiptNo() != null
+                        ? "Sale #" + sale.getReceiptNo()
+                        : "Sale " + sale.getId().substring(0, 8))
                 .shiftId(shift != null ? shift.getId() : sale.getShiftId())
                 .oldState(map("status", SalesConstants.SALE_STATUS_COMPLETED, "grandTotal", sale.getGrandTotal().toPlainString()))
                 .newState(map("status", SalesConstants.SALE_STATUS_VOIDED))
+                .metadata(map(
+                        "receiptNo", sale.getReceiptNo(),
+                        "grandTotal", sale.getGrandTotal().toPlainString(),
+                        "cashBack", cashBack.toPlainString()))
                 .source("pos_terminal")
                 .reason(reason)
                 .build());

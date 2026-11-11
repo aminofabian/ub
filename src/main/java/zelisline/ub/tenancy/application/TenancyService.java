@@ -102,6 +102,7 @@ public class TenancyService {
     private final ObjectProvider<zelisline.ub.billing.application.SubscriptionPlanLimitGuard>
             planLimitGuard;
     private final PosReceiptSequenceSettingsService posReceiptSequenceSettingsService;
+    private final CashierCapabilityAuditService cashierCapabilityAuditService;
 
     @Transactional
     public BusinessResponse createBusiness(CreateBusinessRequest request) {
@@ -443,13 +444,32 @@ public class TenancyService {
         String tenantBusinessId,
         UpdateBusinessRequest request
     ) {
-        return updateBusinessInternal(tenantBusinessId, request, true);
+        return updateBusinessInternal(tenantBusinessId, request, true, null);
+    }
+
+    /** Tenant self-serve update that records who flipped cashier capabilities. */
+    @Transactional
+    public BusinessResponse updateBusinessForTenant(
+        String tenantBusinessId,
+        UpdateBusinessRequest request,
+        String actorUserId
+    ) {
+        return updateBusinessInternal(tenantBusinessId, request, true, actorUserId);
     }
 
     private BusinessResponse updateBusinessInternal(
         String businessId,
         UpdateBusinessRequest request,
         boolean tenantSelfServe
+    ) {
+        return updateBusinessInternal(businessId, request, tenantSelfServe, null);
+    }
+
+    private BusinessResponse updateBusinessInternal(
+        String businessId,
+        UpdateBusinessRequest request,
+        boolean tenantSelfServe,
+        String actorUserId
     ) {
         Business business = businessRepository
             .findByIdAndDeletedAtIsNull(businessId)
@@ -518,11 +538,18 @@ public class TenancyService {
             );
         }
         if (request.featureFlags() != null) {
+            String beforeFlags = business.getSettings();
             business.setSettings(
                 storefrontSettingsService.mergeFeatureFlags(
-                    business.getSettings(),
+                    beforeFlags,
                     request.featureFlags()
                 )
+            );
+            cashierCapabilityAuditService.publishChanges(
+                business.getId(),
+                actorUserId,
+                beforeFlags,
+                business.getSettings()
             );
         }
         if (request.hubAlerts() != null) {

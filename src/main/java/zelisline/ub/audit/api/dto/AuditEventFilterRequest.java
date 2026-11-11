@@ -11,6 +11,8 @@ public record AuditEventFilterRequest(
         String branchId,
         AuditEventCategory category,
         String eventType,
+        /** Comma-separated event types; any match. Ignored when {@code eventType} is set. */
+        String eventTypes,
         AuditEventSeverity severity,
         /** Inclusive lower bound — e.g. WARN surfaces WARN, ERROR and CRITICAL (used by the failures view). */
         AuditEventSeverity minSeverity,
@@ -25,6 +27,12 @@ public record AuditEventFilterRequest(
         String sort
 ) {
     public AuditEventFilterRequest {
+        if (eventType != null && eventType.isBlank()) {
+            eventType = null;
+        }
+        if (eventTypes != null && eventTypes.isBlank()) {
+            eventTypes = null;
+        }
         if (page == null) {
             page = 0;
         }

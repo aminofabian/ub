@@ -123,6 +123,10 @@ public final class AuditEventTypes {
     public static final String POS_DRAFT_UPDATED = "pos_draft.updated";
     public static final String POS_DRAFT_CANCELLED = "pos_draft.cancelled";
     public static final String POS_DRAFT_COMPLETED = "pos_draft.completed";
+    /** Cashier cleared an unpaid cart at the till (lines + value in metadata). */
+    public static final String POS_SALE_CLEARED = "pos_sale.cleared";
+    /** Cashier used "Clear all" to void every open till tab at once; one row per cart. */
+    public static final String POS_SALES_CLEARED_ALL = "pos_sales.cleared_all";
 
     // Customers & loyalty
     public static final String CUSTOMER_CREATED = "customer.created";
@@ -202,6 +206,11 @@ public final class AuditEventTypes {
     public static final String CATALOG_RESOLVED = "catalog.resolved";
     public static final String CATALOG_PACK_ADOPTED = "catalog.pack_adopted";
     public static final String BUSINESS_REGION_CHANGED = "business.region_changed";
+    /**
+     * Owner/admin flipped a cashier capability flag (allow clear sale, price
+     * edit, drawout, ...). One row per changed flag; old/new carry the boolean.
+     */
+    public static final String SETTINGS_CASHIER_CAPABILITY_CHANGED = "settings.cashier_capability_changed";
 
     public static final String PLATFORM_EMAIL_CAMPAIGN_SENT = "platform.email_campaign.sent";
 

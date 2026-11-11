@@ -19,6 +19,8 @@ public record AuditEventResponse(
         String targetType,
         String targetId,
         String targetLabel,
+        /** Display name when the target is a staff user of this business; null otherwise. */
+        String targetName,
         String sessionId,
         String correlationId,
         String ipAddress,

@@ -14,6 +14,13 @@ import zelisline.ub.audit.domain.AuditEvent;
 import zelisline.ub.audit.domain.AuditEventCategory;
 import zelisline.ub.audit.domain.AuditEventSeverity;
 
+/**
+ * Tenant-scoped reads over the append-only {@code audit_events} table.
+ *
+ * <p>{@code eventTypes} is never null: callers pass a one-element placeholder
+ * with {@code anyEventType = true} when no type filter applies, because JPQL
+ * cannot null-check a collection parameter.
+ */
 @Repository
 public interface AuditEventRepository extends JpaRepository<AuditEvent, String> {
 
@@ -22,7 +29,7 @@ public interface AuditEventRepository extends JpaRepository<AuditEvent, String> 
             WHERE e.businessId = :businessId
               AND (:branchId IS NULL OR e.branchId = :branchId)
               AND (:category IS NULL OR e.category = :category)
-              AND (:eventType IS NULL OR e.eventType = :eventType)
+              AND (:anyEventType = true OR e.eventType IN :eventTypes)
               AND e.severity IN :severities
               AND (:actorId IS NULL OR e.actorId = :actorId)
               AND (:targetType IS NULL OR e.targetType = :targetType)
@@ -36,7 +43,8 @@ public interface AuditEventRepository extends JpaRepository<AuditEvent, String> 
             @Param("businessId") String businessId,
             @Param("branchId") String branchId,
             @Param("category") AuditEventCategory category,
-            @Param("eventType") String eventType,
+            @Param("anyEventType") boolean anyEventType,
+            @Param("eventTypes") List<String> eventTypes,
             @Param("severities") List<AuditEventSeverity> severities,
             @Param("actorId") String actorId,
             @Param("targetType") String targetType,
@@ -61,21 +69,22 @@ public interface AuditEventRepository extends JpaRepository<AuditEvent, String> 
     );
 
     @Query("""
-            SELECT e.severity, e.category, COUNT(e) FROM AuditEvent e
+            SELECT e.severity, e.category, e.eventType, COUNT(e) FROM AuditEvent e
             WHERE e.businessId = :businessId
               AND (:branchId IS NULL OR e.branchId = :branchId)
               AND (:category IS NULL OR e.category = :category)
-              AND (:eventType IS NULL OR e.eventType = :eventType)
+              AND (:anyEventType = true OR e.eventType IN :eventTypes)
               AND e.severity IN :severities
               AND (:from IS NULL OR e.createdAt >= :from)
               AND (:to IS NULL OR e.createdAt <= :to)
-            GROUP BY e.severity, e.category
+            GROUP BY e.severity, e.category, e.eventType
             """)
-    List<Object[]> countBySeverityAndCategory(
+    List<Object[]> countBySeverityCategoryAndType(
             @Param("businessId") String businessId,
             @Param("branchId") String branchId,
             @Param("category") AuditEventCategory category,
-            @Param("eventType") String eventType,
+            @Param("anyEventType") boolean anyEventType,
+            @Param("eventTypes") List<String> eventTypes,
             @Param("severities") List<AuditEventSeverity> severities,
             @Param("from") Instant from,
             @Param("to") Instant to

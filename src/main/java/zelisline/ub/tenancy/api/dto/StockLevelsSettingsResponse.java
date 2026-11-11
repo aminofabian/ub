@@ -1,6 +1,10 @@
 package zelisline.ub.tenancy.api.dto;
 
 public record StockLevelsSettingsResponse(
+        /**
+         * Stock managers may set on-hand on the Stock levels page. Default on —
+         * admin can turn off in business settings.
+         */
         boolean allowStockEditForStockManager,
         /**
          * Grocery counter Edit stock mode for {@code grocery_clerk}. Default on —
@@ -40,6 +44,6 @@ public record StockLevelsSettingsResponse(
 ) {
     public static StockLevelsSettingsResponse defaults() {
         return new StockLevelsSettingsResponse(
-                false, true, true, true, true, true, true, true, true, true);
+                true, true, true, true, true, true, true, true, true, true);
     }
 }

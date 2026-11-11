@@ -160,6 +160,16 @@ public class SaleService {
         return toResponse(sale);
     }
 
+    @Transactional(readOnly = true)
+    public SaleResponse requireSaleByReceiptNo(String businessId, long receiptNo) {
+        if (receiptNo <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Receipt number must be positive");
+        }
+        Sale sale = saleRepository.findByBusinessIdAndReceiptNo(businessId, receiptNo)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Sale not found"));
+        return toResponse(sale);
+    }
+
     private SaleResponse completeNewSale(
             String businessId,
             String idempotencyKey,

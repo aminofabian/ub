@@ -109,14 +109,14 @@ class BusinessInventorySettingsIT {
     }
 
     @Test
-    void getDefaultsStockLevelsEditDisabled() throws Exception {
+    void getDefaultsStockLevelsEditEnabled() throws Exception {
         mockMvc.perform(get("/api/v1/businesses/me")
                         .header("X-Tenant-Id", TENANT)
                         .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.inventory.stockLevels.allowStockEditForStockManager")
-                        .value(false))
+                        .value(true))
                 .andExpect(jsonPath("$.inventory.stockLevels.allowStockEditForGroceryClerk")
                         .value(true))
                 .andExpect(jsonPath("$.inventory.stockLevels.allowNegativeStock")

@@ -263,7 +263,8 @@ public class BusinessInventorySettingsService {
             return StockLevelsSettingsResponse.defaults();
         }
         return new StockLevelsSettingsResponse(
-                stockLevels.path(KEY_ALLOW_EDIT_STOCK_MANAGER).asBoolean(false),
+                // Stock levels page for stock managers — default on until admin turns off.
+                stockLevels.path(KEY_ALLOW_EDIT_STOCK_MANAGER).asBoolean(true),
                 // Edit stock on grocery counter — default on until admin turns off.
                 stockLevels.path(KEY_ALLOW_EDIT_GROCERY_CLERK).asBoolean(true),
                 // Sell when out of stock — default on until admin turns off.

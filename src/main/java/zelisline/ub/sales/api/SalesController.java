@@ -144,6 +144,19 @@ public class SalesController {
         return ResponseEntity.status(status).body(out.response());
     }
 
+    @GetMapping("/by-receipt/{receiptNo}")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read') or hasPermission(null, 'sales.payment.adjust') or hasPermission(null, 'sales.sell')")
+    public SaleResponse getSaleByReceiptNo(
+            @PathVariable long receiptNo,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return saleService.requireSaleByReceiptNo(
+                TenantRequestIds.resolveBusinessId(request),
+                receiptNo
+        );
+    }
+
     @GetMapping("/{saleId}")
     @PreAuthorize("hasPermission(null, 'sales.intelligence.read') or hasPermission(null, 'sales.payment.adjust') or hasPermission(null, 'sales.sell')")
     public SaleResponse getSale(@PathVariable String saleId, HttpServletRequest request) {
@@ -207,7 +220,7 @@ public class SalesController {
     }
 
     @GetMapping("/{saleId}/receipt.pdf")
-    @PreAuthorize("hasPermission(null, 'sales.sell')")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read') or hasPermission(null, 'sales.sell')")
     public ResponseEntity<byte[]> receiptPdf(@PathVariable String saleId, HttpServletRequest request) {
         CurrentTenantUser.requireHuman(request);
         byte[] body = saleReceiptService.buildPdf(
@@ -221,7 +234,7 @@ public class SalesController {
     }
 
     @GetMapping("/{saleId}/receipt/thermal")
-    @PreAuthorize("hasPermission(null, 'sales.sell')")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read') or hasPermission(null, 'sales.sell')")
     public ResponseEntity<byte[]> receiptThermal(
             @PathVariable String saleId,
             @RequestParam(defaultValue = "58") int widthMm,

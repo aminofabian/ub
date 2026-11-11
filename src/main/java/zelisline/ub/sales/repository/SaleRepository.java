@@ -45,6 +45,9 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
      */
     boolean existsByBusinessIdAndReceiptNo(String businessId, Long receiptNo);
 
+    /** Unique per business ({@code uq_sales_business_receipt_no}). */
+    Optional<Sale> findByBusinessIdAndReceiptNo(String businessId, Long receiptNo);
+
     @Query(
             value = """
                     SELECT COUNT(*),

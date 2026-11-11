@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
@@ -1166,6 +1167,42 @@ class SaleSlice2IT {
                 .filter(m -> InventoryConstants.MOVEMENT_REFUND.equals(m.getMovementType()))
                 .count();
         assertThat(refundMvt).isEqualTo(1);
+    }
+
+    @Test
+    void getSaleByReceiptNo_returnsSaleAndMissesUnknown() throws Exception {
+        openShift(new BigDecimal("50.00"));
+        String saleBody = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":1,"unitPrice":7.5}],"payments":[{"method":"cash","amount":7.5}]}
+                """.formatted(branchId, itemId);
+        MvcResult saleRes = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(saleBody)
+                        .header("Idempotency-Key", "rcp-lookup-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+        var saleJson = objectMapper.readTree(saleRes.getResponse().getContentAsString());
+        String saleId = saleJson.get("id").asText();
+        long receiptNo = saleJson.get("receiptNo").asLong();
+
+        mockMvc.perform(get("/api/v1/sales/by-receipt/{receiptNo}", receiptNo)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(saleId))
+                .andExpect(jsonPath("$.receiptNo").value(receiptNo));
+
+        // Same receipt number must not resolve under a different tenant's scope —
+        // the repository filters by business_id, so the row is simply missing.
+        mockMvc.perform(get("/api/v1/sales/by-receipt/{receiptNo}", 9_999_999L)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isNotFound());
     }
 
     @Test

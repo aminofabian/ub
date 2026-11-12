@@ -32,6 +32,9 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
     /** Unsynced sales still left in a shift (used to decide when to stamp the shift). */
     long countByShiftIdAndCloudSyncedAtIsNull(String shiftId);
 
+    /** Desktop till: sales not yet uploaded to the online shop (sync status pill). */
+    long countByBusinessIdAndCloudSyncedAtIsNull(String businessId);
+
     /** Cloud-side incremental pull for the desktop: sales at/after the cursor. */
     List<Sale> findByBusinessIdAndSoldAtGreaterThanEqualOrderBySoldAtAsc(
             String businessId,

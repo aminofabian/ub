@@ -13,6 +13,7 @@ import zelisline.ub.desktop.application.DesktopMediaSyncService;
 import zelisline.ub.desktop.application.DesktopSetupService;
 import zelisline.ub.desktop.application.DesktopSyncProgressService;
 import zelisline.ub.desktop.application.DesktopSyncPushService;
+import zelisline.ub.desktop.application.DesktopSyncScheduler;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
 import java.time.Instant;
@@ -39,6 +40,8 @@ import java.time.Instant;
 public class DesktopSyncTriggerController {
 
     private final DesktopSyncPushService syncPushService;
+    private final DesktopSyncScheduler syncScheduler;
+    private final zelisline.ub.sales.repository.SaleRepository saleRepository;
     private final DesktopMediaSyncService mediaSyncService;
     private final DesktopFullSyncService fullSyncService;
     private final DesktopSyncProgressService syncProgress;
@@ -51,6 +54,44 @@ public class DesktopSyncTriggerController {
     public DesktopSyncPushService.SyncPushResult syncNow() {
         return syncPushService.pushPending();
     }
+
+    /**
+     * Incremental pull+push flush, run inline. The desktop UI calls this when
+     * the browser's {@code online} event fires so a till that was offline
+     * syncs within seconds instead of at the next scheduled tick.
+     */
+    @PostMapping("/flush")
+    public FlushResult syncFlush() {
+        boolean ran = syncScheduler.flushNow("online");
+        return new FlushResult(ran);
+    }
+
+    public record FlushResult(boolean ran) {}
+
+    /**
+     * What the cashier needs to know about sync at a glance: is this till
+     * linked, how many sales are still waiting to upload, when the last
+     * successful sync was, and whether the online sign-in has expired.
+     */
+    @GetMapping("/summary")
+    public SyncSummary syncSummary() {
+        DesktopSyncScheduler.SyncHealth h = syncScheduler.health();
+        String id = desktopSetupService.getDesktopBusinessId();
+        long pending = id == null || id.isBlank()
+            ? 0
+            : saleRepository.countByBusinessIdAndCloudSyncedAtIsNull(id);
+        return new SyncSummary(
+            h.connected(), pending, h.lastFlushAt(), h.lastOkAt(), h.sessionExpired(), h.lastError());
+    }
+
+    public record SyncSummary(
+        boolean connected,
+        long pendingSales,
+        long lastFlushAt,
+        long lastOkAt,
+        boolean sessionExpired,
+        String lastError
+    ) {}
 
     /** Live progress of the background product-photo download. */
     @GetMapping("/media-status")

@@ -1,5 +1,10 @@
 package zelisline.ub.desktop.api;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import org.springframework.http.ResponseEntity;
 import java.util.Locale;
 
 import org.springframework.context.annotation.Profile;
@@ -37,9 +42,17 @@ public class DesktopSetupController {
 
     private static final String PLATFORM_DOMAIN = "kiosk.ke";
 
+    private static final org.slf4j.Logger log =
+        org.slf4j.LoggerFactory.getLogger(DesktopSetupController.class);
+
     private final DesktopSetupService desktopSetupService;
     private final BusinessRepository businessRepository;
     private final CloudSyncSession cloudSyncSession;
+    private final zelisline.ub.desktop.backup.DesktopBackupService backupService;
+    private final zelisline.ub.desktop.device.DesktopDeviceService deviceService;
+
+    @org.springframework.beans.factory.annotation.Value("${APP_DATA:${user.home}/.palmart}")
+    private String appData;
 
     /**
      * Cheap probe for the frontend router. When setup is done, also returns
@@ -90,20 +103,69 @@ public class DesktopSetupController {
         return desktopSetupService.completeSetup(request);
     }
 
+    /** Shell reads this at the next start and drops the local database before the app boots. */
+    static final String WIPE_MARKER = "wipe-on-boot";
+    /** Tells the UI the app is about to restart, so it must not start a new connect yet. */
+    static final String RESTARTING_HEADER = "X-Kiosk-Restarting";
+
     /**
-     * Soft-delete the local shop and clear the init marker so the merchant can
-     * pick a different shop from {@code /setup}. Called from the login screen
-     * when they realise they connected the wrong account.
+     * Reset this PC so a different shop can be set up.
+     *
+     * <ol>
+     *   <li>Back up the local database. If that fails, nothing is reset.</li>
+     *   <li>Unlink the shop (soft delete + clear the cloud session and the
+     *       init marker) so the wizard is available again.</li>
+     *   <li>Leave a marker and ask the shell to restart: on the way up it
+     *       drops the local database, so the next shop starts from an empty
+     *       till — no products, customers or unsynced sales of the previous
+     *       shop can surface or be uploaded to the new one.</li>
+     * </ol>
+     *
+     * Without the shell (development) step 3 is skipped and the reset stays
+     * a soft delete, as before.
      */
     @PostMapping("/reset")
-    public DesktopSetupStatusResponse reset() {
+    public ResponseEntity<DesktopSetupStatusResponse> reset() {
         if (desktopSetupService.isSetupRequired()) {
             throw new ResponseStatusException(
                 HttpStatus.CONFLICT,
                 "This till is not set up yet — open Setup to connect a shop"
             );
         }
+        String backupFile;
+        try {
+            backupFile = backupService.backupNow();
+        } catch (Exception e) {
+            log.error("[DesktopSetup] reset refused — backup failed: {}", e.getMessage());
+            throw new ResponseStatusException(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "Could not back up this PC first, so nothing was reset. " + e.getMessage()
+            );
+        }
+        log.info("[DesktopSetup] reset: backup written ({})", backupFile);
+
         desktopSetupService.resetForSetup();
-        return status();
+
+        boolean restarting = false;
+        Path marker = Path.of(appData).resolve("conf").resolve(WIPE_MARKER);
+        try {
+            Files.createDirectories(marker.getParent());
+            Files.writeString(marker, "backup=" + backupFile + "\n", StandardCharsets.UTF_8);
+            deviceService.restartBackend();
+            restarting = true;
+            log.info("[DesktopSetup] reset: local database will be wiped on restart");
+        } catch (Exception e) {
+            // No shell to restart us (dev), or the marker could not be written:
+            // never leave a marker behind that would wipe a later, unrelated boot.
+            try {
+                Files.deleteIfExists(marker);
+            } catch (Exception ignored) {
+                // best effort
+            }
+            log.warn("[DesktopSetup] reset: wipe skipped, soft reset only ({})", e.getMessage());
+        }
+        return ResponseEntity.ok()
+            .header(RESTARTING_HEADER, String.valueOf(restarting))
+            .body(status());
     }
 }

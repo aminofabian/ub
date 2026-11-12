@@ -627,6 +627,12 @@ public class DesktopConnectService {
         // Load by primary key (including soft-deleted leftovers from a prior
         // connect) — never `new Item()` with a cloud id that already exists,
         // or Hibernate optimistic-locks on @Version.
+        java.util.Set<String> seededCategoryIds = snapshot.categories() == null
+            ? java.util.Set.of()
+            : snapshot.categories().stream()
+                .map(MasterDataSnapshot.CategoryData::id)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
         List<MasterDataSnapshot.ItemData> variantLinks = new java.util.ArrayList<>();
         for (MasterDataSnapshot.ItemData i : snapshot.items()) {
             Item item = itemRepository
@@ -653,7 +659,12 @@ public class DesktopConnectService {
             item.setPluCode(i.pluCode());
             item.setName(i.name());
             item.setDescription(i.description());
-            item.setCategoryId(i.categoryId());
+            // fk_items_category: a category missing from the snapshot (deleted
+            // online, or from another shop) would abort the whole copy.
+            item.setCategoryId(
+                i.categoryId() != null && seededCategoryIds.contains(i.categoryId())
+                    ? i.categoryId()
+                    : null);
             item.setUnitType(i.unitType() == null ? "each" : i.unitType());
             item.setStocked(i.stocked());
             item.setCurrentStock(i.currentStock() == null ? BigDecimal.ZERO : i.currentStock());

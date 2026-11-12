@@ -79,6 +79,63 @@ public class DesktopSyncScheduler {
         }
     }
 
+    /**
+     * Incremental flush on demand — the till just regained internet, or the
+     * operator pressed Sync. Same work as the scheduled cycle, so pending sales
+     * leave within seconds of coming back online instead of waiting for the
+     * next 2-minute tick. Returns false when no online shop is connected.
+     */
+    public boolean flushNow(String reason) {
+        if (cloudSyncSession.load().isEmpty()) {
+            return false;
+        }
+        fullSyncService.refreshSessionQuietly();
+        flush(reason);
+        return true;
+    }
+
+    /** Outcome of the most recent flush, for the cashier's sync pill. In-memory; resets on restart. */
+    public record SyncHealth(
+        boolean connected,
+        long lastFlushAt,
+        long lastOkAt,
+        boolean sessionExpired,
+        String lastError
+    ) {}
+
+    private volatile long lastFlushAt;
+    private volatile long lastOkAt;
+    private volatile boolean sessionExpired;
+    private volatile String lastError;
+
+    public SyncHealth health() {
+        return new SyncHealth(
+            cloudSyncSession.load().isPresent(), lastFlushAt, lastOkAt, sessionExpired, lastError);
+    }
+
+    private void recordHealth(int failures, int streams, String firstError) {
+        long now = System.currentTimeMillis();
+        lastFlushAt = now;
+        if (failures == 0) {
+            lastOkAt = now;
+            sessionExpired = false;
+            lastError = null;
+            return;
+        }
+        String msg = firstError == null ? "" : firstError;
+        String lower = msg.toLowerCase(java.util.Locale.ROOT);
+        boolean expired = lower.contains("session has expired")
+            || lower.contains("401")
+            || lower.contains("unauthorized");
+        // A cashier-connected till is refused the audit stream only; that is not an expired session.
+        sessionExpired = expired && failures > 1;
+        // Every stream failing without an auth error is simply "offline" — not worth showing.
+        lastError = failures == streams && !expired ? null : msg;
+        if (failures < streams && !sessionExpired) {
+            lastOkAt = now;
+        }
+    }
+
     private void flush(String reason) {
         if (cloudSyncSession.load().isEmpty()) {
             return;
@@ -158,6 +215,8 @@ public class DesktopSyncScheduler {
             failures++;
             firstError = firstError == null ? "message replies: " + e.getMessage() : firstError;
         }
+
+        recordHealth(failures, streams, firstError);
 
         boolean anyWork = pulled > 0 || suppliesPulled > 0 || ordersPulled > 0 || movementsApplied > 0
             || customersPulled > 0 || auditsPushed > 0

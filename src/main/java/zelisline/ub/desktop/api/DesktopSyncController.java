@@ -91,6 +91,7 @@ import zelisline.ub.suppliers.domain.Supplier;
 import zelisline.ub.suppliers.domain.SupplierContact;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
+import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
@@ -115,6 +116,7 @@ public class DesktopSyncController {
     /** Storefront customer roles that must not be mirrored onto the till. */
     private static final java.util.Set<String> NON_TILL_ROLE_KEYS = java.util.Set.of("buyer");
 
+    private final org.springframework.security.access.PermissionEvaluator permissionEvaluator;
     private final BusinessRepository businessRepository;
     private final BranchRepository branchRepository;
     private final CategoryRepository categoryRepository;
@@ -151,16 +153,21 @@ public class DesktopSyncController {
      * Full catalog + staff + settings snapshot for a till's first pull and
      * periodic refresh.
      *
-     * <p>This payload includes staff {@code passwordHash}/{@code pinHash} so
-     * the till can authenticate staff offline, so it is restricted to callers
-     * who can list users (owner/admin/manager). Without this a cashier token
-     * could download every staff hash for offline cracking. The till's own
-     * sync uses the owner session established at connect time, so the
-     * restriction does not affect normal sync.
+     * <p>Any signed-in staff member of the shop may pull the snapshot, so a
+     * cashier can connect a till. Staff {@code passwordHash}/{@code pinHash}
+     * (needed for offline sign-in) are included only for callers who can list
+     * users (owner/admin/manager); everyone else receives the staff list with
+     * the hashes blanked, so a cashier token cannot download credential hashes
+     * for offline cracking. Staff without a local hash sign in on the till the
+     * first time while online (see {@code DesktopCloudCredentialVerifier}).
      */
     @GetMapping("/master-data")
-    @PreAuthorize("hasPermission(null, 'users.list')")
     public MasterDataSnapshot masterData(HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        final boolean includeCredentialHashes = permissionEvaluator.hasPermission(
+            org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication(),
+            null,
+            "users.list");
         String businessId = TenantRequestIds.resolveBusinessId(request);
         Business business = businessRepository
             .findByIdAndDeletedAtIsNull(businessId)
@@ -219,7 +226,7 @@ public class DesktopSyncController {
             userRepository
                 .findByBusinessIdAndDeletedAtIsNull(businessId)
                 .stream()
-                .map(this::toStaff)
+                .map(u -> toStaff(u, includeCredentialHashes))
                 .filter(s -> s.roleKey() == null || !NON_TILL_ROLE_KEYS.contains(s.roleKey()))
                 .toList(),
             images.stream().map(DesktopSyncController::toImage).toList(),
@@ -367,7 +374,7 @@ public class DesktopSyncController {
         );
     }
 
-    private MasterDataSnapshot.StaffData toStaff(User u) {
+    private MasterDataSnapshot.StaffData toStaff(User u, boolean includeCredentialHashes) {
         String roleKey = u.getRoleId() == null
             ? null
             : roleRepository.findByIdAndDeletedAtIsNull(u.getRoleId())
@@ -381,8 +388,8 @@ public class DesktopSyncController {
             u.getPhone(),
             u.getStatus(),
             roleKey,
-            u.getPasswordHash(),
-            u.getPinHash()
+            includeCredentialHashes ? u.getPasswordHash() : null,
+            includeCredentialHashes ? u.getPinHash() : null
         );
     }
 

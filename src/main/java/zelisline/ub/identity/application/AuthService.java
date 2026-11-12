@@ -128,6 +128,9 @@ public class AuthService {
      * to the online shop id — still verify on the local till business id.
      */
     private final ObjectProvider<zelisline.ub.desktop.application.CloudSyncSession> cloudSyncSession;
+    /** Desktop-only (empty on cloud): online check for a staff member with no local password hash. */
+    private final ObjectProvider<zelisline.ub.desktop.application.DesktopCloudCredentialVerifier>
+            desktopCloudCredentialVerifier;
 
     @Value("${app.jwt.access-ttl-minutes:60}")
     private long accessTtlMinutes;
@@ -153,7 +156,16 @@ public class AuthService {
         User user = userRepository.findByBusinessIdAndEmailAndDeletedAtIsNull(businessId, email)
                 .orElseThrow(this::invalidCredentials);
         if (user.getPasswordHash() == null) {
-            throw invalidCredentials();
+            // Desktop till connected by a cashier: staff arrive without
+            // credential hashes. Verify this first sign-in with the online
+            // shop and keep a local hash so the next one works offline.
+            zelisline.ub.desktop.application.DesktopCloudCredentialVerifier verifier =
+                    desktopCloudCredentialVerifier.getIfAvailable();
+            if (verifier == null || !verifier.verify(email, request.password())) {
+                throw invalidCredentials();
+            }
+            user.setPasswordHash(passwordEncoder.encode(request.password()));
+            userRepository.save(user);
         }
         assertCanAuthenticate(user);
         assertTenantAllowsLogin(user.getBusinessId());

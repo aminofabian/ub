@@ -388,6 +388,83 @@ public class ShiftService {
     }
 
     // ========================================================================
+    // CLOSE HIDDEN SHIFTS (shifts switched back on)
+    // ========================================================================
+
+    static final String AUTO_CLOSE_NOTE = "Closed automatically when shifts were switched back on.";
+
+    /**
+     * Closes every hidden shift the system opened while the business had shifts turned off
+     * ({@link Shift#isAutoManaged()}). Runs when the owner turns shifts back on, so cashiers
+     * meet a clean "open a shift" prompt instead of inheriting a drawer nobody counted.
+     *
+     * <p>Nobody counted these drawers, so the count is taken to equal the expected cash: no
+     * variance and no journal entry. Unfinished till carts on them are cancelled, as on any
+     * shift close. Deliberately silent on the realtime / ops-alert bus: a "shift closed" ping
+     * per till would be noise for a shift nobody opened.
+     *
+     * @return how many shifts were closed
+     */
+    @Transactional
+    public int closeAutoManagedShifts(String businessId, String requestedBy) {
+        int closed = 0;
+        for (Shift candidate : shiftRepository.findByBusinessIdAndStatusAndAutoManagedTrue(
+                businessId, SalesConstants.SHIFT_STATUS_OPEN)) {
+            Shift s = shiftRepository.findByIdAndBusinessIdForUpdate(candidate.getId(), businessId)
+                    .filter(found -> SalesConstants.SHIFT_STATUS_OPEN.equals(found.getStatus()))
+                    .orElse(null);
+            if (s == null) {
+                continue;
+            }
+            // A platform-admin edit has no tenant user; the closer is recorded as a real user
+            // (the foreign keys need one), so fall back to whoever the hidden shift ran under.
+            String userId = requestedBy != null && !requestedBy.isBlank() ? requestedBy : s.getOpenedBy();
+            drawoutService.applyUnappliedLiveDrawouts(s);
+            BigDecimal expected = s.getExpectedClosingCash().setScale(2, RoundingMode.HALF_UP);
+            BigDecimal noVariance = BigDecimal.ZERO.setScale(2);
+
+            s.setCountedClosingCash(expected);
+            s.setCashTakenOut(null);
+            s.setClosingVariance(noVariance);
+            s.setClosingNotes(AUTO_CLOSE_NOTE);
+            s.setClosedBy(userId);
+            s.setClosedAt(Instant.now());
+            s.setStatus(SalesConstants.SHIFT_STATUS_CLOSED);
+            shiftRepository.save(s);
+
+            posDraftService.cancelPendingForClosedShift(businessId, s, userId);
+            cashDrawerLedgerService.ensureLedgerInitialized(s.getId());
+            cashDrawerSummaryService.upsertForClosedShift(s);
+
+            recordAudit(s.getId(), SalesConstants.AUDIT_SHIFT_CLOSED, userId,
+                    "{\"counted\":\"" + expected + "\",\"expected\":\"" + expected
+                            + "\",\"variance\":\"" + noVariance + "\",\"autoManaged\":true}",
+                    null);
+            auditEventPublisher.publish(auditEventBuilder.builder(
+                            AuditEventCategory.CASH_DRAWER, AuditEventTypes.SHIFT_CLOSED, AuditEventSeverity.INFO)
+                    .businessId(businessId)
+                    .branchId(s.getBranchId())
+                    .actor(userId, AuditEventActorType.USER)
+                    .target("shift", s.getId())
+                    .targetLabel("Shift " + s.getId().substring(0, 8))
+                    .shiftId(s.getId())
+                    .oldState(map(
+                            "expectedClosingCash", expected.toPlainString(),
+                            "status", SalesConstants.SHIFT_STATUS_OPEN))
+                    .newState(map(
+                            "countedClosingCash", expected.toPlainString(),
+                            "expectedClosingCash", expected.toPlainString(),
+                            "variance", noVariance.toPlainString(),
+                            "autoManaged", true,
+                            "status", s.getStatus()))
+                    .source("shifts_switched_on")
+                    .build());
+            closed++;
+        }
+        return closed;
+    }
+
+    // ========================================================================
     // UPDATE OPENING FLOAT (admin / owner)
     // ========================================================================
 
@@ -852,7 +929,8 @@ public class ShiftService {
                 s.getExpectedClosingCash(), s.getClosingVariance(),
                 0, BigDecimal.ZERO,
                 resolveTillLabel(s), null,
-                s.getCashTakenOut()
+                s.getCashTakenOut(),
+                s.isAutoManaged()
         );
     }
 

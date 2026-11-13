@@ -11,6 +11,8 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.application.RequestPermissionService;
 import zelisline.ub.identity.domain.Role;
 import zelisline.ub.identity.repository.RoleRepository;
+import zelisline.ub.platform.web.SetupRequiredException;
+import zelisline.ub.platform.web.SetupRequirement;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
@@ -84,8 +86,10 @@ public class BranchResolutionService {
             }
             String defaultBranch = resolveDefaultBranch(businessId);
             if (defaultBranch == null) {
-                throw new ResponseStatusException(
+                throw new SetupRequiredException(
                         HttpStatus.BAD_REQUEST,
+                        SetupRequirement.BRANCH,
+                        SetupRequiredException.HINT_ASSIGN,
                         "Your account needs a shop location. Ask an owner to assign you a branch, then try again."
                 );
             }
@@ -142,8 +146,10 @@ public class BranchResolutionService {
             }
             String defaultBranch = resolveDefaultBranch(businessId);
             if (defaultBranch == null) {
-                throw new ResponseStatusException(
+                throw new SetupRequiredException(
                         HttpStatus.BAD_REQUEST,
+                        SetupRequirement.BRANCH,
+                        SetupRequiredException.HINT_ASSIGN,
                         "Your account needs a shop location. Ask an owner to assign you a branch, then try again."
                 );
             }
@@ -168,9 +174,13 @@ public class BranchResolutionService {
         }
 
         if (resolved == null || resolved.isBlank()) {
-            throw new ResponseStatusException(
+            // The default-branch lookup above already ran, so nothing is left to pick:
+            // this shop has no branch at all.
+            throw new SetupRequiredException(
                     HttpStatus.BAD_REQUEST,
-                    "Choose a shop location first — pick a branch in the top bar, then try again."
+                    SetupRequirement.BRANCH,
+                    SetupRequiredException.HINT_NONE,
+                    "Add your first branch to continue. Prices, stock and sales are all recorded against a branch."
             );
         }
         return resolved;

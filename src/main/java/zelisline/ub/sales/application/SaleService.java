@@ -102,6 +102,7 @@ public class SaleService {
     private final SaleTaxService saleTaxService;
     private final ShiftRepository shiftRepository;
     private final OpenShiftResolver openShiftResolver;
+    private final AutoShiftService autoShiftService;
     private final BranchRepository branchRepository;
     private final InventoryBatchPickerService inventoryBatchPickerService;
     private final PackageVariantStockResolver packageVariantStockResolver;
@@ -223,9 +224,14 @@ public class SaleService {
         loyaltyPointsService.validateRedeemTender(businessId, customerId, grandTotal, redeemTenderTotal,
                 creditSettingsResolved);
 
-        openShiftResolver
-                .findOpen(businessId, req.branchId(), tillDeviceKey)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "No open shift"));
+        // A business that turned shifts off never asks the cashier to open one: the first sale
+        // on a till opens a hidden shift (see AutoShiftService) and later sales reuse it.
+        if (openShiftResolver.findOpen(businessId, req.branchId(), tillDeviceKey).isEmpty()
+                && autoShiftService
+                        .openIfShiftsDisabled(businessId, req.branchId(), tillDeviceKey, userId)
+                        .isEmpty()) {
+            throw openShiftResolver.noOpenShift(businessId, req.branchId(), tillDeviceKey, "No open shift");
+        }
 
         String saleId = UUID.randomUUID().toString();
         List<SaleItem> saleItems = pickAndBuildSaleItems(businessId, req, saleId, userId, linePricing);

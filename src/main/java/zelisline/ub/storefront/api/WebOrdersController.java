@@ -23,12 +23,14 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.storefront.api.dto.SendWebOrderMessageRequest;
 import zelisline.ub.storefront.api.dto.UpdateWebOrderFulfillmentRequest;
+import zelisline.ub.storefront.api.dto.WebOrderClearResponse;
 import zelisline.ub.storefront.api.dto.WebOrderDetailResponse;
 import zelisline.ub.storefront.api.dto.WebOrderMessageResponse;
 import zelisline.ub.storefront.api.dto.WebOrderStkPushResponse;
 import zelisline.ub.storefront.api.dto.WebOrderPickupTicketClaimResponse;
 import zelisline.ub.storefront.api.dto.WebOrderSummaryResponse;
 import zelisline.ub.storefront.application.WebOrderAdminService;
+import zelisline.ub.storefront.application.WebOrderClearService;
 import zelisline.ub.storefront.application.WebOrderCustomerMessageService;
 import zelisline.ub.storefront.application.WebOrderFulfillmentService;
 import zelisline.ub.storefront.application.WebOrderPaymentService;
@@ -44,6 +46,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class WebOrdersController {
 
     private final WebOrderAdminService webOrderAdminService;
+    private final WebOrderClearService webOrderClearService;
     private final WebOrderFulfillmentService webOrderFulfillmentService;
     private final WebOrderPaymentService webOrderPaymentService;
     private final WebOrderCustomerMessageService webOrderCustomerMessageService;
@@ -59,6 +62,23 @@ public class WebOrdersController {
     ) {
         CurrentTenantUser.require(request);
         return webOrderAdminService.pageOrders(TenantRequestIds.resolveBusinessId(request), pageable);
+    }
+
+    /**
+     * Void every open web order for this business. Completed pickups are left
+     * as they are. Optional {@code branchId} limits the clear to the branch
+     * the desk is showing.
+     */
+    @PostMapping("/clear")
+    @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
+    public WebOrderClearResponse clearOpenOrders(
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return webOrderClearService.clearOpenOrders(
+                TenantRequestIds.resolveBusinessId(request),
+                branchId);
     }
 
     @GetMapping("/{orderId}")

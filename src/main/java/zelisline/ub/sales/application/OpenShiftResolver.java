@@ -8,6 +8,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.platform.web.SetupRequiredException;
+import zelisline.ub.platform.web.SetupRequirement;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.domain.Shift;
 import zelisline.ub.sales.repository.ShiftRepository;
@@ -60,11 +62,33 @@ public class OpenShiftResolver {
             if (key == null
                     || !tillDeviceRepository.existsByBusinessIdAndBranchIdAndDeviceKeyAndRevokedAtIsNull(
                             businessId, branchId, key)) {
-                throw new ResponseStatusException(
-                        HttpStatus.FORBIDDEN, TillDeviceService.TILL_DEVICE_NOT_REGISTERED_DETAIL);
+                throw new SetupRequiredException(
+                        HttpStatus.FORBIDDEN,
+                        SetupRequirement.TILL,
+                        TillDeviceService.TILL_DEVICE_NOT_REGISTERED_DETAIL);
             }
         }
         return key;
+    }
+
+    /**
+     * The failure for a sale (or cart checkout) that found no open shift.
+     *
+     * <p>A device the branch does not trust cannot open a shift either, so that is reported
+     * first: the cashier needs the "register this till" prompt, not an "open a shift" one
+     * that would only fail again on the next step.
+     *
+     * @param reason the human-readable text, kept as it was so older clients that match on
+     *               the message keep working
+     */
+    public SetupRequiredException noOpenShift(
+            String businessId, String branchId, String headerKey, String reason) {
+        try {
+            resolveTillKeyForOpen(businessId, branchId, headerKey);
+        } catch (SetupRequiredException untrustedTill) {
+            return untrustedTill;
+        }
+        return new SetupRequiredException(HttpStatus.CONFLICT, SetupRequirement.SHIFT, reason);
     }
 
     public Optional<Shift> findOpen(String businessId, String branchId, String tillDeviceKey) {

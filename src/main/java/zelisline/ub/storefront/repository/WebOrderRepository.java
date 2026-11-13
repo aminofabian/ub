@@ -33,6 +33,34 @@ public interface WebOrderRepository extends JpaRepository<WebOrder, String> {
     Optional<WebOrder> findByIdAndBusinessId(String id, String businessId);
 
     /**
+     * Open orders a merchant can void in bulk. Completed pickups and rows
+     * already cancelled are excluded; newest-first is not required.
+     */
+    @Query("""
+            select w.id from WebOrder w
+             where w.businessId = :businessId
+               and w.status <> 'cancelled'
+               and (w.fulfillmentStatus is null
+                    or (w.fulfillmentStatus <> 'completed' and w.fulfillmentStatus <> 'cancelled'))
+             order by w.createdAt asc
+            """)
+    List<String> findVoidableIds(@Param("businessId") String businessId, Pageable pageable);
+
+    @Query("""
+            select w.id from WebOrder w
+             where w.businessId = :businessId
+               and w.catalogBranchId = :branchId
+               and w.status <> 'cancelled'
+               and (w.fulfillmentStatus is null
+                    or (w.fulfillmentStatus <> 'completed' and w.fulfillmentStatus <> 'cancelled'))
+             order by w.createdAt asc
+            """)
+    List<String> findVoidableIdsByBranch(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            Pageable pageable);
+
+    /**
      * Recent unpaid storefront orders — used by Daraja C2B BillRef auto-settle
      * (scan + {@code WebOrderCodes} match; bounded by {@code since} + pageable).
      */

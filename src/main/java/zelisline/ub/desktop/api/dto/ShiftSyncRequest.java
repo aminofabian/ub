@@ -51,6 +51,11 @@ public record ShiftSyncRequest(
         String closingNotes,
         String varianceReason,
         boolean blindClosing,
+        /**
+         * Hidden shift the system opened because this shop turned shifts off. Absent
+         * from older till builds, which bind to {@code false}.
+         */
+        boolean autoManaged,
         @NotNull Instant openedAt,
         Instant closedAt,
         BigDecimal cashTakenOut,

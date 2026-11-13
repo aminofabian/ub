@@ -55,6 +55,7 @@ import zelisline.ub.posdraft.repository.PosDraftRepository;
 import zelisline.ub.sales.api.dto.PostSaleLineRequest;
 import zelisline.ub.sales.api.dto.PostSaleRequest;
 import zelisline.ub.sales.api.dto.SaleResponse;
+import zelisline.ub.sales.application.AutoShiftService;
 import zelisline.ub.sales.application.OpenShiftResolver;
 import zelisline.ub.sales.application.SaleCreationOutcome;
 import zelisline.ub.sales.application.SaleActorNameService;
@@ -80,6 +81,7 @@ public class PosDraftService {
     private final FeatureFlagService featureFlagService;
     private final SaleService saleService;
     private final OpenShiftResolver openShiftResolver;
+    private final AutoShiftService autoShiftService;
     private final ApplicationEventPublisher eventPublisher;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
@@ -387,9 +389,15 @@ public class PosDraftService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Draft total must be positive");
         }
 
+        // Shifts turned off: open (or reuse) the hidden shift instead of asking for one.
+        // (`draft` is reassigned further down, so the lambdas capture the branch id instead.)
+        String shiftBranchId = draft.getBranchId();
         Shift shift = openShiftResolver
-                .findOpen(businessId, draft.getBranchId(), tillDeviceKey)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "No open shift"));
+                .findOpen(businessId, shiftBranchId, tillDeviceKey)
+                .or(() -> autoShiftService.openIfShiftsDisabled(
+                        businessId, shiftBranchId, tillDeviceKey, userId))
+                .orElseThrow(() -> openShiftResolver.noOpenShift(
+                        businessId, shiftBranchId, tillDeviceKey, "No open shift"));
 
         List<PostSaleLineRequest> saleLines = new ArrayList<>();
         for (PosDraftLine line : activeLines) {

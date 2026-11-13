@@ -123,6 +123,7 @@ class DesktopSyncIngestServiceTest {
             null,
             null,
             false,
+            false,
             Instant.parse("2026-08-20T08:00:00Z"),
             null,
             null,
@@ -177,7 +178,7 @@ class DesktopSyncIngestServiceTest {
             List.of(new ShiftSyncRequest.ShiftData(
                 "shift-1", "branch-1", "till-1", SalesConstants.SHIFT_STATUS_OPEN,
                 "owner-id", new BigDecimal("5000.00"), new BigDecimal("5000.00"),
-                null, null, null, null, null, false,
+                null, null, null, null, null, false, false,
                 Instant.parse("2026-08-20T08:00:00Z"), null, null, List.of())),
             List.of(new ShiftSyncRequest.CustomerData(
                 "customer-1",
@@ -236,7 +237,7 @@ class DesktopSyncIngestServiceTest {
             List.of(new ShiftSyncRequest.ShiftData(
                 "shift-1", "branch-1", "   ", SalesConstants.SHIFT_STATUS_OPEN,
                 "owner-id", new BigDecimal("5000.00"), new BigDecimal("5000.00"),
-                null, null, null, null, null, false,
+                null, null, null, null, null, false, false,
                 Instant.parse("2026-08-20T08:00:00Z"), null, null, List.of())),
             null,
             null);
@@ -247,6 +248,27 @@ class DesktopSyncIngestServiceTest {
 
         verify(shiftRepository).save(org.mockito.ArgumentMatchers.argThat(shift ->
             ((zelisline.ub.sales.domain.Shift) shift).getTillDeviceKey() == null));
+    }
+
+    @Test
+    void hiddenShiftFlagSurvivesTheUpload() {
+        // A till that runs with shifts turned off uploads its hidden shift; the cloud must keep
+        // the flag or it would show up as a real shift nobody can close.
+        ShiftSyncRequest request = new ShiftSyncRequest(
+            List.of(new ShiftSyncRequest.ShiftData(
+                "shift-1", "branch-1", "till-1", SalesConstants.SHIFT_STATUS_OPEN,
+                "owner-id", BigDecimal.ZERO, BigDecimal.ZERO,
+                null, null, null, null, null, false, true,
+                Instant.parse("2026-08-20T08:00:00Z"), null, null, List.of())),
+            null,
+            null);
+        when(shiftRepository.findByIdAndBusinessId("shift-1", "cloud-biz"))
+            .thenReturn(Optional.empty());
+
+        service().ingest("cloud-biz", request);
+
+        verify(shiftRepository).save(org.mockito.ArgumentMatchers.argThat(shift ->
+            ((zelisline.ub.sales.domain.Shift) shift).isAutoManaged()));
     }
 
     @Test
@@ -298,7 +320,7 @@ class DesktopSyncIngestServiceTest {
         return new ShiftSyncRequest(List.of(new ShiftSyncRequest.ShiftData(
             "shift-1", "branch-1", "till-1", SalesConstants.SHIFT_STATUS_OPEN,
             "owner-id", new BigDecimal("5000.00"), new BigDecimal("5000.00"),
-            null, null, null, null, null, false,
+            null, null, null, null, null, false, false,
             Instant.parse("2026-08-20T08:00:00Z"), null, null,
             List.of(new ShiftSyncRequest.SaleData(
                 saleId, "branch-1", SalesConstants.SALE_STATUS_COMPLETED, idempotencyKey,

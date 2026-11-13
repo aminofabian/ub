@@ -89,6 +89,14 @@ public class Shift {
     @Column(name = "blind_closing")
     private boolean blindClosing;
 
+    /**
+     * True for the hidden shift the system opens when a shop has turned shifts off
+     * ({@code shifts.disabled}). No cashier opened it, so it is never counted or reconciled;
+     * it is closed automatically if shifts are switched back on.
+     */
+    @Column(name = "auto_managed", nullable = false)
+    private boolean autoManaged;
+
     /** When the desktop install uploaded this shift to the cloud (null = pending). */
     @Column(name = "cloud_synced_at")
     private Instant cloudSyncedAt;

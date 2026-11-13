@@ -15,6 +15,9 @@ import zelisline.ub.sales.domain.Shift;
 
 public interface ShiftRepository extends JpaRepository<Shift, String> {
 
+    /** Hidden shifts opened for a shop that turned shifts off, still open (one per till). */
+    List<Shift> findByBusinessIdAndStatusAndAutoManagedTrue(String businessId, String status);
+
     @Query("""
             select s from Shift s
              where s.businessId = :businessId

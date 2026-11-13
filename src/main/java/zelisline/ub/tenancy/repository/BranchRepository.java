@@ -4,9 +4,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -28,6 +30,22 @@ public interface BranchRepository extends JpaRepository<Branch, String> {
     Page<Branch> findByBusinessIdAndDeletedAtIsNull(String businessId, Pageable pageable);
 
     Optional<Branch> findByIdAndBusinessIdAndDeletedAtIsNull(String id, String businessId);
+
+    /**
+     * Same lookup, holding a row lock until the transaction ends. Used to serialise the
+     * "open the hidden shift on first sale" step so two sales arriving together cannot each
+     * open one.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+        select b from Branch b
+         where b.id = :id
+           and b.businessId = :businessId
+           and b.deletedAt is null
+        """)
+    Optional<Branch> findByIdAndBusinessIdForUpdate(
+            @Param("id") String id,
+            @Param("businessId") String businessId);
 
     List<Branch> findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(String businessId);
 

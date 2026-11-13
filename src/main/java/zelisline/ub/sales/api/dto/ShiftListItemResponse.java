@@ -23,7 +23,9 @@ public record ShiftListItemResponse(
         BigDecimal totalSales,
         String registerName,
         String shiftNumber,
-        BigDecimal cashTakenOut
+        BigDecimal cashTakenOut,
+        /** True for the hidden shift the system keeps for a till while the shop has shifts switched off. */
+        boolean autoManaged
 ) {
 
     /**

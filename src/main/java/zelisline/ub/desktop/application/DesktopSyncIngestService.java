@@ -743,6 +743,7 @@ public class DesktopSyncIngestService {
         shift.setClosingNotes(data.closingNotes());
         shift.setVarianceReason(data.varianceReason());
         shift.setBlindClosing(data.blindClosing());
+        shift.setAutoManaged(data.autoManaged());
         shift.setOpenedAt(data.openedAt());
         shift.setClosedAt(data.closedAt());
         shiftRepository.save(shift);

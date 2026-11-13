@@ -32,6 +32,7 @@ import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.platform.media.CloudinaryUploadResult;
 import zelisline.ub.platform.media.MediaStore;
+import zelisline.ub.sales.application.ShiftService;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
 import zelisline.ub.tenancy.api.dto.BranchResponse;
@@ -103,6 +104,21 @@ public class TenancyService {
             planLimitGuard;
     private final PosReceiptSequenceSettingsService posReceiptSequenceSettingsService;
     private final CashierCapabilityAuditService cashierCapabilityAuditService;
+    /** Lazy: the sales module depends on tenancy, so resolve it on use, not at construction. */
+    private final ObjectProvider<ShiftService> shiftService;
+
+    /** True when the settings JSON has the "shifts are off" flag set. */
+    private boolean shiftsTurnedOff(String settingsJson) {
+        if (settingsJson == null || settingsJson.isBlank()) {
+            return false;
+        }
+        return Boolean.TRUE.equals(
+            storefrontSettingsService
+                .readTenantConfig(settingsJson, "")
+                .featureFlags()
+                .get(FeatureFlagService.FLAG_SHIFTS_DISABLED)
+        );
+    }
 
     @Transactional
     public BusinessResponse createBusiness(CreateBusinessRequest request) {
@@ -551,6 +567,14 @@ public class TenancyService {
                 beforeFlags,
                 business.getSettings()
             );
+            // Shifts switched back on: the hidden shifts the system ran while they were off
+            // are closed so cashiers meet a clean "open a shift" prompt.
+            if (shiftsTurnedOff(beforeFlags) && !shiftsTurnedOff(business.getSettings())) {
+                ShiftService shifts = shiftService.getIfAvailable();
+                if (shifts != null) {
+                    shifts.closeAutoManagedShifts(business.getId(), actorUserId);
+                }
+            }
         }
         if (request.hubAlerts() != null) {
             business.setSettings(

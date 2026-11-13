@@ -137,6 +137,30 @@ public class GlobalExceptionHandler {
         return problem(body, status);
     }
 
+    /**
+     * A branch, shift or till has to be set up first. The status and reason text are the ones
+     * the call site used before (the one exception: a shop with no branch at all is now told
+     * to add one, not to pick one); the extra {@code code}, {@code requirement} and
+     * {@code hint} properties let the UI open the matching "set this up" dialog instead of
+     * showing a bare error.
+     */
+    @ExceptionHandler(SetupRequiredException.class)
+    public ResponseEntity<ProblemDetail> handleSetupRequired(SetupRequiredException ex) {
+        HttpStatusCode status = ex.getStatusCode();
+        log.warn("Setup required ({}): {}", ex.getRequirement().code(), ex.getReason());
+        ProblemDetail body = ProblemDetail.forStatus(status);
+        String reason = ex.getReason();
+        body.setTitle(reason != null && !reason.isBlank() ? reason.trim() : reasonOrDefault(status));
+        body.setDetail(reason);
+        body.setType(URI.create(PROBLEM_BASE + "setup-required"));
+        body.setProperty("code", SetupRequiredException.PROBLEM_CODE);
+        body.setProperty("requirement", ex.getRequirement().code());
+        if (ex.getHint() != null) {
+            body.setProperty("hint", ex.getHint());
+        }
+        return problem(body, status);
+    }
+
     /** SMS balance at zero — HTTP 402 with the fields the header chip needs. */
     @ExceptionHandler(SmsCreditsDepletedException.class)
     public ResponseEntity<ProblemDetail> handleSmsCreditsDepleted(SmsCreditsDepletedException ex) {

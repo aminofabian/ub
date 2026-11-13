@@ -50,7 +50,8 @@ public record ShiftDetailResponse(
                         : 0,
                 BigDecimal.ZERO, // total sales will be computed from salesSummary
                 null, null,
-                cashTakenOut
+                cashTakenOut,
+                false
         );
     }
 }

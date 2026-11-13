@@ -57,6 +57,7 @@ import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.PostSaleLineRequest;
 import zelisline.ub.sales.api.dto.PostSalePaymentRequest;
 import zelisline.ub.sales.api.dto.PostSaleRequest;
+import zelisline.ub.sales.application.AutoShiftService;
 import zelisline.ub.sales.application.OpenShiftResolver;
 import zelisline.ub.sales.application.SaleActorNameService;
 import zelisline.ub.sales.application.SaleCreationOutcome;
@@ -81,6 +82,7 @@ public class GroceryInvoiceService {
     private final BranchRepository branchRepository;
     private final SaleService saleService;
     private final OpenShiftResolver openShiftResolver;
+    private final AutoShiftService autoShiftService;
     private final SaleActorNameService saleActorNameService;
     private final ApplicationEventPublisher eventPublisher;
     private final StkPushRetryHelper stkPushRetryHelper;
@@ -428,9 +430,13 @@ public class GroceryInvoiceService {
             throw new ResponseStatusException(HttpStatus.GONE, "Invoice has expired");
         }
 
-        openShiftResolver
-                .findOpen(businessId, invoice.getBranchId(), tillDeviceKey)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "No open shift for this branch"));
+        // Shifts turned off: SaleService opens the hidden shift when it records the sale, so only
+        // a business that still uses shifts has to be stopped here.
+        if (openShiftResolver.findOpen(businessId, invoice.getBranchId(), tillDeviceKey).isEmpty()
+                && !autoShiftService.isShiftsDisabled(businessId)) {
+            throw openShiftResolver.noOpenShift(
+                    businessId, invoice.getBranchId(), tillDeviceKey, "No open shift for this branch");
+        }
 
         List<GroceryInvoiceLine> invoiceLines = lineRepository.findByInvoiceIdOrderByLineIndex(invoiceId);
         List<PostSaleLineRequest> additionalLines = request.additionalLines() == null

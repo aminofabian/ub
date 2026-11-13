@@ -166,6 +166,13 @@ public class FeatureFlagService {
     public static final String FLAG_SHIFTS_PREFILL_OPENING_FROM_LAST_CLOSE =
             "shifts.prefill_opening_from_last_close";
 
+    /**
+     * The shop does not use cash-drawer shifts: cashiers are never asked to open one, and sales
+     * ride on a hidden system-managed shift. Absent / false keeps shifts required (the default,
+     * so every existing shop behaves as before).
+     */
+    public static final String FLAG_SHIFTS_DISABLED = "shifts.disabled";
+
     /** Grocery counter draft cart persistence (master kill-switch). */
     public static final String FLAG_GROCERY_DRAFTS_ENABLED = "grocery_drafts.enabled";
 
@@ -241,6 +248,11 @@ public class FeatureFlagService {
     /** Shortcut for Phase 9 multi-branch check. */
     public boolean isMultiBranchEnabled(String businessId) {
         return isEnabled(businessId, FLAG_MULTI_BRANCH);
+    }
+
+    /** True when the shop turned shifts off; sales then ride on a hidden system-managed shift. */
+    public boolean isShiftsDisabled(String businessId) {
+        return isEnabled(businessId, FLAG_SHIFTS_DISABLED);
     }
 
     /**

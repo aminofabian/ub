@@ -761,7 +761,8 @@ public class StorefrontSettingsService {
                         && patch.tillListen() == null
                         && patch.hubAlerts() == null
                         && patch.posCashierDrawoutAccess() == null
-                        && patch.uiOpeningLoader() == null)) {
+                        && patch.uiOpeningLoader() == null
+                        && patch.shiftsDisabled() == null)) {
             return currentSettings;
         }
         ObjectNode root = parseRoot(currentSettings);
@@ -834,6 +835,11 @@ public class StorefrontSettingsService {
                 flags,
                 FeatureFlagService.FLAG_UI_OPENING_LOADER,
                 patch.uiOpeningLoader()
+        );
+        putFlagIfPresent(
+                flags,
+                FeatureFlagService.FLAG_SHIFTS_DISABLED,
+                patch.shiftsDisabled()
         );
         if (patch.tillListen() != null) {
             applyTillListenFlags(flags, patch.tillListen());

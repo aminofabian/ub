@@ -407,6 +407,7 @@ public class DesktopSyncPushService {
                 shift.getClosingNotes(),
                 shift.getVarianceReason(),
                 shift.isBlindClosing(),
+                shift.isAutoManaged(),
                 shift.getOpenedAt(),
                 shift.getClosedAt(),
                 shift.getCashTakenOut(),

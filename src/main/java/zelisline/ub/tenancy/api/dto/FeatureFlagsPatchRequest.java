@@ -46,6 +46,11 @@ public record FeatureFlagsPatchRequest(
         /** Which cashiers may draw out when {@code posCashierDrawout} is on. */
         @Valid CashierDrawoutAccessPatch posCashierDrawoutAccess,
         /** Show the Kiosk opening screen while pages load (default on when absent). */
-        Boolean uiOpeningLoader
+        Boolean uiOpeningLoader,
+        /**
+         * Turn cash-drawer shifts off for the shop: cashiers are never asked to open one and
+         * sales ride on a hidden system-managed shift. Absent / false keeps shifts required.
+         */
+        Boolean shiftsDisabled
 ) {
 }

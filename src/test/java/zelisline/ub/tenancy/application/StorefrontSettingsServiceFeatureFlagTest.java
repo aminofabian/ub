@@ -48,6 +48,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 tillListen,
                 hubAlerts,
                 null,
+                null,
                 null);
     }
 
@@ -57,7 +58,18 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null,
                 null,
-                enabled);
+                enabled,
+                null);
+    }
+
+    /** Patch that sets only {@code shiftsDisabled}; every other component stays absent. */
+    private static FeatureFlagsPatchRequest shiftsDisabled(Boolean disabled) {
+        return new FeatureFlagsPatchRequest(
+                null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null,
+                null,
+                null,
+                disabled);
     }
 
     @Test
@@ -121,7 +133,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 new FeatureFlagsPatchRequest(
                         null, null, null, null, null, null, null, null,
                         null, null, null, true, null, null, null, null,
-                        null, null));
+                        null, null, null));
 
         assertThat(objectMapper.readTree(merged).path("featureFlags").path("pos.cashier_mpesa_code").asBoolean())
                 .isTrue();
@@ -210,6 +222,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
                         new zelisline.ub.tenancy.api.dto.CashierDrawoutAccessPatch(
                                 "selected",
                                 java.util.List.of("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
+                        null,
                         null));
 
         var tree = objectMapper.readTree(merged);
@@ -255,6 +268,52 @@ class StorefrontSettingsServiceFeatureFlagTest {
         assertThat(flags.path("pos_drafts.enabled").asBoolean()).isTrue();
         assertThat(flags.path("butcher_pos.enabled").asBoolean()).isTrue();
         assertThat(flags.path("ui.opening_loader").asBoolean(true)).isFalse();
+    }
+
+    @Test
+    void mergeFeatureFlags_turnsShiftsOff() throws Exception {
+        String merged = service.mergeFeatureFlags("{}", shiftsDisabled(true));
+
+        var flags = objectMapper.readTree(merged).path("featureFlags");
+        assertThat(flags.has("shifts.disabled")).isTrue();
+        assertThat(flags.path("shifts.disabled").asBoolean()).isTrue();
+    }
+
+    @Test
+    void mergeFeatureFlags_turnsShiftsBackOn() throws Exception {
+        String merged = service.mergeFeatureFlags(
+                "{\"featureFlags\":{\"shifts.disabled\":true}}",
+                shiftsDisabled(false));
+
+        assertThat(objectMapper.readTree(merged)
+                        .path("featureFlags")
+                        .path("shifts.disabled")
+                        .asBoolean(true))
+                .isFalse();
+    }
+
+    @Test
+    void mergeFeatureFlags_shiftsPatchKeepsOtherFlags() throws Exception {
+        String merged = service.mergeFeatureFlags(
+                "{\"featureFlags\":{\"pos_drafts.enabled\":true,"
+                        + "\"shifts.prefill_opening_from_last_close\":true}}",
+                shiftsDisabled(true));
+
+        var flags = objectMapper.readTree(merged).path("featureFlags");
+        assertThat(flags.path("pos_drafts.enabled").asBoolean()).isTrue();
+        assertThat(flags.path("shifts.prefill_opening_from_last_close").asBoolean()).isTrue();
+        assertThat(flags.path("shifts.disabled").asBoolean()).isTrue();
+    }
+
+    @Test
+    void mergeFeatureFlags_otherPatchesDoNotWriteShiftsDisabled() throws Exception {
+        // Shops that never touched the switch keep the default (shifts required),
+        // so an unrelated save must not write the key.
+        String merged = service.mergeFeatureFlags(
+                "{}",
+                flags(true, null, null, null, null, null, null, null, null, null, null, null));
+
+        assertThat(objectMapper.readTree(merged).path("featureFlags").has("shifts.disabled")).isFalse();
     }
 
     @Test

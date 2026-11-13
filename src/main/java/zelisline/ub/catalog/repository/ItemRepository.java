@@ -482,6 +482,12 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                     or (:filterAisleUnset = false and i.aisleId = :aisleId))
                and (:restrictByAllowedItemTypes = false or i.itemTypeId in :allowedItemTypeIds)
                and (i.barcode is null or trim(i.barcode) = '')
+               and not (i.variantOfItemId is null and exists (
+                     select 1 from Item fam
+                      where fam.variantOfItemId = i.id
+                        and fam.businessId = i.businessId
+                        and fam.deletedAt is null
+                   ))
             """)
     long countCatalogMissingBarcodes(
             @Param("businessId") String businessId,
@@ -634,6 +640,12 @@ public interface ItemRepository extends JpaRepository<Item, String> {
                     and sp.effectiveTo is null
                     and sp.price > 0
                )
+               and not (i.variantOfItemId is null and exists (
+                     select 1 from Item fam
+                      where fam.variantOfItemId = i.id
+                        and fam.businessId = i.businessId
+                        and fam.deletedAt is null
+                   ))
             """)
     long countCatalogMissingPrices(
             @Param("businessId") String businessId,

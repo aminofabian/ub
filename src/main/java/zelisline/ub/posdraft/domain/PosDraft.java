@@ -19,7 +19,12 @@ import zelisline.ub.posdraft.PosDraftConstants;
 @Getter
 @Setter
 @Entity
-@Table(name = "pos_drafts")
+@Table(
+        name = "pos_drafts",
+        // Mirrors V372 so the test schema enforces what production does: numbers are per branch.
+        uniqueConstraints = @jakarta.persistence.UniqueConstraint(
+                name = "uq_pos_drafts_branch_ticket",
+                columnNames = {"business_id", "branch_id", "ticket_number"}))
 public class PosDraft {
 
     @Id

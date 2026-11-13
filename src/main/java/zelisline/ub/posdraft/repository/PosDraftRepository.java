@@ -66,9 +66,7 @@ public interface PosDraftRepository extends JpaRepository<PosDraft, String> {
             @Param("branchId") String branchId
     );
 
-    /** Highest ticket number used by the business; the unique key is per business, not per branch. */
-    @Query("select coalesce(max(d.ticketNumber), 0) from PosDraft d where d.businessId = :businessId")
-    long maxTicketNumber(@Param("businessId") String businessId);
+
 
     /**
      * Open tickets being served in a given chair — used to stop two customers sharing one.

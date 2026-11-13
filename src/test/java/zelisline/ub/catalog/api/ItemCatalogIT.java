@@ -651,7 +651,9 @@ class ItemCatalogIT {
                 .andExpect(jsonPath("$.parents").value(1))
                 .andExpect(jsonPath("$.variants").value(1))
                 .andExpect(jsonPath("$.standalones").value(1))
-                .andExpect(jsonPath("$.missingBarcode").value(3))
+                // The family row only groups its pack: it is not a product and cannot carry a barcode.
+                .andExpect(jsonPath("$.products").value(2))
+                .andExpect(jsonPath("$.missingBarcode").value(2))
                 .andExpect(jsonPath("$.inactive").value(0))
                 .andExpect(jsonPath("$.missingPrice").exists())
                 .andExpect(jsonPath("$.zeroStock").exists())

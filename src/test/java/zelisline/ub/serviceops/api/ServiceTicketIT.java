@@ -245,18 +245,33 @@ class ServiceTicketIT extends ServiceSaleTestSupport {
     }
 
     @Test
-    void ticketNumbersDoNotCollideAcrossBranches() throws Exception {
+    void ticketNumbersRunPerBranch() throws Exception {
         long first = createTicket(UUID.randomUUID().toString(), null).get("ticketNumber").asLong();
-        zelisline.ub.tenancy.domain.Branch second = new zelisline.ub.tenancy.domain.Branch();
-        second.setBusinessId(TENANT);
-        second.setName("Second");
-        branchRepository.save(second);
+        long second = createTicket(UUID.randomUUID().toString(), null).get("ticketNumber").asLong();
+        assertThat(second).isEqualTo(first + 1);
+
+        // A second branch starts its own numbering; the same number at another branch is fine.
+        zelisline.ub.tenancy.domain.Branch other = new zelisline.ub.tenancy.domain.Branch();
+        other.setBusinessId(TENANT);
+        other.setName("Second");
+        branchRepository.save(other);
         MvcResult result = mockMvc.perform(as(post("/api/v1/service-tickets"), TENANT, owner, ROLE_OWNER)
-                        .content("{\"branchId\":\"" + second.getId() + "\",\"clientTicketId\":\"" + UUID.randomUUID()
+                        .content("{\"branchId\":\"" + other.getId() + "\",\"clientTicketId\":\"" + UUID.randomUUID()
                                 + "\",\"lines\":[{\"serviceId\":\"" + haircut + "\"}]}"))
                 .andExpect(status().isCreated()).andReturn();
-        long other = objectMapper.readTree(result.getResponse().getContentAsString()).get("ticketNumber").asLong();
-        assertThat(other).isGreaterThan(first);
+        assertThat(objectMapper.readTree(result.getResponse().getContentAsString()).get("ticketNumber").asLong())
+                .isEqualTo(first);
+        assertThat(posDraftRepository.count()).isEqualTo(3);
+
+        // Within one branch a number can never be used twice: the database refuses it.
+        zelisline.ub.posdraft.domain.PosDraft clash = new zelisline.ub.posdraft.domain.PosDraft();
+        clash.setBusinessId(TENANT);
+        clash.setBranchId(branchId);
+        clash.setTicketNumber(first);
+        clash.setCreatedBy(cashier.getId());
+        clash.setClientDraftId(UUID.randomUUID().toString());
+        assertThatThrownBy(() -> posDraftRepository.saveAndFlush(clash))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
     }
 
     // ------------------------------------------------------------------ helpers

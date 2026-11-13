@@ -106,12 +106,8 @@ public class ServiceTicketService {
         PosDraft ticket = new PosDraft();
         ticket.setBusinessId(businessId);
         ticket.setBranchId(branchId);
-        // pos_drafts.ticket_number is unique per business while the sequence runs per branch, so a
-        // second branch would collide with the first. Take whichever is higher; two branches
-        // racing can still collide once, which is reported below and succeeds on retry.
-        ticket.setTicketNumber(Math.max(
-                sequenceAllocator.allocateTicketNumber(branchId),
-                draftRepository.maxTicketNumber(businessId) + 1));
+        // Numbered per branch, like held carts (unique per branch since V372).
+        ticket.setTicketNumber(sequenceAllocator.allocateTicketNumber(branchId));
         ticket.setStatus(PosDraftConstants.STATUS_PENDING);
         ticket.setDraftKind(PosDraftConstants.KIND_SERVICE);
         ticket.setServiceStage(PosDraftConstants.STAGE_WAITING);
@@ -122,7 +118,7 @@ public class ServiceTicketService {
         try {
             ticket = draftRepository.saveAndFlush(ticket);
         } catch (DataIntegrityViolationException ex) {
-            // Another till took the same number or sent the same client id a moment ago.
+            // Another till sent the same client id a moment ago.
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Could not open the ticket; try again");
         }
 

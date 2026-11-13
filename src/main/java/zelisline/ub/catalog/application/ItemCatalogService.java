@@ -651,10 +651,12 @@ public class ItemCatalogService {
                 ctx.parentsOnly(),
                 ctx.variantsOnly(),
                 ctx.skusOnly(),
-                ctx.filterByCatalogRowTypes(),
-                ctx.includeParentRows(),
-                ctx.includeVariantRows(),
-                ctx.includeStandaloneRows(),
+                // A family row only groups its packs and carries no price of its own, so the
+                // price tallies count packs and standalone items only.
+                true,
+                false,
+                !ctx.filterByCatalogRowTypes() || ctx.includeVariantRows(),
+                !ctx.filterByCatalogRowTypes() || ctx.includeStandaloneRows(),
                 ctx.excludeLinkedSupplierId(),
                 ctx.linkedSupplierId(),
                 ctx.squashParentGroupsForSearch(),
@@ -725,7 +727,7 @@ public class ItemCatalogService {
                 aisleUnset,
                 PageRequest.of(0, 1));
         if (ctx.emptyResult()) {
-            return new CatalogRowTypeCountsResponse(0, 0, 0, 0, 0, 0, 0, 0);
+            return new CatalogRowTypeCountsResponse(0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
         CatalogRowTypeSum rowTypes = itemRepository.sumCatalogRowTypes(
                 businessId,
@@ -824,7 +826,8 @@ public class ItemCatalogService {
                     inactive,
                     missingPrice,
                     stockAttention.zeroStockCount(),
-                    stockAttention.lowStockCount());
+                    stockAttention.lowStockCount(),
+                    0);
         }
         return new CatalogRowTypeCountsResponse(
                 rowTypes.parents(),
@@ -834,7 +837,8 @@ public class ItemCatalogService {
                 inactive,
                 missingPrice,
                 stockAttention.zeroStockCount(),
-                stockAttention.lowStockCount());
+                stockAttention.lowStockCount(),
+                rowTypes.variants() + rowTypes.standalones());
     }
 
     @Transactional(readOnly = true)

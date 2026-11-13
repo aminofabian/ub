@@ -151,6 +151,12 @@ public class SmsMessageLogService {
         return repository.sentTotalsByReasonSince(businessId, since);
     }
 
+    /** Rows of {@code [createdAt, status, credits]} since {@code since}, for charts. */
+    @Transactional(readOnly = true)
+    public List<Object[]> activitySince(String businessId, Instant since) {
+        return repository.activitySince(businessId, since);
+    }
+
     private String customerIdForPhone(String businessId, String phoneDigits) {
         List<String> forms = KenyanPhoneForms.lookupCandidates(phoneDigits);
         if (forms.isEmpty()) {

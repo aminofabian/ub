@@ -424,6 +424,20 @@ public class InboundTillPaymentService {
      */
     @Transactional
     public void captureConfirmedPayer(String businessId, WebhookResult parsed, String pushId) {
+        captureConfirmedPayer(businessId, parsed, pushId, null);
+    }
+
+    /**
+     * @param knownCustomerId customer already known to hold the paying number (the till
+     *     prompted a real number); when set, the payment is linked to them instead of
+     *     inferring a second customer from the masked payer identity
+     */
+    public void captureConfirmedPayer(
+            String businessId,
+            WebhookResult parsed,
+            String pushId,
+            String knownCustomerId
+    ) {
         if (parsed == null || !parsed.success() || businessId == null) {
             return;
         }
@@ -453,6 +467,10 @@ public class InboundTillPaymentService {
             row.setLinkedPushId(pushId);
         }
         applyParsedPayer(row, parsed);
+        if (knownCustomerId != null && !knownCustomerId.isBlank()
+                && (row.getLinkedCustomerId() == null || row.getLinkedCustomerId().isBlank())) {
+            row.setLinkedCustomerId(knownCustomerId);
+        }
         inboundRepository.save(row);
         ensureCustomerOnInbound(businessId, row);
     }

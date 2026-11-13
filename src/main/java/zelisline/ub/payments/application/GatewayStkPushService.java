@@ -1389,7 +1389,19 @@ public class GatewayStkPushService {
             case CREDIT_AR -> confirmCreditArIntent(push, parsed);
             case POS_PAYMENT -> {
                 creditKioskPayIfPlatformStk(push);
-                inboundTillPaymentService.captureConfirmedPayer(push.getBusinessId(), parsed, push.getId());
+                // The till prompted a real number: if a customer holds it under a
+                // placeholder name (the number itself), give them the payer's name.
+                String payerCustomerId = parsed == null ? null
+                        : mpesaPayerIdentityService
+                                .namePhoneHolder(
+                                        push.getBusinessId(),
+                                        push.getPhoneNumber(),
+                                        parsed.firstName(),
+                                        parsed.lastName())
+                                .map(zelisline.ub.credits.domain.Customer::getId)
+                                .orElse(null);
+                inboundTillPaymentService.captureConfirmedPayer(
+                        push.getBusinessId(), parsed, push.getId(), payerCustomerId);
                 publishPosConfirmation(push);
             }
             case STOREFRONT_CART -> log.info(

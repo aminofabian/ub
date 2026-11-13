@@ -65,6 +65,17 @@ public interface SmsMessageRepository extends JpaRepository<SmsMessage, String> 
             @Param("businessId") String businessId,
             @Param("since") Instant since);
 
+    /** Rows of {@code [createdAt, status, credits]} for one shop since {@code since}. */
+    @Query("""
+            select m.createdAt, m.status, m.credits
+              from SmsMessage m
+             where m.businessId = :businessId
+               and m.createdAt >= :since
+            """)
+    List<Object[]> activitySince(
+            @Param("businessId") String businessId,
+            @Param("since") Instant since);
+
     @Query("""
             select m.reason, count(m), coalesce(sum(m.credits), 0)
               from SmsMessage m

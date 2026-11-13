@@ -183,6 +183,60 @@ public class MpesaPayerIdentityService {
         applyNamesIfAllowed(customer, first, last);
     }
 
+    /**
+     * A payer name arrived for a payment made from a known real number (a till M-Pesa
+     * prompt): put that name on the customer who holds the number, if their current
+     * name is only a placeholder or was itself inferred. Names typed by staff are kept.
+     *
+     * <p>Never throws: naming a customer must not fail the payment it rides on.
+     *
+     * @return the customer holding the number, whether or not the name changed
+     */
+    @Transactional
+    public Optional<Customer> namePhoneHolder(
+            String businessId,
+            String realPhoneRaw,
+            String firstNameRaw,
+            String lastNameRaw
+    ) {
+        try {
+            if (businessId == null || realPhoneRaw == null || realPhoneRaw.isBlank()
+                    || MaskedMsisdn.isMasked(realPhoneRaw)) {
+                return Optional.empty();
+            }
+            Optional<Customer> holder = findByRealPhone(businessId, realPhoneRaw);
+            if (holder.isEmpty()) {
+                return Optional.empty();
+            }
+            String first = PayerNameNormalizer.normalize(firstNameRaw);
+            String last = PayerNameNormalizer.normalize(lastNameRaw);
+            // Kopokopo echoes the "Customer" we send as the STK subscriber name.
+            boolean usable = !first.isEmpty()
+                    && !("CUSTOMER".equals(first) && last.isEmpty())
+                    && !isPhonePlaceholderName(first);
+            if (usable) {
+                applyNamesIfAllowed(holder.get(), first, last);
+            }
+            return holder;
+        } catch (RuntimeException ex) {
+            log.warn("Could not apply payer name to phone holder business={}: {}", businessId, ex.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /** True when a "name" holds no letter at all, i.e. it is a phone number or blank. */
+    public static boolean isPhonePlaceholderName(String name) {
+        if (name == null || name.isBlank()) {
+            return true;
+        }
+        for (int i = 0; i < name.length(); i++) {
+            if (Character.isLetter(name.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     @Transactional
     public void markSelfVerified(Customer customer, String realPhoneRaw) {
         fillRealPhone(customer, realPhoneRaw, true);
@@ -317,8 +371,19 @@ public class MpesaPayerIdentityService {
         boolean inferred = CustomerOrigins.MPESA_INFERRED.equals(customer.getOrigin());
         boolean namesEmpty = (customer.getFirstName() == null || customer.getFirstName().isBlank())
                 && (customer.getLastName() == null || customer.getLastName().isBlank());
-        if (!inferred && !namesEmpty) {
+        // A till M-Pesa prompt to a new number creates a customer named after the number
+        // itself. That is a placeholder, not a name staff chose, so a real payer name
+        // may replace it.
+        boolean placeholder = isPhonePlaceholderName(customer.getName());
+        if (!inferred && !namesEmpty && !placeholder) {
             return;
+        }
+        if (placeholder) {
+            // Drop the number from the name parts so a missing last name does not keep it.
+            customer.setFirstName(null);
+            customer.setLastName(null);
+            customer.setFirstNameNorm(null);
+            customer.setLastNameNorm(null);
         }
         if (firstNorm != null && !firstNorm.isBlank()) {
             customer.setFirstName(title(firstNorm));

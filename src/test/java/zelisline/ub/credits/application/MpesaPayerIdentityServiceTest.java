@@ -143,4 +143,64 @@ class MpesaPayerIdentityServiceTest {
         assertThat(created.getMpesaIdentityKey()).isEqualTo("JOHN|_|2547|123");
         assertThat(created.getFirstName()).isEqualTo("John");
     }
+
+    private Customer holderOfPhone(String name, String origin) {
+        Customer customer = new Customer();
+        customer.setId("cust-7");
+        customer.setBusinessId("biz");
+        customer.setName(name);
+        String[] parts = zelisline.ub.credits.domain.PayerNameNormalizer.splitDisplayName(name);
+        customer.setFirstName(parts[0]);
+        customer.setLastName(parts[1].isEmpty() ? null : parts[1]);
+        customer.setOrigin(origin);
+        zelisline.ub.credits.domain.CustomerPhone phone = new zelisline.ub.credits.domain.CustomerPhone();
+        phone.setBusinessId("biz");
+        phone.setCustomerId("cust-7");
+        phone.setPhone("0712345678");
+        org.mockito.Mockito.lenient()
+                .when(customerPhoneRepository.findFirstByBusinessIdAndPhone(eq("biz"), any()))
+                .thenReturn(Optional.of(phone));
+        org.mockito.Mockito.lenient()
+                .when(customerRepository.findByIdAndBusinessIdAndDeletedAtIsNull("cust-7", "biz"))
+                .thenReturn(Optional.of(customer));
+        return customer;
+    }
+
+    @Test
+    void payerNameReplacesAPhoneNumberUsedAsTheName() {
+        Customer placeholder = holderOfPhone("254712345678", CustomerOrigins.STAFF);
+
+        Customer named = service.namePhoneHolder("biz", "254712345678", "JOHN", "KAMAU").orElseThrow();
+
+        assertThat(named.getId()).isEqualTo("cust-7");
+        assertThat(placeholder.getName()).isEqualTo("John Kamau");
+        assertThat(placeholder.getFirstName()).isEqualTo("John");
+        assertThat(placeholder.getLastName()).isEqualTo("Kamau");
+        verify(customerRepository).save(placeholder);
+    }
+
+    @Test
+    void payerNameDoesNotOverwriteANameStaffTyped() {
+        Customer typed = holderOfPhone("Mama Kamso", CustomerOrigins.STAFF);
+
+        service.namePhoneHolder("biz", "0712345678", "JANE", "WANJIRU");
+
+        assertThat(typed.getName()).isEqualTo("Mama Kamso");
+        verify(customerRepository, org.mockito.Mockito.never()).save(any());
+    }
+
+    @Test
+    void kopokopoSubscriberEchoIsNotTreatedAsAName() {
+        Customer placeholder = holderOfPhone("254712345678", CustomerOrigins.STAFF);
+
+        service.namePhoneHolder("biz", "254712345678", "Customer", "");
+
+        assertThat(placeholder.getName()).isEqualTo("254712345678");
+        verify(customerRepository, org.mockito.Mockito.never()).save(any());
+    }
+
+    @Test
+    void maskedNumberNamesNobody() {
+        assertThat(service.namePhoneHolder("biz", "2547XXXXX678", "JOHN", "KAMAU")).isEmpty();
+    }
 }

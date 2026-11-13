@@ -26,11 +26,21 @@ public final class SmsHubDtos {
     public record ReasonTotal(String reason, long messages, long credits) {
     }
 
+    /** One Africa/Nairobi day: texts the provider accepted and the credits they cost. */
+    public record DailyTotal(String date, long messages, long credits) {
+    }
+
+    /** Last 30 days by outcome. {@code sent} = accepted, no delivery report yet. */
+    public record StatusCounts(long sent, long delivered, long failed, long blocked) {
+    }
+
     public record SummaryResponse(
             ContactCounts contacts,
             long messagesLast30Days,
             long creditsLast30Days,
             List<ReasonTotal> byReason,
+            List<DailyTotal> daily,
+            StatusCounts statuses,
             boolean smsConfigured,
             String sendWindow
     ) {

@@ -2,9 +2,11 @@ package zelisline.ub.credits.sms.application;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -24,6 +26,8 @@ import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.credits.sms.api.dto.SmsHubDtos.ContactCounts;
 import zelisline.ub.credits.sms.api.dto.SmsHubDtos.ContactRow;
 import zelisline.ub.credits.sms.api.dto.SmsHubDtos.ContactsPageResponse;
+import zelisline.ub.credits.sms.api.dto.SmsHubDtos.DailyTotal;
+import zelisline.ub.credits.sms.api.dto.SmsHubDtos.StatusCounts;
 import zelisline.ub.credits.sms.api.dto.SmsHubDtos.MessageRow;
 import zelisline.ub.credits.sms.api.dto.SmsHubDtos.ReasonTotal;
 import zelisline.ub.credits.sms.api.dto.SmsHubDtos.SummaryResponse;
@@ -127,11 +131,47 @@ public class SmsHubContactsService {
         }
         TenantMessagingConfig messaging =
                 messagingSettingsService.resolveForTest(businessId, SmsSendReason.CAMPAIGN);
+        // Thirty Nairobi days ending today, oldest first, so the chart has no gaps.
+        LocalDate today = LocalDate.now(SmsSendWindow.ZONE);
+        Map<LocalDate, long[]> perDay = new LinkedHashMap<>();
+        for (int back = 29; back >= 0; back--) {
+            perDay.put(today.minusDays(back), new long[] {0L, 0L});
+        }
+        long sent = 0;
+        long delivered = 0;
+        long failed = 0;
+        long blocked = 0;
+        Instant chartSince = today.minusDays(29).atStartOfDay(SmsSendWindow.ZONE).toInstant();
+        for (Object[] row : messageLog.activitySince(businessId, chartSince)) {
+            if (row == null || !(row[0] instanceof Instant at)) {
+                continue;
+            }
+            String status = row[1] == null ? "" : String.valueOf(row[1]);
+            switch (status) {
+                case SmsMessage.STATUS_DELIVERED -> delivered++;
+                case SmsMessage.STATUS_SENT -> sent++;
+                case SmsMessage.STATUS_BLOCKED -> blocked++;
+                default -> failed++;
+            }
+            if (SmsMessage.STATUS_SENT.equals(status) || SmsMessage.STATUS_DELIVERED.equals(status)) {
+                long[] bucket = perDay.get(at.atZone(SmsSendWindow.ZONE).toLocalDate());
+                if (bucket != null) {
+                    bucket[0]++;
+                    bucket[1] += SmsMessageLogService.asLong(row[2]);
+                }
+            }
+        }
+        List<DailyTotal> daily = new ArrayList<>();
+        for (Map.Entry<LocalDate, long[]> entry : perDay.entrySet()) {
+            daily.add(new DailyTotal(entry.getKey().toString(), entry.getValue()[0], entry.getValue()[1]));
+        }
         return new SummaryResponse(
                 counts(entries(businessId)),
                 totals[0],
                 totals[1],
                 byReason,
+                daily,
+                new StatusCounts(sent, delivered, failed, blocked),
                 messaging.secretsReadable() && messaging.smsConfigured(),
                 SmsSendWindow.describe());
     }

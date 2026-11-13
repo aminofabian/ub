@@ -21,6 +21,12 @@ public record SaleItemResponse(
         String taxCode,
         BigDecimal taxRatePercent,
         /** Tax contained in {@link #lineTotal} (prices are tax-inclusive). */
-        BigDecimal taxAmount
+        BigDecimal taxAmount,
+        /** {@code SERVICE} lines only. */
+        String serviceId,
+        /** {@code SERVICE} lines only: who performed the work. */
+        String performerStaffProfileId,
+        String performerName,
+        Integer serviceMinutes
 ) {
 }

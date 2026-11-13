@@ -71,7 +71,26 @@ public class SmsHubContactsService {
     public ContactsPageResponse contacts(String businessId, String reachFilter, String query, int page, int size) {
         List<Entry> all = entries(businessId);
         ContactCounts counts = counts(all);
+        List<Entry> filtered = filter(all, reachFilter, query);
 
+        int pageSize = Math.max(1, Math.min(MAX_PAGE_SIZE, size));
+        int pageIndex = Math.max(0, page);
+        int from = Math.min(filtered.size(), pageIndex * pageSize);
+        int to = Math.min(filtered.size(), from + pageSize);
+        List<Entry> slice = filtered.subList(from, to);
+
+        List<ContactRow> rows = toRows(businessId, slice);
+        int totalPages = filtered.isEmpty() ? 0 : (filtered.size() + pageSize - 1) / pageSize;
+        return new ContactsPageResponse(rows, pageIndex, pageSize, filtered.size(), totalPages, counts);
+    }
+
+    /** Every contact matching the same filter and search as the list, for a file download. */
+    @Transactional(readOnly = true)
+    public List<ContactRow> export(String businessId, String reachFilter, String query) {
+        return toRows(businessId, filter(entries(businessId), reachFilter, query));
+    }
+
+    private static List<Entry> filter(List<Entry> all, String reachFilter, String query) {
         String reach = reachFilter == null || reachFilter.isBlank()
                 ? null
                 : reachFilter.trim().toUpperCase(Locale.ROOT);
@@ -90,16 +109,13 @@ public class SmsHubContactsService {
         }
         filtered.sort(Comparator.comparing(
                 e -> SmsAudienceService.displayName(e.customer()).toLowerCase(Locale.ROOT)));
+        return filtered;
+    }
 
-        int pageSize = Math.max(1, Math.min(MAX_PAGE_SIZE, size));
-        int pageIndex = Math.max(0, page);
-        int from = Math.min(filtered.size(), pageIndex * pageSize);
-        int to = Math.min(filtered.size(), from + pageSize);
-        List<Entry> slice = filtered.subList(from, to);
-
+    private List<ContactRow> toRows(String businessId, List<Entry> entries) {
         Map<String, Object[]> stats = purchaseStats(businessId);
         List<ContactRow> rows = new ArrayList<>();
-        for (Entry entry : slice) {
+        for (Entry entry : entries) {
             Customer c = entry.customer();
             Object[] stat = stats.get(c.getId());
             rows.add(new ContactRow(
@@ -114,8 +130,7 @@ public class SmsHubContactsService {
                     stat != null && stat[4] instanceof Instant last ? last : null,
                     stat != null ? SmsMessageLogService.asLong(stat[1]) : 0L));
         }
-        int totalPages = filtered.isEmpty() ? 0 : (filtered.size() + pageSize - 1) / pageSize;
-        return new ContactsPageResponse(rows, pageIndex, pageSize, filtered.size(), totalPages, counts);
+        return rows;
     }
 
     @Transactional(readOnly = true)

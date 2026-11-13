@@ -4,12 +4,19 @@ public final class LedgerAccountCodes {
 
     public static final String INVENTORY = "1200";
     public static final String SALES_REVENUE = "4000";
+    /**
+     * Revenue from services (a haircut, a massage) — kept apart from {@link #SALES_REVENUE} so a
+     * shop that sells both can read service and product income separately (ADR 0014).
+     */
+    public static final String SERVICE_REVENUE = "4010";
     public static final String COST_OF_GOODS_SOLD = "5000";
     /** Operating expenses root (Phase 6). */
     public static final String OPERATING_EXPENSES = "6000";
     public static final String EXPENSE_RENT = "6010";
     public static final String EXPENSE_UTILITIES = "6020";
     public static final String EXPENSE_SALARIES = "6030";
+    /** Commission earned by staff on services and product sales; paired with {@link #COMMISSIONS_PAYABLE}. */
+    public static final String COMMISSION_EXPENSE = "6035";
     public static final String EXPENSE_TRANSPORT = "6040";
     public static final String EXPENSE_MAINTENANCE = "6050";
     public static final String EXPENSE_PACKAGING_MISC = "6060";
@@ -33,6 +40,14 @@ public final class LedgerAccountCodes {
     public static final String LOYALTY_MARKETING_EXPENSE = "5310";
 
     public static final String ACCOUNTS_PAYABLE = "2100";
+    /** Commission owed to staff and not yet paid out (ADR 0014). */
+    public static final String COMMISSIONS_PAYABLE = "2300";
+    /** Tips taken through the till on behalf of staff. A tip is never revenue (ADR 0014). */
+    public static final String TIPS_PAYABLE = "2310";
+    /** Reserved: booking deposits (service businesses, phase 2). Not bootstrapped yet. */
+    public static final String CUSTOMER_DEPOSITS = "2320";
+    /** Reserved: prepaid service packages recognised per session (phase 3). Not bootstrapped yet. */
+    public static final String DEFERRED_SERVICE_REVENUE = "2330";
     /** VAT collected on sales but not yet remitted to KRA (liability). */
     public static final String VAT_PAYABLE = "2200";
     public static final String GOODS_RECEIVED_NOT_INVOICED = "2150";
@@ -47,5 +62,10 @@ public final class LedgerAccountCodes {
     public static final String CASH_OVER_SHORT = "3900";
 
     private LedgerAccountCodes() {
+    }
+
+    /** Income from selling: goods or services. Use this instead of comparing to one revenue code. */
+    public static boolean isSalesOrServiceRevenue(String code) {
+        return SALES_REVENUE.equals(code) || SERVICE_REVENUE.equals(code);
     }
 }

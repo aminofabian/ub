@@ -50,6 +50,22 @@ public final class CustomerSmsCampaignDtos {
     ) {
     }
 
+    public record TestSmsRequest(
+            @NotBlank @Size(max = 600) String body,
+            @NotBlank @Size(max = 32) String phone
+    ) {
+    }
+
+    /** {@code phone} is the local 07… form the test went to; {@code error} is set when not sent. */
+    public record TestSmsResponse(
+            boolean sent,
+            String phone,
+            String text,
+            int parts,
+            String error
+    ) {
+    }
+
     public record CreateCustomerSmsCampaignRequest(
             @NotBlank @Size(max = 255) String name,
             @NotBlank @Size(max = 600) String body,

@@ -25,6 +25,8 @@ public record SaleResponse(
         String voidedBy,
         String soldByName,
         String voidJournalEntryId,
-        String voidNotes
+        String voidNotes,
+        /** Tips taken with the sale for staff; not part of {@link #grandTotal}. */
+        BigDecimal tipTotal
 ) {
 }

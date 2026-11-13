@@ -380,6 +380,195 @@ class SmsHubApiIT {
                 .andExpect(jsonPath("$.winbackEnabled").value(false));
     }
 
+    @Test
+    void importAddsNewNumbersRecordsConsentAndNeverUndoesAnOptOut() throws Exception {
+        Customer out = customer(TENANT_A, "Opted Out", SmsMarketingStatus.OPTED_OUT, "0755444000", null);
+        Customer placeholder = customer(TENANT_A, "0766555000", SmsMarketingStatus.UNKNOWN, "0766555000", null);
+        String rows = "[{\"name\":\"Njeri Mwangi\",\"phone\":\"+254 711 000 111\"},"
+                + "{\"phone\":\"0711000222\"},"
+                + "{\"phone\":\"0711 000 111\"},"
+                + "{\"phone\":\"0733222000\"},"
+                + "{\"phone\":\"0755444000\"},"
+                + "{\"name\":\"Peter Kip\",\"phone\":\"0766555000\"},"
+                + "{\"name\":\"Bad\",\"phone\":\"12345\"}]";
+
+        mockMvc.perform(post("/api/v1/sms-hub/contacts/import")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"rows\":" + rows + ",\"customerAgreed\":true}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.added").value(2))
+                .andExpect(jsonPath("$.alreadyThere").value(3))
+                .andExpect(jsonPath("$.markedAgreed").value(4))
+                .andExpect(jsonPath("$.keptOptedOut").value(1))
+                .andExpect(jsonPath("$.renamed").value(1))
+                .andExpect(jsonPath("$.invalid").value(1))
+                .andExpect(jsonPath("$.failed").value(0))
+                .andExpect(jsonPath("$.invalidSamples[0]").value("12345"));
+
+        assertThat(customerRepository.findById(out.getId()).orElseThrow().getSmsMarketingStatus())
+                .isEqualTo(SmsMarketingStatus.OPTED_OUT);
+        assertThat(customerRepository.findById(ben.getId()).orElseThrow().getSmsMarketingStatus())
+                .isEqualTo(SmsMarketingStatus.OPTED_IN);
+        assertThat(customerRepository.findById(placeholder.getId()).orElseThrow().getName())
+                .isEqualTo("Peter Kip");
+        Customer njeri = customerRepository.findById(
+                customerPhoneRepository.findFirstByBusinessIdAndPhone(TENANT_A, "0711000111")
+                        .orElseThrow().getCustomerId()).orElseThrow();
+        assertThat(njeri.getName()).isEqualTo("Njeri Mwangi");
+        assertThat(njeri.getSmsMarketingStatus()).isEqualTo(SmsMarketingStatus.OPTED_IN);
+
+        // The same upload again (a retry) adds nobody twice.
+        mockMvc.perform(post("/api/v1/sms-hub/contacts/import")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"rows\":" + rows + ",\"customerAgreed\":true}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.added").value(0))
+                .andExpect(jsonPath("$.markedAgreed").value(0));
+    }
+
+    @Test
+    void importWithoutConsentLeavesNewNumbersOnReceiptsOnly() throws Exception {
+        mockMvc.perform(post("/api/v1/sms-hub/contacts/import")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"rows\":[{\"phone\":\"0711000333\"}]}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.added").value(1))
+                .andExpect(jsonPath("$.markedAgreed").value(0));
+
+        Customer added = customerRepository.findById(
+                customerPhoneRepository.findFirstByBusinessIdAndPhone(TENANT_A, "0711000333")
+                        .orElseThrow().getCustomerId()).orElseThrow();
+        assertThat(added.getSmsMarketingStatus()).isEqualTo(SmsMarketingStatus.UNKNOWN);
+        assertThat(added.getName()).isEqualTo("0711000333");
+    }
+
+    @Test
+    void importOfAnotherShopsNumberDoesNotTouchThatShopsCustomer() throws Exception {
+        mockMvc.perform(post("/api/v1/sms-hub/contacts/import")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"rows\":[{\"name\":\"Stolen Name\",\"phone\":\"0744333000\"}],"
+                                + "\"customerAgreed\":true}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.added").value(1));
+
+        Customer other = customerRepository.findById(zed.getId()).orElseThrow();
+        assertThat(other.getName()).isEqualTo("Zed Other");
+        assertThat(other.getSmsMarketingStatus()).isEqualTo(SmsMarketingStatus.UNKNOWN);
+    }
+
+    @Test
+    void exportListsOnlyOwnContactsAndHonoursTheFilter() throws Exception {
+        mockMvc.perform(get("/api/v1/sms-hub/contacts/export")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, viewerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_VIEWER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rows.length()").value(3))
+                .andExpect(jsonPath("$.rows[?(@.name == 'Zed Other')]").isEmpty());
+
+        mockMvc.perform(get("/api/v1/sms-hub/contacts/export").param("reach", "CAN_TEXT")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rows.length()").value(1))
+                .andExpect(jsonPath("$.rows[0].name").value("Ada Wanjiku"));
+    }
+
+    @Test
+    void readOnlyRoleCannotImportTestOrDuplicate() throws Exception {
+        mockMvc.perform(post("/api/v1/sms-hub/contacts/import")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"rows\":[{\"phone\":\"0711000444\"}]}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, viewerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_VIEWER))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/v1/customer-sms-campaigns/test")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"body\":\"Hello\",\"phone\":\"0711000444\"}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, viewerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_VIEWER))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/v1/customer-sms-campaigns/some-id/duplicate")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, viewerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_VIEWER))
+                .andExpect(status().isForbidden());
+        assertThat(customerPhoneRepository.findFirstByBusinessIdAndPhone(TENANT_A, "0711000444")).isEmpty();
+    }
+
+    @Test
+    void testTextIsRefusedForABadNumberOrWhileSmsIsNotSetUp() throws Exception {
+        mockMvc.perform(post("/api/v1/customer-sms-campaigns/test")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"body\":\"Hi {first_name}\",\"phone\":\"12345\"}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/api/v1/customer-sms-campaigns/test")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"body\":\"Hi {nickname}\",\"phone\":\"0711000444\"}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/api/v1/customer-sms-campaigns/test")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"body\":\"Hi {first_name}\",\"phone\":\"0711000444\"}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isBadRequest());
+        assertThat(smsMessageRepository.count()).isZero();
+    }
+
+    @Test
+    void duplicateStartsANewDraftAndCannotCopyAnotherShopsCampaign() throws Exception {
+        MvcResult created = mockMvc.perform(post("/api/v1/customer-sms-campaigns")
+                        .contentType(APPLICATION_JSON)
+                        .content(campaignBody(ada.getId(), ben.getId()))
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String id = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
+
+        mockMvc.perform(post("/api/v1/customer-sms-campaigns/" + id + "/duplicate")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(org.hamcrest.Matchers.not(id)))
+                .andExpect(jsonPath("$.name").value("November offer (copy)"))
+                .andExpect(jsonPath("$.status").value("DRAFT"))
+                .andExpect(jsonPath("$.body").value("Hi {first_name}, 10% off at {shop} this week."))
+                .andExpect(jsonPath("$.recipientsTargeted").value(2))
+                .andExpect(jsonPath("$.recipientsPending").value(1));
+
+        mockMvc.perform(post("/api/v1/customer-sms-campaigns/" + id + "/duplicate")
+                        .header("X-Tenant-Id", TENANT_B)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerB.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNotFound());
+        assertThat(campaignRepository.count()).isEqualTo(2);
+    }
+
     private static String campaignBody(String... customerIds) {
         StringBuilder ids = new StringBuilder();
         for (String id : customerIds) {

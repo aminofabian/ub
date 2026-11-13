@@ -18,6 +18,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -1355,6 +1357,50 @@ public class GatewayStkPushService {
         return a.subtract(b).abs().compareTo(new BigDecimal("1.00")) <= 0;
     }
 
+    /**
+     * Customer-facing prompts other than the till (which names its payer while capturing
+     * the payment): when the callback carries the payer's name and a customer of this
+     * shop holds the prompted number under a placeholder name, use the real name.
+     * Platform purchases (domains, airtime, SMS credits, subscriptions) are paid by the
+     * shop's own staff and are left alone.
+     */
+    private void nameCustomerFromPrompt(GatewayStkPush push, WebhookResult parsed) {
+        if (parsed == null || push.getContextType() == null) {
+            return;
+        }
+        switch (push.getContextType()) {
+            case WEB_ORDER, STOREFRONT_CART, GROCERY_INVOICE, WALLET_INTENT, CREDIT_AR -> {
+            }
+            default -> {
+                return;
+            }
+        }
+        String businessId = push.getBusinessId();
+        String phone = push.getPhoneNumber();
+        String first = parsed.firstName();
+        String last = parsed.lastName();
+        Runnable rename = () -> {
+            try {
+                mpesaPayerIdentityService.namePhoneHolderAfterPayment(businessId, phone, first, last);
+            } catch (RuntimeException ex) {
+                log.warn("Could not name payer after STK confirmation push={}: {}",
+                        push.getId(), ex.getClass().getSimpleName());
+            }
+        };
+        // After commit and in its own transaction: a failed or conflicting rename must
+        // never roll back the payment confirmation it follows.
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    rename.run();
+                }
+            });
+        } else {
+            rename.run();
+        }
+    }
+
     private void confirmPush(GatewayStkPush push, String gatewayTxnId, BigDecimal webhookAmount) {
         confirmPush(push, gatewayTxnId, webhookAmount, null);
     }
@@ -1420,6 +1466,7 @@ public class GatewayStkPushService {
                     push.getId(), gatewayTxnId);
             default -> log.warn("Unknown STK context type: {}", push.getContextType());
         }
+        nameCustomerFromPrompt(push, parsed);
 
         PlatformCustodySettlementService custody = custodySettlementService.getIfAvailable();
         if (custody != null) {

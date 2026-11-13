@@ -14,8 +14,26 @@ public record PostSaleLineRequest(
         String label,
         String airtimePhone,
         String airtimeNetwork,
-        Boolean sellAtRegular
+        Boolean sellAtRegular,
+        /** For {@code kind = SERVICE}: the service sold. */
+        String serviceId,
+        /** For {@code kind = SERVICE}: the staff profile that performed it (not the cashier). */
+        String performerStaffProfileId
 ) {
+    /** Shape used before service lines existed; older queued sales and callers still build it. */
+    public PostSaleLineRequest(
+            String itemId,
+            BigDecimal quantity,
+            BigDecimal unitPrice,
+            String kind,
+            String label,
+            String airtimePhone,
+            String airtimeNetwork,
+            Boolean sellAtRegular
+    ) {
+        this(itemId, quantity, unitPrice, kind, label, airtimePhone, airtimeNetwork, sellAtRegular, null, null);
+    }
+
     public static PostSaleLineRequest catalogItem(
             String itemId,
             BigDecimal quantity,
@@ -30,5 +48,9 @@ public record PostSaleLineRequest(
 
     public boolean isAirtime() {
         return SaleLineKinds.isAirtime(kind);
+    }
+
+    public boolean isService() {
+        return SaleLineKinds.isService(kind);
     }
 }

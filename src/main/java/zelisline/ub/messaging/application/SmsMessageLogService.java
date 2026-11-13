@@ -117,6 +117,12 @@ public class SmsMessageLogService {
         return repository.existsByBusinessIdAndReferenceIdAndStatusIn(businessId, referenceId, ACCEPTED);
     }
 
+    /** Attempts (sent or not) whose reference starts with {@code prefix} since {@code since}. */
+    @Transactional(readOnly = true)
+    public long countByReferencePrefixSince(String businessId, String prefix, Instant since) {
+        return repository.countByBusinessIdAndReferenceIdStartingWithAndCreatedAtAfter(businessId, prefix, since);
+    }
+
     /** Promotional texts this shop has sent to a number since {@code since}. */
     @Transactional(readOnly = true)
     public long promotionalSince(String businessId, String phoneDigits, Instant since) {

@@ -15,13 +15,17 @@ import org.springframework.web.bind.annotation.RestController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import zelisline.ub.credits.sms.api.dto.SmsHubDtos.AutomationsResponse;
+import zelisline.ub.credits.sms.api.dto.SmsHubDtos.ContactsExportResponse;
 import zelisline.ub.credits.sms.api.dto.SmsHubDtos.ContactsPageResponse;
+import zelisline.ub.credits.sms.api.dto.SmsHubDtos.ImportContactsRequest;
+import zelisline.ub.credits.sms.api.dto.SmsHubDtos.ImportContactsResponse;
 import zelisline.ub.credits.sms.api.dto.SmsHubDtos.MessageRow;
 import zelisline.ub.credits.sms.api.dto.SmsHubDtos.SummaryResponse;
 import zelisline.ub.credits.sms.api.dto.SmsHubDtos.UpdateAutomationsRequest;
 import zelisline.ub.credits.sms.api.dto.SmsHubDtos.UpdateConsentRequest;
 import zelisline.ub.credits.sms.api.dto.SmsHubDtos.UpdateConsentResponse;
 import zelisline.ub.credits.sms.application.SmsCampaignText;
+import zelisline.ub.credits.sms.application.SmsHubContactImportService;
 import zelisline.ub.credits.sms.application.SmsHubContactsService;
 import zelisline.ub.credits.sms.application.SmsHubSettingsService;
 import zelisline.ub.platform.security.CurrentTenantUser;
@@ -41,12 +45,15 @@ public class SmsHubController {
     private final SmsHubContactsService contactsService;
     private final SmsHubSettingsService settingsService;
     private final SmsCampaignText campaignText;
+    private final SmsHubContactImportService contactImportService;
 
     public SmsHubController(
             SmsHubContactsService contactsService,
             SmsHubSettingsService settingsService,
-            SmsCampaignText campaignText
+            SmsCampaignText campaignText,
+            SmsHubContactImportService contactImportService
     ) {
+        this.contactImportService = contactImportService;
         this.contactsService = contactsService;
         this.settingsService = settingsService;
         this.campaignText = campaignText;
@@ -81,6 +88,30 @@ public class SmsHubController {
         CurrentTenantUser.require(http);
         return new UpdateConsentResponse(
                 contactsService.updateConsent(TenantRequestIds.resolveBusinessId(http), request));
+    }
+
+    /** Add numbers typed by staff or read from a file. Re-sending the same rows adds nothing twice. */
+    @PostMapping("/contacts/import")
+    @PreAuthorize("hasPermission(null, 'credits.customers.write')")
+    public ImportContactsResponse importContacts(
+            @Valid @RequestBody ImportContactsRequest request,
+            HttpServletRequest http
+    ) {
+        String actorId = CurrentTenantUser.auditActorId(http);
+        return contactImportService.importContacts(TenantRequestIds.resolveBusinessId(http), actorId, request);
+    }
+
+    /** The whole filtered contact list for a file download; the client writes the file. */
+    @GetMapping("/contacts/export")
+    @PreAuthorize("hasPermission(null, 'credits.customers.read')")
+    public ContactsExportResponse exportContacts(
+            @RequestParam(required = false) String reach,
+            @RequestParam(required = false) String q,
+            HttpServletRequest http
+    ) {
+        CurrentTenantUser.require(http);
+        return new ContactsExportResponse(
+                contactsService.export(TenantRequestIds.resolveBusinessId(http), reach, q));
     }
 
     @GetMapping("/messages")

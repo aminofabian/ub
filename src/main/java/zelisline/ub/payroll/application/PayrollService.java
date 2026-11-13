@@ -1671,7 +1671,7 @@ public class PayrollService {
 
     private static String resolveStaffPhone(StaffProfile profile, User user) {
         String raw = profile.getPhone();
-        if (raw == null || raw.isBlank()) {
+        if ((raw == null || raw.isBlank()) && user != null) {
             raw = user.getPhone();
         }
         if (raw == null || raw.isBlank()) {

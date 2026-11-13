@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
@@ -83,6 +84,41 @@ public final class SmsHubDtos {
     }
 
     public record UpdateConsentResponse(int changed) {
+    }
+
+    /** One number to add; {@code name} is optional. A bad number is counted, not rejected. */
+    public record ImportContactRow(
+            @Size(max = 500) String name,
+            @Size(max = 100) String phone
+    ) {
+    }
+
+    public record ImportContactsRequest(
+            @NotEmpty @Size(max = 500) List<@Valid ImportContactRow> rows,
+            /** True when staff confirm these people agreed to offers by SMS. */
+            Boolean customerAgreed
+    ) {
+    }
+
+    /**
+     * {@code alreadyThere} numbers were on file; {@code keptOptedOut} of them had opted
+     * out and stay that way; {@code renamed} had only their number as a name;
+     * {@code invalid} are not Kenyan mobile numbers.
+     */
+    public record ImportContactsResponse(
+            int added,
+            int alreadyThere,
+            int markedAgreed,
+            int keptOptedOut,
+            int renamed,
+            int invalid,
+            /** Valid numbers that could not be saved this time; sending them again is safe. */
+            int failed,
+            List<String> invalidSamples
+    ) {
+    }
+
+    public record ContactsExportResponse(List<ContactRow> rows) {
     }
 
     public record MessageRow(

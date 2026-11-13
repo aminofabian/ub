@@ -27,6 +27,23 @@ public record PostSaleRequest(
          * must hold {@code inventory.write}; the flag is ignored (and the sale rejected as usual)
          * otherwise. {@code null}/false = normal stock rules.
          */
-        Boolean allowOutOfStock
+        Boolean allowOutOfStock,
+        /**
+         * Tips for staff who performed a service on this sale. Not part of the sale total and
+         * never revenue; the payments must cover the total plus the tips.
+         */
+        @Valid List<PostSaleTipRequest> tips
 ) {
+    /** Shape used before tips existed; older queued sales and internal callers still build it. */
+    public PostSaleRequest(
+            String branchId,
+            List<PostSaleLineRequest> lines,
+            List<PostSalePaymentRequest> payments,
+            Instant clientSoldAt,
+            String customerId,
+            BigDecimal cashReceived,
+            Boolean allowOutOfStock
+    ) {
+        this(branchId, lines, payments, clientSoldAt, customerId, cashReceived, allowOutOfStock, null);
+    }
 }

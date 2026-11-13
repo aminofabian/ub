@@ -146,7 +146,7 @@ public class CustomerTabPurchasesService {
                     ? (line.getLineLabel() != null && !line.getLineLabel().isBlank()
                             ? line.getLineLabel().trim()
                             : "Airtime")
-                    : itemNames.getOrDefault(line.getItemId(), "Item");
+                    : lineName(line, itemNames);
             if (!name.isBlank()) {
                 names.add(name);
             }
@@ -291,9 +291,9 @@ public class CustomerTabPurchasesService {
                                 ? (si.getLineLabel() != null && !si.getLineLabel().isBlank()
                                         ? si.getLineLabel()
                                         : "Airtime")
-                                : itemNames.getOrDefault(si.getItemId(), "Item"),
-                        si.isAirtime() ? null : itemSkus.get(si.getItemId()),
-                        si.isAirtime() ? null : itemBarcodes.get(si.getItemId()),
+                                : lineName(si, itemNames),
+                        si.getItemId() == null ? null : itemSkus.get(si.getItemId()),
+                        si.getItemId() == null ? null : itemBarcodes.get(si.getItemId()),
                         scaleQty(si.getQuantity()),
                         scaleUnitPrice(si.getUnitPrice()),
                         scaleMoney(si.getLineTotal())));
@@ -417,5 +417,16 @@ public class CustomerTabPurchasesService {
             return composed;
         }
         return item.getName() != null && !item.getName().isBlank() ? item.getName().trim() : "Item";
+    }
+
+    /** A line with no item (a service) is named from its own snapshot, never looked up by a null id. */
+    private static String lineName(SaleItem line, Map<String, String> itemNames) {
+        if (line.getItemId() == null || line.getItemId().isBlank()) {
+            String snapshot = line.getDisplayName() != null && !line.getDisplayName().isBlank()
+                    ? line.getDisplayName()
+                    : line.getLineLabel();
+            return snapshot == null || snapshot.isBlank() ? "Item" : snapshot.trim();
+        }
+        return itemNames.getOrDefault(line.getItemId(), "Item");
     }
 }

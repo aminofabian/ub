@@ -82,6 +82,7 @@ public class SaleRefundService {
     private static final int WEIGHTED_QTY_SCALE = 3;
     private static final String WEIGHED_REFUND_PERMISSION = "sales.weighed.refund";
 
+    private final zelisline.ub.serviceops.application.StaffEarningsService staffEarningsService;
     private final BatchNumberGenerator batchNumberGenerator;
 
     private final SaleRepository saleRepository;
@@ -177,6 +178,16 @@ public class SaleRefundService {
         }
 
         String jeId = postRefundJournal(businessId, blankToNull(sale.getBranchId()), refundId, comp, pays);
+        // The seller gives back the matching share of any commission earned on the returned lines.
+        // Refund lines for this refund are not saved yet, so the earlier total plus this quantity is
+        // everything returned on the line so far.
+        for (RefundRow row : comp.rows()) {
+            BigDecimal returnedBefore = refundLineRepository
+                    .sumRefundedQuantityForSaleItem(row.saleItem().getId(), saleId);
+            BigDecimal returnedSoFar = (returnedBefore == null ? BigDecimal.ZERO : returnedBefore).add(row.quantity());
+            staffEarningsService.reverseForRefundedLine(
+                    businessId, row.saleItem().getId(), returnedSoFar, row.saleItem().getQuantity(), refundId, userId);
+        }
         creditSaleDebtService.reduceDebtForCreditRefund(
                 businessId, saleId, sale.getCustomerId(), sumCustomerCreditPay(pays));
         walletLedgerService.refundToWallet(businessId, saleId, sale.getCustomerId(), walletRefundShare);
@@ -286,6 +297,10 @@ public class SaleRefundService {
             }
             SaleItem si = saleItemRepository.findByIdAndSaleId(sid, sale.getId())
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown sale line"));
+            if (si.isService()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "A service cannot be refunded line by line — void the sale to reverse it");
+            }
             if (si.isAirtime() || si.getItemId() == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Airtime on this sale cannot be refunded as stock — void the sale or retry the top-up from Airtime");

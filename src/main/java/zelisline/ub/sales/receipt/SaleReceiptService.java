@@ -58,6 +58,7 @@ public class SaleReceiptService {
     private final StorefrontSettingsService storefrontSettingsService;
     private final CustomerRepository customerRepository;
     private final CustomerPhoneRepository customerPhoneRepository;
+    private final zelisline.ub.payroll.application.StaffProfileService staffProfileService;
 
     public byte[] buildPdf(String businessId, String saleId) {
         return ReceiptPdfRenderer.render(loadSnapshot(businessId, saleId, null));
@@ -113,7 +114,15 @@ public class SaleReceiptService {
             }
         }
 
-        List<ReceiptLineRow> lines = buildReceiptLines(items, itemMap, parentNameById);
+        List<String> performerIds = items.stream()
+                .map(SaleItem::getPerformerStaffProfileId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        Map<String, String> performerNames = performerIds.isEmpty()
+                ? Map.of()
+                : staffProfileService.displayNamesByIds(businessId, performerIds);
+        List<ReceiptLineRow> lines = buildReceiptLines(items, itemMap, parentNameById, performerNames);
 
         List<ReceiptPaymentRow> payments = new ArrayList<>();
         for (SalePayment p : pays) {
@@ -154,11 +163,12 @@ public class SaleReceiptService {
         String changeGivenDisplay = null;
         BigDecimal cashReceived = resolveCashReceivedForReceipt(
                 sale, pays, cashReceivedOverride);
-        if (cashReceived != null && cashReceived.compareTo(sale.getGrandTotal()) >= 0) {
+        if (cashReceived != null && cashReceived.compareTo(sale.amountDue()) >= 0) {
             cashReceivedDisplay = money(cashReceived);
-            changeGivenDisplay = money(cashReceived.subtract(sale.getGrandTotal()));
+            changeGivenDisplay = money(cashReceived.subtract(sale.amountDue()));
         }
 
+        boolean hasTips = sale.getTipTotal() != null && sale.getTipTotal().signum() > 0;
         String taxTotalDisplay = sale.getTaxTotal() != null && sale.getTaxTotal().signum() > 0
                 ? money(sale.getTaxTotal())
                 : null;
@@ -188,7 +198,9 @@ public class SaleReceiptService {
                 money(sale.getGrandTotal()),
                 cashReceivedDisplay,
                 changeGivenDisplay,
-                footer
+                footer,
+                hasTips ? money(sale.getTipTotal()) : null,
+                hasTips ? money(sale.amountDue()) : null
         );
     }
 
@@ -201,6 +213,16 @@ public class SaleReceiptService {
             List<SaleItem> items,
             Map<String, Item> itemMap,
             Map<String, String> parentNameById
+    ) {
+        return buildReceiptLines(items, itemMap, parentNameById, Map.of());
+    }
+
+    /** @param performerNames staff profile id → name, printed beside each service line */
+    static List<ReceiptLineRow> buildReceiptLines(
+            List<SaleItem> items,
+            Map<String, Item> itemMap,
+            Map<String, String> parentNameById,
+            Map<String, String> performerNames
     ) {
         Map<Integer, List<SaleItem>> byLineIndex = new LinkedHashMap<>();
         for (SaleItem si : items) {
@@ -235,7 +257,8 @@ public class SaleReceiptService {
                 continue;
             }
 
-            Item it = itemMap.get(first.getItemId());
+            // A service line has no item; never look a null id up (itemMap may be immutable).
+            Item it = first.getItemId() == null ? null : itemMap.get(first.getItemId());
             String parentName = it != null && it.getVariantOfItemId() != null
                     ? parentNameById.get(it.getVariantOfItemId())
                     : null;
@@ -243,6 +266,12 @@ public class SaleReceiptService {
             String desc = snapshot != null && !snapshot.isBlank()
                     ? snapshot.trim()
                     : (it != null ? ProductDisplayName.forVariant(it, parentName) : "Item");
+            if (first.isService()) {
+                String performer = performerNames.get(first.getPerformerStaffProfileId());
+                if (performer != null && !performer.isBlank()) {
+                    desc = desc + " - " + performer.trim();
+                }
+            }
             lines.add(new ReceiptLineRow(
                     desc,
                     qty.stripTrailingZeros().toPlainString(),
@@ -302,7 +331,7 @@ public class SaleReceiptService {
             return null;
         }
         BigDecimal cash = override.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-        if (cash.compareTo(sale.getGrandTotal()) < 0) {
+        if (cash.compareTo(sale.amountDue()) < 0) {
             return null;
         }
         if (pays.size() != 1 || !SalesConstants.PAYMENT_METHOD_CASH.equals(pays.get(0).getMethod())) {

@@ -27,6 +27,9 @@ public interface SmsMessageRepository extends JpaRepository<SmsMessage, String> 
 
     List<SmsMessage> findByProviderMessageId(String providerMessageId);
 
+    long countByBusinessIdAndReferenceIdStartingWithAndCreatedAtAfter(
+            String businessId, String referencePrefix, Instant since);
+
     @Query("""
             select count(m)
               from SmsMessage m

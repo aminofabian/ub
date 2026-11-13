@@ -61,6 +61,13 @@ public class Sale {
     private BigDecimal taxTotal = BigDecimal.ZERO;
 
     /**
+     * Tips taken with this sale on behalf of staff. Not part of {@code grandTotal} and never
+     * revenue; the sale's payments cover {@code grandTotal + tipTotal} (ADR 0014).
+     */
+    @Column(name = "tip_total", nullable = false, precision = 14, scale = 2)
+    private BigDecimal tipTotal = BigDecimal.ZERO;
+
+    /**
      * Cash handed over by the customer (may exceed grand total). Receipt-only;
      * ledger still posts the sale total. Null when not a cash tender with change.
      */
@@ -120,6 +127,9 @@ public class Sale {
         if (refundedTotal == null) {
             refundedTotal = BigDecimal.ZERO;
         }
+        if (tipTotal == null) {
+            tipTotal = BigDecimal.ZERO;
+        }
         if (taxTotal == null) {
             taxTotal = BigDecimal.ZERO;
         }
@@ -132,5 +142,11 @@ public class Sale {
     @PreUpdate
     void onUpdate() {
         updatedAt = Instant.now();
+    }
+
+    /** What the customer had to hand over: the sale total plus any tips. */
+    public BigDecimal amountDue() {
+        BigDecimal total = grandTotal == null ? BigDecimal.ZERO : grandTotal;
+        return tipTotal == null ? total : total.add(tipTotal);
     }
 }

@@ -26,8 +26,11 @@ import zelisline.ub.credits.sms.api.dto.CustomerSmsCampaignDtos.SmsAudiencePrevi
 import zelisline.ub.credits.sms.api.dto.CustomerSmsCampaignDtos.SmsAudiencePreviewResponse;
 import zelisline.ub.credits.sms.api.dto.CustomerSmsCampaignDtos.SmsEstimateRequest;
 import zelisline.ub.credits.sms.api.dto.CustomerSmsCampaignDtos.SmsEstimateResponse;
+import zelisline.ub.credits.sms.api.dto.CustomerSmsCampaignDtos.TestSmsRequest;
+import zelisline.ub.credits.sms.api.dto.CustomerSmsCampaignDtos.TestSmsResponse;
 import zelisline.ub.credits.sms.api.dto.CustomerSmsCampaignDtos.UpdateCustomerSmsCampaignRequest;
 import zelisline.ub.credits.sms.application.CustomerSmsCampaignService;
+import zelisline.ub.credits.sms.application.SmsCampaignTestSender;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
@@ -42,6 +45,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class CustomerSmsCampaignController {
 
     private final CustomerSmsCampaignService campaignService;
+    private final SmsCampaignTestSender testSender;
 
     @PostMapping("/audience-preview")
     @PreAuthorize("hasPermission(null, 'credits.customers.write')")
@@ -58,6 +62,14 @@ public class CustomerSmsCampaignController {
     public SmsEstimateResponse estimate(@Valid @RequestBody SmsEstimateRequest request, HttpServletRequest http) {
         CurrentTenantUser.require(http);
         return campaignService.estimate(TenantRequestIds.resolveBusinessId(http), request.body());
+    }
+
+    /** Text the wording to one number (the sender's own phone) before saving a campaign. */
+    @PostMapping("/test")
+    @PreAuthorize("hasPermission(null, 'credits.customers.write')")
+    public TestSmsResponse test(@Valid @RequestBody TestSmsRequest request, HttpServletRequest http) {
+        CurrentTenantUser.require(http);
+        return testSender.send(TenantRequestIds.resolveBusinessId(http), request.body(), request.phone());
     }
 
     @GetMapping
@@ -94,6 +106,15 @@ public class CustomerSmsCampaignController {
     ) {
         CurrentTenantUser.require(http);
         return campaignService.updateDraft(TenantRequestIds.resolveBusinessId(http), id, request);
+    }
+
+    /** A new draft with the same wording and audience, resolved again as of now. */
+    @PostMapping("/{id}/duplicate")
+    @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasPermission(null, 'credits.customers.write')")
+    public CustomerSmsCampaignDetailResponse duplicate(@PathVariable String id, HttpServletRequest http) {
+        String actorId = CurrentTenantUser.auditActorId(http);
+        return campaignService.duplicate(TenantRequestIds.resolveBusinessId(http), actorId, id);
     }
 
     @PostMapping("/{id}/send")

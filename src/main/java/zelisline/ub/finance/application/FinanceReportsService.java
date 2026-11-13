@@ -396,7 +396,7 @@ public class FinanceReportsService {
             if (LedgerAccountCodes.VAT_PAYABLE.equals(row.getCode())) {
                 vatCollected = vatCollected.add(money(row.getCreditTotal()));
                 vatReversed = vatReversed.add(money(row.getDebitTotal()));
-            } else if (LedgerAccountCodes.SALES_REVENUE.equals(row.getCode())) {
+            } else if (LedgerAccountCodes.isSalesOrServiceRevenue(row.getCode())) {
                 revenueCredit = revenueCredit.add(money(row.getCreditTotal()));
                 revenueDebit = revenueDebit.add(money(row.getDebitTotal()));
             }
@@ -450,7 +450,7 @@ public class FinanceReportsService {
         for (JournalReportRepository.DailyAccountBalance row : journalReportRepository
                 .sumByAccountForPeriodByDay(businessId, from, to, resolvedBranch)) {
             boolean vat = LedgerAccountCodes.VAT_PAYABLE.equals(row.getCode());
-            boolean revenue = LedgerAccountCodes.SALES_REVENUE.equals(row.getCode());
+            boolean revenue = LedgerAccountCodes.isSalesOrServiceRevenue(row.getCode());
             if (!vat && !revenue) {
                 continue;
             }

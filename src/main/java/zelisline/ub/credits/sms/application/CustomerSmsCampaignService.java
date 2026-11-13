@@ -112,6 +112,41 @@ public class CustomerSmsCampaignService {
         return toDetail(campaign);
     }
 
+    /**
+     * Start a new draft from an earlier campaign: same wording and audience rule. The
+     * audience is resolved again now, so people who opted out since are left out and a
+     * group such as "has not bought for 60 days" holds whoever fits today.
+     */
+    @Transactional
+    public CustomerSmsCampaignDetailResponse duplicate(String businessId, String userId, String campaignId) {
+        CustomerSmsCampaign source = requireCampaign(businessId, campaignId);
+        List<String> customerIds = null;
+        if (CustomerEmailCampaign.METHOD_SPECIFIC.equals(source.getRecipientMethod())) {
+            customerIds = recipientRepository
+                    .findByCampaignIdOrderByCustomerNameAscPhoneAsc(
+                            source.getId(), PageRequest.of(0, CustomerSmsCampaign.MAX_RECIPIENTS))
+                    .stream()
+                    .map(CustomerSmsCampaignRecipient::getCustomerId)
+                    .toList();
+        }
+        return createDraft(businessId, userId, new CreateCustomerSmsCampaignRequest(
+                copyName(source.getName()),
+                source.getBody(),
+                source.getRecipientMethod(),
+                customerIds,
+                audienceService.deserializeFilter(source.getFilterJson())));
+    }
+
+    private static String copyName(String name) {
+        String suffix = " (copy)";
+        String base = name == null ? "Campaign" : name.trim();
+        if (base.endsWith(suffix)) {
+            return base;
+        }
+        int room = 255 - suffix.length();
+        return (base.length() > room ? base.substring(0, room).trim() : base) + suffix;
+    }
+
     @Transactional
     public CustomerSmsCampaignDetailResponse updateDraft(
             String businessId,

@@ -24,11 +24,13 @@ public class LedgerBootstrapService {
         ensure(businessId, LedgerAccountCodes.CARD_CLEARING, "Card terminal clearing", "asset");
         ensure(businessId, LedgerAccountCodes.INVENTORY, "Inventory", "asset");
         ensure(businessId, LedgerAccountCodes.SALES_REVENUE, "Sales revenue", "revenue");
+        ensure(businessId, LedgerAccountCodes.SERVICE_REVENUE, "Service revenue", "revenue");
         ensure(businessId, LedgerAccountCodes.COST_OF_GOODS_SOLD, "Cost of goods sold", "expense");
         ensure(businessId, LedgerAccountCodes.OPERATING_EXPENSES, "Operating expenses", "expense");
         ensure(businessId, LedgerAccountCodes.EXPENSE_RENT, "Rent", "expense");
         ensure(businessId, LedgerAccountCodes.EXPENSE_UTILITIES, "Utilities", "expense");
         ensure(businessId, LedgerAccountCodes.EXPENSE_SALARIES, "Salaries", "expense");
+        ensure(businessId, LedgerAccountCodes.COMMISSION_EXPENSE, "Staff commission", "expense");
         ensure(businessId, LedgerAccountCodes.EXPENSE_TRANSPORT, "Transport", "expense");
         ensure(businessId, LedgerAccountCodes.EXPENSE_MAINTENANCE, "Maintenance", "expense");
         ensure(businessId, LedgerAccountCodes.EXPENSE_PACKAGING_MISC, "Packaging & misc", "expense");
@@ -36,6 +38,8 @@ public class LedgerBootstrapService {
         ensure(businessId, LedgerAccountCodes.LOYALTY_REDEMPTION_LIABILITY, "Loyalty redemption clearing", "liability");
         ensure(businessId, LedgerAccountCodes.LOYALTY_MARKETING_EXPENSE, "Loyalty marketing expense (earn accrual)", "expense");
         ensure(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE, "Accounts Payable – Suppliers", "liability");
+        ensure(businessId, LedgerAccountCodes.COMMISSIONS_PAYABLE, "Commissions payable to staff", "liability");
+        ensure(businessId, LedgerAccountCodes.TIPS_PAYABLE, "Tips payable to staff", "liability");
         ensure(businessId, LedgerAccountCodes.VAT_PAYABLE, "VAT payable", "liability");
         ensure(businessId, LedgerAccountCodes.GOODS_RECEIVED_NOT_INVOICED, "Goods received not invoiced (GRNI)", "liability");
         ensure(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE, "Inventory shrinkage (wastage)", "expense");

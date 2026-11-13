@@ -2,6 +2,7 @@ package zelisline.ub.sales.application;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import zelisline.ub.sales.api.dto.SaleItemResponse;
 import zelisline.ub.sales.api.dto.SalePaymentResponse;
@@ -21,6 +22,17 @@ public final class SaleResponseMapper {
             List<SalePayment> pays,
             String soldByName
     ) {
+        return map(sale, items, pays, soldByName, Map.of());
+    }
+
+    /** @param performerNames staff profile id → display name, for service lines */
+    public static SaleResponse map(
+            Sale sale,
+            List<SaleItem> items,
+            List<SalePayment> pays,
+            String soldByName,
+            Map<String, String> performerNames
+    ) {
         List<SaleItemResponse> ir = new ArrayList<>();
         for (SaleItem si : items) {
             ir.add(new SaleItemResponse(
@@ -39,7 +51,13 @@ public final class SaleResponseMapper {
                     si.getProfit(),
                     si.getTaxCode(),
                     si.getTaxRatePercent(),
-                    si.getTaxAmount()
+                    si.getTaxAmount(),
+                    si.getServiceId(),
+                    si.getPerformerStaffProfileId(),
+                    si.getPerformerStaffProfileId() == null
+                            ? null
+                            : performerNames.get(si.getPerformerStaffProfileId()),
+                    si.getServiceMinutes()
             ));
         }
         List<SalePaymentResponse> paymentDtos = new ArrayList<>();
@@ -64,7 +82,8 @@ public final class SaleResponseMapper {
                 sale.getVoidedBy(),
                 soldByName,
                 sale.getVoidJournalEntryId(),
-                sale.getVoidNotes()
+                sale.getVoidNotes(),
+                sale.getTipTotal()
         );
     }
 }

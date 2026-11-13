@@ -169,7 +169,7 @@ public class CashDrawerLedgerService {
         recordAmount(sale.getShiftId(), EVENT_SALE_RECEIVED, REF_SALE, sale.getId(),
                 received, CONFIDENCE_INFERRED, sale.getSoldBy(), null);
         if (sale.getCashReceived() != null) {
-            BigDecimal change = sale.getCashReceived().subtract(sale.getGrandTotal());
+            BigDecimal change = sale.getCashReceived().subtract(sale.amountDue());
             if (change.signum() > 0) {
                 recordAmount(sale.getShiftId(), EVENT_SALE_CHANGE, REF_SALE, sale.getId(),
                         change.negate(), CONFIDENCE_INFERRED, sale.getSoldBy(), null);

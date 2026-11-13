@@ -21,6 +21,7 @@ public record UpdateStaffProfileRequest(
         @Size(max = 255) String emergencyContactName,
         @Size(max = 50) String emergencyContactPhone,
         Map<String, Object> bankDetails,
-        String notes
+        String notes,
+        Boolean bookable
 ) {
 }

@@ -47,6 +47,18 @@ public class SaleItem {
     @Column(name = "airtime_network", length = 16)
     private String airtimeNetwork;
 
+    /** Set on {@code SERVICE} lines only: the service sold. */
+    @Column(name = "service_id", length = 36)
+    private String serviceId;
+
+    /** Set on {@code SERVICE} lines only: the staff profile that performed the work. */
+    @Column(name = "performer_staff_profile_id", length = 36)
+    private String performerStaffProfileId;
+
+    /** Set on {@code SERVICE} lines only: the service's planned duration when it was sold. */
+    @Column(name = "service_minutes")
+    private Integer serviceMinutes;
+
     @Column(name = "item_id", length = 36)
     private String itemId;
 
@@ -110,5 +122,9 @@ public class SaleItem {
 
     public boolean isAirtime() {
         return SaleLineKinds.isAirtime(lineKind);
+    }
+
+    public boolean isService() {
+        return SaleLineKinds.isService(lineKind);
     }
 }

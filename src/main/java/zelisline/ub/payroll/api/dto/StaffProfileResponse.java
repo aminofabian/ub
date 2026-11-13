@@ -6,6 +6,8 @@ import java.util.Map;
 
 /**
  * Staff profile response. {@code privateFields} is null when the caller lacks {@code staff.hr.read}.
+ * {@code userId}, {@code loginName}, {@code roleName} and the branch are null for staff who have no
+ * login; address those by {@code id}.
  */
 public record StaffProfileResponse(
         String id,
@@ -28,7 +30,8 @@ public record StaffProfileResponse(
             String employmentStatus,
             boolean includeInPayroll,
             boolean prorateJoinMonth,
-            String joinPayMode
+            String joinPayMode,
+            boolean bookable
     ) {
     }
 

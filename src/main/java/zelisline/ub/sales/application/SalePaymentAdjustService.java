@@ -82,7 +82,7 @@ public class SalePaymentAdjustService {
         assertSaleAdjustable(sale);
 
         List<SalePayment> oldPayments = salePaymentRepository.findBySaleIdOrderBySortOrderAsc(saleId);
-        List<NormalizedPayment> newPayments = normalizePayments(req.payments(), sale.getGrandTotal());
+        List<NormalizedPayment> newPayments = normalizePayments(req.payments(), sale.amountDue());
         assertAdjustableMethods(oldPayments, newPayments);
         assertCreditCustomer(sale, newPayments);
 

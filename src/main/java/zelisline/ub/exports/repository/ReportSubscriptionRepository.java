@@ -24,7 +24,7 @@ public interface ReportSubscriptionRepository extends JpaRepository<ReportSubscr
 
     /** Claim a period for one subscription; returns 1 only for the tick that wins the race. */
     @Modifying
-    @Query("update ReportSubscription s set s.lastSentPeriod = :period, s.updatedAt = CURRENT_TIMESTAMP "
+    @Query("update ReportSubscription s set s.lastSentPeriod = :period, s.updatedAt = instant "
             + "where s.id = :id and (s.lastSentPeriod is null or s.lastSentPeriod <> :period)")
     int claimPeriod(@Param("id") String id, @Param("period") String period);
 }

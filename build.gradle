@@ -79,6 +79,11 @@ dependencies {
 tasks.named('test') {
 	useJUnitPlatform()
 	jvmArgs '-Xmx2g', '-XX:MaxMetaspaceSize=512m'
+	// Start a fresh test JVM every 30 test classes. The suite builds ~39 distinct Spring application
+	// contexts and Spring caches up to 32 of them, which does not fit in 2 GB: the worker ended in
+	// back-to-back full GCs and never finished. A fresh JVM also gets a fresh in-memory H2, which a
+	// smaller context cache does not (closing a cached context drops tables other contexts still use).
+	forkEvery = 30
 	// Forward -DexportOpenapi=true from the Gradle CLI to the test worker JVM.
 	def exportOpenapi = System.getProperty('exportOpenapi')
 	if (exportOpenapi != null) {

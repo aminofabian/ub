@@ -190,6 +190,19 @@ class MpesaPayerIdentityServiceTest {
     }
 
     @Test
+    void payerNameDoesNotOverwriteANameThatHasNoFirstAndLastParts() {
+        // A desktop till syncs customers with a display name only.
+        Customer typed = holderOfPhone("Mama Kamso", CustomerOrigins.STAFF);
+        typed.setFirstName(null);
+        typed.setLastName(null);
+
+        service.namePhoneHolder("biz", "0712345678", "JANE", "WANJIRU");
+
+        assertThat(typed.getName()).isEqualTo("Mama Kamso");
+        verify(customerRepository, org.mockito.Mockito.never()).save(any());
+    }
+
+    @Test
     void kopokopoSubscriberEchoIsNotTreatedAsAName() {
         Customer placeholder = holderOfPhone("254712345678", CustomerOrigins.STAFF);
 

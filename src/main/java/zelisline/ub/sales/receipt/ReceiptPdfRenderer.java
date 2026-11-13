@@ -109,6 +109,11 @@ public final class ReceiptPdfRenderer {
                 addMoneyRow(doc, "VAT included", moneyDisplay(s.taxTotalDisplay(), s.currency()), money, money);
             }
             addMoneyRow(doc, "TOTAL", moneyDisplay(s.grandTotalDisplay(), s.currency()), totalLabel, totalLabel);
+            if (s.tipTotalDisplay() != null && !s.tipTotalDisplay().isBlank()) {
+                // Tips are for the staff and are not part of the sale total.
+                addMoneyRow(doc, "Tip", moneyDisplay(s.tipTotalDisplay(), s.currency()), money, money);
+                addMoneyRow(doc, "TO PAY", moneyDisplay(s.amountDueDisplay(), s.currency()), totalLabel, totalLabel);
+            }
             if (s.cashReceivedDisplay() != null && !s.cashReceivedDisplay().isBlank()) {
                 addMoneyRow(doc, "Received", moneyDisplay(s.cashReceivedDisplay(), s.currency()), money, money);
                 addMoneyRow(

@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import lombok.RequiredArgsConstructor;
@@ -184,8 +185,8 @@ public class MpesaPayerIdentityService {
     }
 
     /**
-     * A payer name arrived for a payment made from a known real number (a till M-Pesa
-     * prompt): put that name on the customer who holds the number, if their current
+     * A payer name arrived for a payment made from a known real number (an M-Pesa
+     * prompt from the till, the online shop, an invoice or a wallet top-up): put that name on the customer who holds the number, if their current
      * name is only a placeholder or was itself inferred. Names typed by staff are kept.
      *
      * <p>Never throws: naming a customer must not fail the payment it rides on.
@@ -214,14 +215,36 @@ public class MpesaPayerIdentityService {
             boolean usable = !first.isEmpty()
                     && !("CUSTOMER".equals(first) && last.isEmpty())
                     && !isPhonePlaceholderName(first);
-            if (usable) {
-                applyNamesIfAllowed(holder.get(), first, last);
+            // Only a placeholder (the number itself) or a name M-Pesa gave earlier is
+            // replaced. A customer whose name has letters and was not inferred was named
+            // by a person (staff, the shopper, a desktop till), even when the first/last
+            // name columns are empty, and the payer may be someone else in the household.
+            Customer customer = holder.get();
+            boolean replaceable = isPhonePlaceholderName(customer.getName())
+                    || CustomerOrigins.MPESA_INFERRED.equals(customer.getOrigin());
+            if (usable && replaceable) {
+                applyNamesIfAllowed(customer, first, last);
             }
             return holder;
         } catch (RuntimeException ex) {
             log.warn("Could not apply payer name to phone holder business={}: {}", businessId, ex.getMessage());
             return Optional.empty();
         }
+    }
+
+    /**
+     * {@link #namePhoneHolder} in a transaction of its own, for callers that run after
+     * their payment has committed: a clash with someone editing the same customer then
+     * loses the rename, never the payment.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void namePhoneHolderAfterPayment(
+            String businessId,
+            String realPhoneRaw,
+            String firstNameRaw,
+            String lastNameRaw
+    ) {
+        namePhoneHolder(businessId, realPhoneRaw, firstNameRaw, lastNameRaw);
     }
 
     /** True when a "name" holds no letter at all, i.e. it is a phone number or blank. */

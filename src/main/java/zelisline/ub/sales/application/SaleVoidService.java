@@ -87,6 +87,7 @@ public class SaleVoidService {
     private final AuditEventBuilder auditEventBuilder;
     private final CashDrawerLedgerService cashDrawerLedgerService;
     private final BranchResolutionService branchResolutionService;
+    private final zelisline.ub.serviceops.application.StaffEarningsService staffEarningsService;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -154,7 +155,12 @@ public class SaleVoidService {
         BigDecimal grandTotal = sale.getGrandTotal().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         BigDecimal cogs = sumItemCosts(itemRows);
         BigDecimal tenderSum = sumPaymentAmounts(payments);
-        BigDecimal overpay = tenderSum.subtract(grandTotal).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        // Tips were tendered on top of the sale total; they are not overpay.
+        BigDecimal tipTotal = sale.getTipTotal() == null
+                ? BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP)
+                : sale.getTipTotal().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal overpay = tenderSum.subtract(grandTotal).subtract(tipTotal)
+                .setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         if (overpay.signum() > 0 && (sale.getCustomerId() == null || sale.getCustomerId().isBlank())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Sale with wallet overpay missing customer linkage");
         }
@@ -164,7 +170,10 @@ public class SaleVoidService {
                 businessId, saleId, sale.getCustomerId());
         creditSaleDebtService.reverseDebtForVoidedSale(businessId, sale, payments);
         String voidJeId = postVoidJournal(
-                businessId, sale.getBranchId(), saleId, grandTotal, sale.getTaxTotal(), cogs, payments, overpayToAr, overpay);
+                businessId, sale.getBranchId(), saleId, grandTotal, sale.getTaxTotal(), cogs, payments, overpayToAr, overpay,
+                SaleRevenueSplit.serviceTotal(itemRows), tipTotal);
+        // Staff give back the commission and tips they earned on this sale.
+        staffEarningsService.reverseForSale(businessId, saleId, userId);
         loyaltyPointsService.reverseLoyaltyForVoidedSale(
                 businessId,
                 saleId,
@@ -340,7 +349,9 @@ public class SaleVoidService {
             BigDecimal cogs,
             List<SalePayment> payments,
             BigDecimal overpayToAr,
-            BigDecimal overpayTotal
+            BigDecimal overpayTotal,
+            BigDecimal serviceRevenue,
+            BigDecimal tipTotal
     ) {
         Map<String, BigDecimal> tenderCr = new LinkedHashMap<>();
         for (SalePayment p : payments) {
@@ -361,9 +372,23 @@ public class SaleVoidService {
             entry.credit(ledgerAccountResolver.resolveId(businessId, e.getKey()), amt);
         }
         SaleTaxLedgerSplit.Split revenue = SaleTaxLedgerSplit.of(grandTotal, taxTotal);
-        entry.debit(
-                ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE),
-                revenue.net());
+        // Mirror the sale: goods back out of SALES_REVENUE, services out of SERVICE_REVENUE.
+        SaleRevenueSplit.Split split = SaleRevenueSplit.of(revenue.net(), serviceRevenue);
+        if (split.creditGoods()) {
+            entry.debit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE),
+                    split.goods());
+        }
+        if (split.services().signum() > 0) {
+            entry.debit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SERVICE_REVENUE),
+                    split.services());
+        }
+        if (tipTotal != null && tipTotal.signum() > 0) {
+            entry.debit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.TIPS_PAYABLE),
+                    tipTotal);
+        }
         if (revenue.tax().signum() > 0) {
             entry.debit(
                     ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.VAT_PAYABLE),

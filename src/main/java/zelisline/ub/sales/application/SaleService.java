@@ -71,7 +71,11 @@ import zelisline.ub.sales.domain.SaleItem;
 import zelisline.ub.sales.domain.SaleLineKinds;
 import zelisline.ub.sales.domain.SalePayment;
 import zelisline.ub.sales.domain.Shift;
+import zelisline.ub.payroll.application.StaffProfileService;
 import zelisline.ub.sales.repository.SaleItemRepository;
+import zelisline.ub.sales.api.dto.PostSaleTipRequest;
+import zelisline.ub.serviceops.application.ServiceSaleSupport;
+import zelisline.ub.serviceops.application.StaffEarningsService;
 import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
@@ -128,6 +132,9 @@ public class SaleService {
     private final BusinessRepository businessRepository;
     private final PosReceiptSequenceSettingsService posReceiptSequenceSettingsService;
     private final ProfitPocketSettingsService profitPocketSettingsService;
+    private final ServiceSaleSupport serviceSaleSupport;
+    private final StaffProfileService staffProfileService;
+    private final StaffEarningsService staffEarningsService;
 
     @Transactional
     public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId) {
@@ -201,7 +208,12 @@ public class SaleService {
                 resolveAndValidateSaleLines(businessId, req.branchId(), req.lines(), roleId);
         BigDecimal grandTotal = computeCartTotal(req.lines(), linePricing);
         validatePositiveMoney(grandTotal);
-        ResolvedPayments resolved = normalizeAndResolvePayments(req.payments(), grandTotal);
+        // Tips are collected with the sale but are not part of its total: the customer owes
+        // grandTotal + tips, and only grandTotal is revenue.
+        Map<String, BigDecimal> tips = resolveTips(req);
+        BigDecimal tipTotal = sumTips(tips);
+        BigDecimal amountDue = grandTotal.add(tipTotal).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        ResolvedPayments resolved = normalizeAndResolvePayments(req.payments(), amountDue);
         String customerId = blankToNull(req.customerId());
         // Anonymous overpay is physical change, not wallet credit — do not require a customer.
         BigDecimal anonymousOverpayCash = null;
@@ -210,7 +222,7 @@ public class SaleService {
             if (cashBeforeClamp.signum() > 0) {
                 anonymousOverpayCash = cashBeforeClamp;
             }
-            resolved = clampPaymentsToGrandTotal(resolved.normalized(), grandTotal);
+            resolved = clampPaymentsToGrandTotal(resolved.normalized(), amountDue);
         }
         BigDecimal creditTenderTotal = sumPaymentMethod(resolved.normalized(), SalesConstants.PAYMENT_METHOD_CUSTOMER_CREDIT);
         BigDecimal walletTenderTotal = sumPaymentMethod(resolved.normalized(), SalesConstants.PAYMENT_METHOD_CUSTOMER_WALLET);
@@ -247,7 +259,7 @@ public class SaleService {
         BigDecimal cashReceivedHint = req.cashReceived() != null
                 ? req.cashReceived()
                 : anonymousOverpayCash;
-        BigDecimal cashReceived = resolveCashReceived(cashReceivedHint, grandTotal, resolved.normalized());
+        BigDecimal cashReceived = resolveCashReceived(cashReceivedHint, amountDue, resolved.normalized());
         saveNewSaleAndPayments(
                 businessId,
                 req.branchId(),
@@ -260,7 +272,8 @@ public class SaleService {
                 effectiveSoldAt,
                 customerId,
                 cashReceived,
-                taxTotal
+                taxTotal,
+                tipTotal
         );
         saleItemRepository.saveAll(saleItems);
 
@@ -280,8 +293,14 @@ public class SaleService {
                 cogsTotal,
                 resolved.normalized(),
                 overpayAlloc.towardWallet(),
-                overpayAlloc.towardAr());
+                overpayAlloc.towardAr(),
+                SaleRevenueSplit.serviceTotal(saleItems),
+                tipTotal);
         attachJournalToSale(saleId, businessId, journalId);
+        // Commission and tips for the staff involved, in this same transaction: either the sale
+        // and its earnings both exist or neither does.
+        staffEarningsService.recordForSale(
+                businessId, req.branchId(), saleId, userId, earningLines(saleItems), tips, effectiveSoldAt);
         if ((overpayAlloc.towardWallet().signum() > 0 || overpayAlloc.towardAr().signum() > 0)
                 && customerId != null
                 && !customerId.isBlank()) {
@@ -298,7 +317,7 @@ public class SaleService {
         shiftRepository.save(shift);
 
         // Record the per-denomination ledger movement for this cash sale.
-        cashDrawerLedgerService.recordSale(shift.getId(), saleId, cashReceived, grandTotal, cashIn, userId);
+        cashDrawerLedgerService.recordSale(shift.getId(), saleId, cashReceived, amountDue, cashIn, userId);
 
         SaleResponse completed = toResponse(loadSaleOrThrow(saleId, businessId));
         publishSaleEvents(businessId, req.branchId(), shift.getId(), saleId, userId, grandTotal, resolved.normalized(), cashIn);
@@ -408,7 +427,8 @@ public class SaleService {
             Instant soldAt,
             String customerIdOrNull,
             BigDecimal cashReceivedOrNull,
-            BigDecimal taxTotal
+            BigDecimal taxTotal,
+            BigDecimal tipTotal
     ) {
         Sale sale = new Sale();
         sale.setId(saleId);
@@ -420,6 +440,7 @@ public class SaleService {
         sale.setIdempotencyKey(idempotencyKey);
         sale.setGrandTotal(grandTotal);
         sale.setTaxTotal(taxTotal);
+        sale.setTipTotal(tipTotal);
         sale.setCashReceived(cashReceivedOrNull);
         sale.setJournalEntryId(null);
         sale.setSoldBy(userId);
@@ -636,6 +657,11 @@ public class SaleService {
                 lineIndex++;
                 continue;
             }
+            if (line.isService()) {
+                all.add(buildServiceSaleItem(businessId, saleId, lineIndex, line));
+                lineIndex++;
+                continue;
+            }
             BigDecimal qty = line.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
             List<BatchAllocationLine> allocations = inventoryBatchPickerService.pickAndApplyPhysicalDecrement(
                     businessId,
@@ -677,6 +703,37 @@ public class SaleService {
         row.setAirtimeNetwork(network.isBlank() ? null : network);
         row.setQuantity(qty);
         row.setUnitPrice(line.unitPrice().setScale(QTY_SCALE, RoundingMode.HALF_UP));
+        row.setLineTotal(lineTotal);
+        row.setUnitCost(BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP));
+        row.setCostTotal(BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+        row.setProfit(lineTotal);
+        return row;
+    }
+
+    /**
+     * A service line (ADR 0014): no item, no batch, no stock movement and no cost of goods. The
+     * service name, the performer and the planned duration are snapshotted so a later rename or
+     * a change of staff cannot rewrite history. Already validated by
+     * {@link #validateServiceSaleLine}.
+     */
+    private SaleItem buildServiceSaleItem(String businessId, String saleId, int lineIndex, PostSaleLineRequest line) {
+        ServiceSaleSupport.ServiceLine service =
+                serviceSaleSupport.resolve(businessId, line.serviceId(), line.performerStaffProfileId());
+        BigDecimal qty = line.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal unitPrice = line.unitPrice().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal lineTotal = qty.multiply(unitPrice).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        String name = service.name().length() > 500 ? service.name().substring(0, 500) : service.name();
+        SaleItem row = new SaleItem();
+        row.setSaleId(saleId);
+        row.setLineIndex(lineIndex);
+        row.setLineKind(SaleLineKinds.SERVICE);
+        row.setLineLabel(name.length() > 255 ? name.substring(0, 255) : name);
+        row.setDisplayName(name);
+        row.setServiceId(service.serviceId());
+        row.setPerformerStaffProfileId(line.performerStaffProfileId().trim());
+        row.setServiceMinutes(service.durationMinutes());
+        row.setQuantity(qty);
+        row.setUnitPrice(unitPrice);
         row.setLineTotal(lineTotal);
         row.setUnitCost(BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP));
         row.setCostTotal(BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
@@ -824,7 +881,9 @@ public class SaleService {
             BigDecimal cogs,
             List<NormalizedPayment> paymentsNorm,
             BigDecimal overpayToWallet,
-            BigDecimal overpayToAr
+            BigDecimal overpayToAr,
+            BigDecimal serviceRevenue,
+            BigDecimal tipTotal
     ) {
         Map<String, BigDecimal> tenderDr = new LinkedHashMap<>();
         for (NormalizedPayment p : paymentsNorm) {
@@ -845,13 +904,29 @@ public class SaleService {
             entry.debit(ledgerAccountResolver.resolveId(businessId, e.getKey()), amt);
         }
         SaleTaxLedgerSplit.Split revenue = SaleTaxLedgerSplit.of(grandTotal, taxTotal);
-        entry.credit(
-                ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE),
-                revenue.net());
+        // Service lines carry no tax today, so their total is already net. A sale with no
+        // service lines posts exactly as before.
+        SaleRevenueSplit.Split split = SaleRevenueSplit.of(revenue.net(), serviceRevenue);
+        if (split.creditGoods()) {
+            entry.credit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE),
+                    split.goods());
+        }
+        if (split.services().signum() > 0) {
+            entry.credit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SERVICE_REVENUE),
+                    split.services());
+        }
         if (revenue.tax().signum() > 0) {
             entry.credit(
                     ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.VAT_PAYABLE),
                     revenue.tax());
+        }
+        if (tipTotal != null && tipTotal.signum() > 0) {
+            // Money held for staff, not income.
+            entry.credit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.TIPS_PAYABLE),
+                    tipTotal.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
         }
         if (overpayToAr != null && overpayToAr.signum() > 0) {
             entry.credit(
@@ -876,8 +951,74 @@ public class SaleService {
                 sale,
                 items,
                 pays,
-                saleActorNameService.resolveSoldByName(sale.getBusinessId(), sale.getSoldBy())
+                saleActorNameService.resolveSoldByName(sale.getBusinessId(), sale.getSoldBy()),
+                performerNames(sale.getBusinessId(), items)
         );
+    }
+
+    /**
+     * Tips by staff profile. Each tip must be for someone who performed a service on this sale;
+     * two tips for the same person are added together.
+     */
+    private static Map<String, BigDecimal> resolveTips(PostSaleRequest req) {
+        Map<String, BigDecimal> out = new LinkedHashMap<>();
+        if (req.tips() == null || req.tips().isEmpty()) {
+            return out;
+        }
+        java.util.Set<String> performers = new java.util.HashSet<>();
+        for (PostSaleLineRequest line : req.lines()) {
+            if (line.isService() && line.performerStaffProfileId() != null) {
+                performers.add(line.performerStaffProfileId().trim());
+            }
+        }
+        for (PostSaleTipRequest tip : req.tips()) {
+            String staffId = tip.staffProfileId() == null ? "" : tip.staffProfileId().trim();
+            if (!performers.contains(staffId)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "A tip must be for someone who performed a service on this sale");
+            }
+            if (tip.amount() == null || tip.amount().signum() <= 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A tip must be more than zero");
+            }
+            out.merge(staffId, tip.amount().setScale(MONEY_SCALE, RoundingMode.HALF_UP), BigDecimal::add);
+        }
+        return out;
+    }
+
+    private static BigDecimal sumTips(Map<String, BigDecimal> tips) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (BigDecimal amount : tips.values()) {
+            total = total.add(amount);
+        }
+        return total.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+    }
+
+    private static List<StaffEarningsService.SaleLine> earningLines(List<SaleItem> saleItems) {
+        List<StaffEarningsService.SaleLine> out = new ArrayList<>(saleItems.size());
+        for (SaleItem item : saleItems) {
+            if (item.isAirtime()) {
+                continue;
+            }
+            out.add(new StaffEarningsService.SaleLine(
+                    item.getId(),
+                    item.isService(),
+                    item.getServiceId(),
+                    item.getPerformerStaffProfileId(),
+                    item.getLineTotal(),
+                    item.getTaxAmount(),
+                    item.getQuantity()));
+        }
+        return out;
+    }
+
+    /** Display names of the staff who performed the service lines; empty for a sale with none. */
+    private Map<String, String> performerNames(String businessId, List<SaleItem> items) {
+        List<String> ids = items.stream()
+                .map(SaleItem::getPerformerStaffProfileId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        return ids.isEmpty() ? Map.of() : staffProfileService.displayNamesByIds(businessId, ids);
     }
 
     private static BigDecimal computeCartTotal(
@@ -913,8 +1054,15 @@ public class SaleService {
         if (lines == null || lines.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Sale must contain at least one line");
         }
+        for (int i = 0; i < lines.size(); i++) {
+            if (!SaleLineKinds.isKnown(lines.get(i).kind())) {
+                // Never coerce an unknown kind to ITEM: it would be run through the stock path.
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Line " + (i + 1) + ": unknown line kind");
+            }
+        }
         List<String> itemIds = lines.stream()
-                .filter(l -> !l.isAirtime())
+                .filter(l -> !l.isAirtime() && !l.isService())
                 .map(PostSaleLineRequest::itemId)
                 .filter(id -> id != null && !id.isBlank())
                 .distinct()
@@ -939,6 +1087,15 @@ public class SaleService {
             if (line.isAirtime()) {
                 validateAirtimeSaleLine(i, line);
                 continue;
+            }
+            if (line.isService()) {
+                validateServiceSaleLine(businessId, i, line, roleId);
+                continue;
+            }
+            if ((line.serviceId() != null && !line.serviceId().isBlank())
+                    || (line.performerStaffProfileId() != null && !line.performerStaffProfileId().isBlank())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Line " + (i + 1) + ": only a service line names a service or who performed it");
             }
             zelisline.ub.catalog.domain.Item item = itemsById.get(line.itemId());
             if (item == null) {
@@ -1121,6 +1278,39 @@ public class SaleService {
                     saved,
                     discount.id(),
                     discount.name());
+        }
+    }
+
+    private void validateServiceSaleLine(String businessId, int i, PostSaleLineRequest line, String roleId) {
+        String prefix = "Line " + (i + 1) + ": ";
+        if (line.itemId() != null && !line.itemId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "a service line cannot name a product");
+        }
+        if (line.quantity() == null || line.quantity().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "quantity must be positive");
+        }
+        if (line.quantity().stripTrailingZeros().scale() > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "service quantity must be a whole number");
+        }
+        if (line.unitPrice() == null || line.unitPrice().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "service price must be positive");
+        }
+        ServiceSaleSupport.ServiceLine service;
+        try {
+            service = serviceSaleSupport.resolve(businessId, line.serviceId(), line.performerStaffProfileId());
+        } catch (ResponseStatusException ex) {
+            throw new ResponseStatusException(ex.getStatusCode(), prefix + ex.getReason());
+        }
+        // A fixed-price service sells at its listed price. Only a variable-price service (braids
+        // priced by length) or someone allowed to set sell prices may charge something else.
+        if (!service.priceIsVariable() && line.unitPrice().compareTo(service.price()) != 0) {
+            boolean mayOverride = roleId != null
+                    && requestPermissionService.hasPermission(roleId, PRICE_OVERRIDE_PERMISSION);
+            if (!mayOverride) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        prefix + service.name() + " is " + service.price().toPlainString()
+                                + "; refresh the till or ask a manager to change the price");
+            }
         }
     }
 
@@ -1374,10 +1564,24 @@ public class SaleService {
                             ? (first.getLineLabel() != null && !first.getLineLabel().isBlank()
                                     ? first.getLineLabel()
                                     : "Airtime")
-                            : itemNames.getOrDefault(first.getItemId(), "Item");
+                            : lineName(first, itemNames);
                     return new CreditSaleReminderLineItem(name, qty, total);
                 })
                 .toList();
+    }
+
+    /**
+     * A line with no item (a service) is named from its own snapshot. Never look a null item id
+     * up in {@code itemNames}: it is an immutable empty map when the sale has no products.
+     */
+    private static String lineName(SaleItem line, Map<String, String> itemNames) {
+        if (line.getItemId() == null || line.getItemId().isBlank()) {
+            String snapshot = line.getDisplayName() != null && !line.getDisplayName().isBlank()
+                    ? line.getDisplayName()
+                    : line.getLineLabel();
+            return snapshot == null || snapshot.isBlank() ? "Item" : snapshot.trim();
+        }
+        return itemNames.getOrDefault(line.getItemId(), "Item");
     }
 
     private static int countCreditSaleItems(List<SaleItem> items) {

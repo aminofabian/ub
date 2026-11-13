@@ -99,6 +99,11 @@ public final class ReceiptEscPosRenderer {
             out.add(padLeft("VAT included " + strip(s.taxTotalDisplay()), w));
         }
         out.add(padLeft("TOTAL " + strip(s.grandTotalDisplay()) + " " + strip(s.currency()), w));
+        if (s.tipTotalDisplay() != null && !s.tipTotalDisplay().isBlank()) {
+            // Tips are for the staff and are not part of the sale total.
+            out.add(padLeft("Tip " + strip(s.tipTotalDisplay()), w));
+            out.add(padLeft("TO PAY " + strip(s.amountDueDisplay()) + " " + strip(s.currency()), w));
+        }
         if (s.cashReceivedDisplay() != null && !s.cashReceivedDisplay().isBlank()) {
             out.add(padLeft("Received " + strip(s.cashReceivedDisplay()), w));
             out.add(padLeft(

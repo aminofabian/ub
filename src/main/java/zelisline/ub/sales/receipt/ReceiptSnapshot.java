@@ -39,8 +39,43 @@ public record ReceiptSnapshot(
         String cashReceivedDisplay,
         /** Change = cashReceived - grandTotal; null when cashReceived is null. */
         String changeGivenDisplay,
-        String footerNote
+        String footerNote,
+        /** Tips taken with the sale for staff, shown under the total; null when there were none. */
+        String tipTotalDisplay,
+        /** Total plus tips — what the customer handed over; null when there were no tips. */
+        String amountDueDisplay
 ) {
+
+    /** Shape used before tips existed. */
+    public ReceiptSnapshot(
+            String businessName,
+            String logoUrl,
+            String branchName,
+            String branchAddress,
+            String branchPhone,
+            String branchEmail,
+            String branchWebsite,
+            String tillNumber,
+            String branchReceiptMessage,
+            String servedByName,
+            String currency,
+            String saleId,
+            Long receiptNo,
+            String explicitReceiptLabel,
+            String soldAtDisplay,
+            String saleStatus,
+            String customerName,
+            String customerPhone,
+            List<ReceiptLineRow> lines,
+            List<ReceiptPaymentRow> payments,
+            String taxTotalDisplay,
+            String grandTotalDisplay,
+            String cashReceivedDisplay,
+            String changeGivenDisplay,
+            String footerNote
+    ) {
+        this(businessName, logoUrl, branchName, branchAddress, branchPhone, branchEmail, branchWebsite, tillNumber, branchReceiptMessage, servedByName, currency, saleId, receiptNo, explicitReceiptLabel, soldAtDisplay, saleStatus, customerName, customerPhone, lines, payments, taxTotalDisplay, grandTotalDisplay, cashReceivedDisplay, changeGivenDisplay, footerNote, null, null);
+    }
 
     /** "Receipt #12" when numbered, else short sale id for pre-migration sales. */
     public String receiptLabel() {

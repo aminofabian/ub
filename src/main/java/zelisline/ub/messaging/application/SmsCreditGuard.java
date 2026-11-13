@@ -41,19 +41,29 @@ public class SmsCreditGuard {
 
     /** Pre-flight: throw 402 when the tenant has nothing left to spend. */
     public void checkBeforeSend(String businessId, SmsSendReason reason, String referenceId) {
+        checkBeforeSend(businessId, reason, referenceId, 1);
+    }
+
+    /** Pre-flight for a text of {@code units} SMS parts (one credit per part). */
+    public void checkBeforeSend(String businessId, SmsSendReason reason, String referenceId, int units) {
         if (!meteringActive(businessId)) {
             return;
         }
-        creditService.requireAvailable(businessId, reason, referenceId);
+        creditService.requireAvailable(businessId, reason, referenceId, units);
     }
 
     /** Post-success: atomically consume one credit. Never throws to the caller. */
     public void debitOnSuccess(String businessId, SmsSendReason reason, String referenceId) {
+        debitOnSuccess(businessId, reason, referenceId, 1);
+    }
+
+    /** Post-success: consume one credit per SMS part. Never throws to the caller. */
+    public void debitOnSuccess(String businessId, SmsSendReason reason, String referenceId, int units) {
         if (!meteringActive(businessId)) {
             return;
         }
         try {
-            creditService.debit(businessId, reason, referenceId);
+            creditService.debit(businessId, reason, referenceId, units);
         } catch (SmsCreditsDepletedException ex) {
             log.warn(
                     "sms_credits race: last credit consumed between check and debit business={} reason={}",

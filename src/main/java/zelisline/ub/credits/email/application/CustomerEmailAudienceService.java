@@ -151,14 +151,7 @@ public class CustomerEmailAudienceService {
             List<String> customerIds,
             AudienceFilter filter
     ) {
-        String method = normalizeMethod(recipientMethod);
-        List<Customer> candidates = switch (method) {
-            case CustomerEmailCampaign.METHOD_SPECIFIC -> loadSpecific(businessId, customerIds);
-            case CustomerEmailCampaign.METHOD_FILTERED -> applyFilters(
-                    loadActiveCandidates(businessId), businessId, filter);
-            case CustomerEmailCampaign.METHOD_ALL_ELIGIBLE -> loadActiveCandidates(businessId);
-            default -> List.of();
-        };
+        List<Customer> candidates = matchCustomers(businessId, recipientMethod, customerIds, filter);
 
         Map<String, CustomerPhone> primaryPhone = primaryPhones(candidates);
         List<AudienceRecipientRow> matched = new ArrayList<>();
@@ -182,6 +175,27 @@ public class CustomerEmailAudienceService {
             }
         }
         return new ResolvedAudience(matched, excluded, eligible);
+    }
+
+    /**
+     * Customers a recipient method selects, before any channel eligibility (email
+     * address, phone, consent) is applied. Shared with the SMS campaign audience so
+     * both channels use one set of filters.
+     */
+    public List<Customer> matchCustomers(
+            String businessId,
+            String recipientMethod,
+            List<String> customerIds,
+            AudienceFilter filter
+    ) {
+        String method = normalizeMethod(recipientMethod);
+        return switch (method) {
+            case CustomerEmailCampaign.METHOD_SPECIFIC -> loadSpecific(businessId, customerIds);
+            case CustomerEmailCampaign.METHOD_FILTERED -> applyFilters(
+                    loadActiveCandidates(businessId), businessId, filter);
+            case CustomerEmailCampaign.METHOD_ALL_ELIGIBLE -> loadActiveCandidates(businessId);
+            default -> List.of();
+        };
     }
 
     public List<AudienceRecipientRow> sample(List<AudienceRecipientRow> rows) {

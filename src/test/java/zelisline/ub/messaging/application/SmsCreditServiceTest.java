@@ -207,6 +207,50 @@ class SmsCreditServiceTest {
     }
 
     @Test
+    void debitOfMultiPartTextStraddlesIncludedAndPurchased() {
+        stubAllowance(30);
+        // 1 included credit left, 10 purchased: a 3-part text takes 1 + 2.
+        when(accountRepository.findForUpdate(BIZ)).thenReturn(Optional.of(account(29, 10)));
+
+        int after = service.debit(BIZ, SmsSendReason.CAMPAIGN, "campaign:1:c1", 3);
+
+        assertThat(after).isEqualTo(8);
+        ArgumentCaptor<BusinessSmsCreditAccount> saved = ArgumentCaptor.forClass(BusinessSmsCreditAccount.class);
+        verify(accountRepository).save(saved.capture());
+        assertThat(saved.getValue().getIncludedUsed()).isEqualTo(30);
+        assertThat(saved.getValue().getPurchasedBalance()).isEqualTo(8);
+        ArgumentCaptor<SmsCreditLedgerEntry> entries = ArgumentCaptor.forClass(SmsCreditLedgerEntry.class);
+        verify(ledgerRepository, org.mockito.Mockito.times(2)).save(entries.capture());
+        assertThat(entries.getAllValues()).extracting(SmsCreditLedgerEntry::getKind)
+                .containsExactly(SmsCreditLedgerKind.INCLUDED_SPEND, SmsCreditLedgerKind.PURCHASED_SPEND);
+        assertThat(entries.getAllValues()).extracting(SmsCreditLedgerEntry::getDelta).containsExactly(-1, -2);
+        assertThat(entries.getAllValues()).extracting(SmsCreditLedgerEntry::getBalanceAfter).containsExactly(10, 8);
+    }
+
+    @Test
+    void debitOfMultiPartTextNeverGoesNegative() {
+        stubAllowance(30);
+        // A concurrent send left 2 credits; a 3-part text that already went out takes both.
+        when(accountRepository.findForUpdate(BIZ)).thenReturn(Optional.of(account(30, 2)));
+
+        int after = service.debit(BIZ, SmsSendReason.CAMPAIGN, null, 3);
+
+        assertThat(after).isZero();
+        ArgumentCaptor<BusinessSmsCreditAccount> saved = ArgumentCaptor.forClass(BusinessSmsCreditAccount.class);
+        verify(accountRepository).save(saved.capture());
+        assertThat(saved.getValue().getPurchasedBalance()).isZero();
+    }
+
+    @Test
+    void requireAvailableBlocksWhenBalanceCannotCoverEveryPart() {
+        stubAllowance(30);
+        when(accountRepository.findByBusinessId(BIZ)).thenReturn(Optional.of(account(30, 2)));
+
+        assertThatThrownBy(() -> service.requireAvailable(BIZ, SmsSendReason.CAMPAIGN, null, 3))
+                .isInstanceOf(SmsCreditsDepletedException.class);
+    }
+
+    @Test
     void requireAvailableThrowsWhenZero() {
         stubAllowance(30);
         when(accountRepository.findByBusinessId(BIZ)).thenReturn(Optional.of(account(30, 0)));

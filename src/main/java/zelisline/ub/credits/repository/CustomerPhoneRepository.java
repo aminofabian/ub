@@ -29,5 +29,11 @@ public interface CustomerPhoneRepository extends JpaRepository<CustomerPhone, St
     @Query("select distinct c.businessId from CustomerPhone c where c.phone in :phones")
     List<String> findDistinctBusinessIdByPhones(@Param("phones") Collection<String> phones);
 
+    /** Customers of one shop holding any of the candidate digit forms of a number. */
+    List<CustomerPhone> findByBusinessIdAndPhoneIn(String businessId, Collection<String> phones);
+
+    /** Every shop's record of a number (inbound SMS keyword handling; not tenant-scoped by design). */
+    List<CustomerPhone> findByPhoneIn(Collection<String> phones);
+
     void deleteByCustomerId(String customerId);
 }

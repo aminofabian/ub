@@ -20,6 +20,7 @@ import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
+import zelisline.ub.messaging.application.SmsSendContext;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.messaging.domain.SmsSendReason;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
@@ -98,7 +99,8 @@ public class CustomerBulkSmsService {
             }
 
             String rendered = render(template, customer.getName(), shopName);
-            try {
+            // Declares the text customer-facing so the SMS log keeps its wording.
+            try (SmsSendContext.Scope ignored = SmsSendContext.transactional(customerId)) {
                 CustomerMessageDispatcher.DeliveryResult delivery =
                         customerMessageDispatcher.deliverSmsOnly(messaging, phoneDigits, rendered);
                 if ("sent".equals(delivery.outcome()) || "stub".equals(delivery.outcome())) {

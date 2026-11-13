@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.text.NumberFormat;
 import java.util.Locale;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,7 +14,10 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.credits.application.BusinessCreditMessagingSettingsService;
+import zelisline.ub.credits.sms.application.SmsHubSettingsService;
+import zelisline.ub.credits.sms.domain.SmsTemplates;
 import zelisline.ub.messaging.application.CustomerMessageDispatcher;
+import zelisline.ub.messaging.application.SmsSendContext;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
 import zelisline.ub.messaging.domain.SmsSendReason;
 import zelisline.ub.payments.application.StkPhoneNormalizer;
@@ -42,6 +46,7 @@ public class WebOrderCustomerMessageService {
     private final WebOrderRepository webOrderRepository;
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
     private final CustomerMessageDispatcher customerMessageDispatcher;
+    private final SmsHubSettingsService smsHubSettingsService;
 
     public WebOrderMessageResponse send(
             String businessId,
@@ -113,18 +118,32 @@ public class WebOrderCustomerMessageService {
         if (phone == null) {
             return;
         }
-        String body = noticeBody(order, notice, doorstep);
+        // SMS Hub → Automations: the shop can switch an order update off or reword it.
+        SmsHubSettingsService.OrderNoticeRule rule = smsHubSettingsService.orderNotice(businessId, notice);
+        if (!rule.enabled()) {
+            return;
+        }
         TenantMessagingConfig messaging = messagingSettingsService.resolveForTest(
                 businessId, SmsSendReason.NOTIFICATION);
         if (!messaging.secretsReadable()
                 || (!messaging.smsConfigured() && !messaging.metaWhatsAppConfigured())) {
             return;
         }
-        if (messaging.smsConfigured()) {
-            customerMessageDispatcher.deliverBothChannels(messaging, phone, body);
-            return;
+        String body = rule.template() == null
+                ? noticeBody(order, notice, doorstep)
+                : SmsTemplates.render(rule.template(), Map.of(
+                        "name", firstName(order),
+                        "order_no", WebOrderCodes.code(order.getId()),
+                        "amount", formatMoney(order.getGrandTotal(), order.getCurrency()),
+                        "shop", smsHubSettingsService.shopName(businessId)));
+        // Declares the text customer-facing so the SMS log keeps its wording.
+        try (SmsSendContext.Scope ignored = SmsSendContext.transactional(null)) {
+            if (messaging.smsConfigured()) {
+                customerMessageDispatcher.deliverBothChannels(messaging, phone, body);
+                return;
+            }
+            customerMessageDispatcher.deliver(messaging, phone, body);
         }
-        customerMessageDispatcher.deliver(messaging, phone, body);
     }
 
     private static String noticeBody(WebOrder order, String notice, boolean doorstep) {

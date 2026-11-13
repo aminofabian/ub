@@ -5,6 +5,7 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -14,14 +15,18 @@ import kong.unirest.HttpResponse;
 import kong.unirest.Unirest;
 import zelisline.ub.messaging.application.SmsCreditGuard;
 import zelisline.ub.messaging.application.SmsCreditsDepletedException;
+import zelisline.ub.messaging.application.SmsMessageLogService;
 import zelisline.ub.messaging.application.TenantMessagingConfig;
+import zelisline.ub.messaging.domain.SmsMessage;
+import zelisline.ub.messaging.domain.SmsSegments;
 import zelisline.ub.messaging.domain.SmsSendReason;
 
 /**
  * SMS fallback for credit tab reminders (Africa's Talking, Sozuri, TextSMS.co.ke, or
  * Ping Africa). Metered at this single choke point: every real tenant-scoped send
- * consumes one credit via {@link SmsCreditGuard} (SMS_CREDITS_SCOPE.md §8). Stub sends
- * and platform-scoped sends (no business id) are free.
+ * consumes one credit per SMS part via {@link SmsCreditGuard} (SMS_CREDITS_SCOPE.md §8,
+ * ADR 0013) and is written to the per-message log. Stub sends and platform-scoped sends
+ * (no business id) are free and are not logged.
  */
 @Component
 public class SmsMessagingClient {
@@ -35,8 +40,16 @@ public class SmsMessagingClient {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final SmsCreditGuard smsCreditGuard;
 
+    /** Optional so unit tests can build the client with only the guard. */
+    private SmsMessageLogService messageLog;
+
     public SmsMessagingClient(SmsCreditGuard smsCreditGuard) {
         this.smsCreditGuard = smsCreditGuard;
+    }
+
+    @Autowired(required = false)
+    public void setMessageLog(SmsMessageLogService messageLog) {
+        this.messageLog = messageLog;
     }
 
     /**
@@ -66,11 +79,20 @@ public class SmsMessagingClient {
             return SendResult.stubLogged();
         }
         String businessId = cfg.businessId();
-        if (businessId != null && !businessId.isBlank()) {
-            SmsSendReason effectiveReason = reason != null ? reason : cfg.smsReason();
-            // Deduct-on-success: block at zero before the provider call, then consume
-            // one credit only after the provider accepts (scope §8, §19 #2).
-            smsCreditGuard.checkBeforeSend(businessId, effectiveReason, referenceId);
+        boolean tenantSend = businessId != null && !businessId.isBlank();
+        SmsSendReason effectiveReason = reason != null ? reason : cfg.smsReason();
+        int parts = SmsSegments.count(body);
+        if (tenantSend) {
+            // Deduct-on-success: block before the provider call when the balance cannot
+            // cover every part, then consume one credit per part only after the provider
+            // accepts (scope §8, §19 #2; per-part charging is ADR 0013).
+            try {
+                smsCreditGuard.checkBeforeSend(businessId, effectiveReason, referenceId, parts);
+            } catch (SmsCreditsDepletedException ex) {
+                logAttempt(businessId, toE164, body, parts, 0, effectiveReason, referenceId,
+                        cfg.effectiveSmsProvider(), null, SmsMessage.STATUS_BLOCKED, "out_of_credits");
+                throw ex;
+            }
         }
         SendResult result;
         String provider = cfg.effectiveSmsProvider();
@@ -83,11 +105,61 @@ public class SmsMessagingClient {
         } else {
             result = sendAfricasTalking(toE164, body, cfg);
         }
-        if (result.sent() && businessId != null && !businessId.isBlank()) {
-            smsCreditGuard.debitOnSuccess(businessId,
-                    reason != null ? reason : cfg.smsReason(), referenceId);
+        if (tenantSend) {
+            boolean metered = result.sent() && smsCreditGuard.meteringActive(businessId);
+            if (result.sent()) {
+                smsCreditGuard.debitOnSuccess(businessId, effectiveReason, referenceId, parts);
+            }
+            logAttempt(businessId, toE164, body, parts, metered ? parts : 0, effectiveReason, referenceId,
+                    result.sent() ? result.channel() : provider, result.providerMessageId(),
+                    result.sent() ? SmsMessage.STATUS_SENT : SmsMessage.STATUS_FAILED,
+                    result.sent() ? null : result.detail());
         }
         return result;
+    }
+
+    private void logAttempt(
+            String businessId,
+            String toE164,
+            String body,
+            int parts,
+            int credits,
+            SmsSendReason reason,
+            String referenceId,
+            String provider,
+            String providerMessageId,
+            String status,
+            String error
+    ) {
+        if (messageLog == null) {
+            return;
+        }
+        try {
+            messageLog.record(new SmsMessageLogService.Attempt(
+                    businessId, toE164, body, parts, credits, reason, referenceId,
+                    provider, providerMessageId, status, error));
+        } catch (RuntimeException ex) {
+            log.warn("sms_message log failed business={}: {}", businessId, ex.getMessage());
+        }
+    }
+
+    /** Best-effort provider message id from a JSON response body; null when absent. */
+    private String providerMessageId(String rawBody, String... paths) {
+        if (rawBody == null || rawBody.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(rawBody);
+            for (String path : paths) {
+                JsonNode node = root.at(path);
+                if (node != null && node.isValueNode() && !node.asText("").isBlank()) {
+                    return node.asText();
+                }
+            }
+        } catch (Exception ex) {
+            return null;
+        }
+        return null;
     }
 
     private SendResult sendAfricasTalking(String toE164, String body, TenantMessagingConfig cfg) {
@@ -100,7 +172,8 @@ public class SmsMessagingClient {
                     .field("message", body)
                     .asString();
             if (response.getStatus() >= 200 && response.getStatus() < 300) {
-                return SendResult.sent("africas_talking");
+                return SendResult.sent("africas_talking", providerMessageId(response.getBody(),
+                        "/SMSMessageData/Recipients/0/messageId"));
             }
             log.warn("Africa's Talking SMS HTTP {} body={}", response.getStatus(), truncate(response.getBody()));
             return SendResult.failed("http_" + response.getStatus());
@@ -130,7 +203,8 @@ public class SmsMessagingClient {
                     .body(json)
                     .asString();
             if (response.getStatus() >= 200 && response.getStatus() < 300) {
-                return SendResult.sent("sozuri");
+                return SendResult.sent("sozuri", providerMessageId(response.getBody(),
+                        "/messageData/messageId", "/recipients/0/messageId", "/messageId", "/data/messageId"));
             }
             log.warn("Sozuri SMS HTTP {} body={}", response.getStatus(), truncate(response.getBody()));
             return SendResult.failed("http_" + response.getStatus());
@@ -163,7 +237,8 @@ public class SmsMessagingClient {
             }
             String detail = parseTextSmsResponse(response.getBody());
             if (detail == null) {
-                return SendResult.sent("textsms");
+                return SendResult.sent("textsms", providerMessageId(response.getBody(),
+                        "/responses/0/messageid", "/responses/0/messageId"));
             }
             log.warn("TextSMS rejected for {}: {}", mask(toE164), detail);
             return SendResult.failed(detail);
@@ -208,7 +283,8 @@ public class SmsMessagingClient {
             }
             String detail = parsePingAfricaResponse(response.getBody());
             if (detail == null) {
-                return SendResult.sent("ping_africa");
+                return SendResult.sent("ping_africa", providerMessageId(response.getBody(),
+                        "/message/id", "/data/id", "/id"));
             }
             log.warn("Ping Africa rejected for {}: {}", mask(toE164), detail);
             return SendResult.failed(detail);
@@ -344,22 +420,34 @@ public class SmsMessagingClient {
         return s.length() > 120 ? s.substring(0, 120) + "…" : s;
     }
 
-    public record SendResult(boolean sent, boolean stub, boolean blocked, String channel, String detail) {
+    public record SendResult(
+            boolean sent,
+            boolean stub,
+            boolean blocked,
+            String channel,
+            String detail,
+            String providerMessageId
+    ) {
         public static SendResult sent(String channel) {
-            return new SendResult(true, false, false, channel, "sent");
+            return new SendResult(true, false, false, channel, "sent", null);
+        }
+
+        /** Accepted by the provider, with its message id when the response carried one. */
+        public static SendResult sent(String channel, String providerMessageId) {
+            return new SendResult(true, false, false, channel, "sent", providerMessageId);
         }
 
         public static SendResult stubLogged() {
-            return new SendResult(false, true, false, "sms_stub", "logged");
+            return new SendResult(false, true, false, "sms_stub", "logged", null);
         }
 
         /** SMS credits depleted — provider was never called. */
         public static SendResult blocked(String detail) {
-            return new SendResult(false, false, true, "sms_blocked", detail);
+            return new SendResult(false, false, true, "sms_blocked", detail, null);
         }
 
         public static SendResult failed(String detail) {
-            return new SendResult(false, false, false, "sms", detail);
+            return new SendResult(false, false, false, "sms", detail, null);
         }
     }
 }

@@ -94,13 +94,22 @@ public class SmsCreditService {
      */
     @Transactional
     public void requireAvailable(String businessId, SmsSendReason reason, String referenceId) {
+        requireAvailable(businessId, reason, referenceId, 1);
+    }
+
+    /**
+     * Pre-flight for a text of {@code units} SMS parts (one credit per part). Blocks when
+     * the balance cannot cover the whole text, so a long message is never half-paid.
+     */
+    @Transactional
+    public void requireAvailable(String businessId, SmsSendReason reason, String referenceId, int units) {
         PlatformSmsCreditSettings settings = settingsService.loadSingleton();
         if (!settings.isEnabled()) {
             return;
         }
         BusinessSmsCreditAccount account = ensureExists(businessId, settings);
         int allowance = allowanceFor(account, businessId);
-        if (account.available(allowance) <= 0) {
+        if (account.available(allowance) < Math.max(1, units)) {
             throw depleted(account, allowance, settings);
         }
     }
@@ -210,24 +219,48 @@ public class SmsCreditService {
      */
     @Transactional
     public int debit(String businessId, SmsSendReason reason, String referenceId) {
+        return debit(businessId, reason, referenceId, 1);
+    }
+
+    /**
+     * Debit {@code units} credits for one text sent as that many SMS parts. Included
+     * allowance is spent first, then purchased balance; a text that straddles both
+     * writes one ledger entry per source. If a concurrent send left fewer than
+     * {@code units} credits, what remains is consumed (the text has already gone out).
+     *
+     * @return new total available balance
+     */
+    @Transactional
+    public int debit(String businessId, SmsSendReason reason, String referenceId, int units) {
         PlatformSmsCreditSettings settings = settingsService.loadSingleton();
         BusinessSmsCreditAccount account = lockOrCreate(businessId, settings);
         int allowance = allowanceFor(account, businessId);
-        if (account.available(allowance) <= 0) {
+        int available = account.available(allowance);
+        if (available <= 0) {
             throw depleted(account, allowance, settings);
         }
-        SmsCreditLedgerKind kind;
-        if (account.getIncludedUsed() < allowance) {
-            account.setIncludedUsed(account.getIncludedUsed() + 1);
-            kind = SmsCreditLedgerKind.INCLUDED_SPEND;
-        } else {
-            account.setPurchasedBalance(account.getPurchasedBalance() - 1);
-            kind = SmsCreditLedgerKind.PURCHASED_SPEND;
+        int toSpend = Math.min(Math.max(1, units), available);
+        int fromIncluded = Math.min(toSpend, Math.max(0, allowance - account.getIncludedUsed()));
+        int fromPurchased = toSpend - fromIncluded;
+        String reasonCode = reason != null ? reason.code() : null;
+        int after = available;
+        if (fromIncluded > 0) {
+            account.setIncludedUsed(account.getIncludedUsed() + fromIncluded);
         }
-        int after = account.available(allowance);
+        if (fromPurchased > 0) {
+            account.setPurchasedBalance(account.getPurchasedBalance() - fromPurchased);
+        }
         accountRepository.save(account);
-        ledgerRepository.save(newEntry(businessId, -1, after, kind,
-                reason != null ? reason.code() : null, referenceId, null));
+        if (fromIncluded > 0) {
+            after -= fromIncluded;
+            ledgerRepository.save(newEntry(businessId, -fromIncluded, after,
+                    SmsCreditLedgerKind.INCLUDED_SPEND, reasonCode, referenceId, null));
+        }
+        if (fromPurchased > 0) {
+            after -= fromPurchased;
+            ledgerRepository.save(newEntry(businessId, -fromPurchased, after,
+                    SmsCreditLedgerKind.PURCHASED_SPEND, reasonCode, referenceId, null));
+        }
         return after;
     }
 

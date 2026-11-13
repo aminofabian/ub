@@ -66,6 +66,20 @@ public class Customer {
     @Column(name = "tags", columnDefinition = "json")
     private String tags;
 
+    /**
+     * SMS marketing consent (SMS Hub, ADR 0013): {@code UNKNOWN} (receipts and order
+     * updates only), {@code OPTED_IN}, {@code OPTED_OUT}. Promotions go to OPTED_IN only.
+     */
+    @Column(name = "sms_marketing_status", nullable = false, length = 16)
+    private String smsMarketingStatus = "UNKNOWN";
+
+    /** How the current status was recorded: STAFF, SMS_KEYWORD, STOREFRONT, IMPORT. */
+    @Column(name = "sms_marketing_source", length = 32)
+    private String smsMarketingSource;
+
+    @Column(name = "sms_marketing_updated_at")
+    private Instant smsMarketingUpdatedAt;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

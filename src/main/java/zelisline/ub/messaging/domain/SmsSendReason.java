@@ -12,6 +12,10 @@ public enum SmsSendReason {
     OPS_ALERT("ops_alert"),
     PAYROLL("payroll"),
     NOTIFICATION("notification"),
+    /** SMS Hub campaign to a customer audience (promotional). */
+    CAMPAIGN("campaign"),
+    /** SMS Hub automatic rule: thank-you, win-back. */
+    AUTOMATION("automation"),
     /** AI brand kit (logos + favicon + share image) after the free allowance. */
     AI_LOGO("ai_logo");
 

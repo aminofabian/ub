@@ -3,12 +3,11 @@ package zelisline.ub.posdraft.application;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -53,7 +52,6 @@ import zelisline.ub.tenancy.repository.BranchRepository;
 @RequiredArgsConstructor
 public class ServiceTicketService {
 
-    private static final ZoneId NAIROBI = ZoneId.of("Africa/Nairobi");
     private static final int MONEY_SCALE = 2;
 
     private final PosDraftRepository draftRepository;
@@ -64,13 +62,19 @@ public class ServiceTicketService {
     private final ServiceCatalogService serviceCatalogService;
     private final StaffProfileService staffProfileService;
     private final SaleService saleService;
+    private final zelisline.ub.serviceops.application.ServiceSaleSupport serviceSaleSupport;
+    private final zelisline.ub.audit.application.AuditEventPublisher auditEventPublisher;
+    private final zelisline.ub.audit.application.AuditEventBuilder auditEventBuilder;
 
-    /** Today's open tickets at a branch (Nairobi day), oldest first, with the number of chairs. */
+    /**
+     * Every open ticket at a branch, oldest first, with the number of chairs. Not limited to
+     * today: a ticket left open overnight still holds its chair and must stay visible so someone
+     * can finish, pay or cancel it.
+     */
     @Transactional(readOnly = true)
     public ServiceBoardResponse board(String businessId, String branchId) {
         int stations = branchStationService.stationCount(businessId, branchId);
-        Instant since = LocalDate.now(NAIROBI).atStartOfDay(NAIROBI).toInstant();
-        List<PosDraft> open = draftRepository.findOpenServiceTickets(businessId, branchId.trim(), since);
+        List<PosDraft> open = draftRepository.findOpenServiceTickets(businessId, branchId.trim());
         Map<String, String> names = staffNames(businessId, open);
         List<TicketResponse> tickets = new ArrayList<>(open.size());
         for (PosDraft ticket : open) {
@@ -102,7 +106,12 @@ public class ServiceTicketService {
         PosDraft ticket = new PosDraft();
         ticket.setBusinessId(businessId);
         ticket.setBranchId(branchId);
-        ticket.setTicketNumber(sequenceAllocator.allocateTicketNumber(branchId));
+        // pos_drafts.ticket_number is unique per business while the sequence runs per branch, so a
+        // second branch would collide with the first. Take whichever is higher; two branches
+        // racing can still collide once, which is reported below and succeeds on retry.
+        ticket.setTicketNumber(Math.max(
+                sequenceAllocator.allocateTicketNumber(branchId),
+                draftRepository.maxTicketNumber(businessId) + 1));
         ticket.setStatus(PosDraftConstants.STATUS_PENDING);
         ticket.setDraftKind(PosDraftConstants.KIND_SERVICE);
         ticket.setServiceStage(PosDraftConstants.STAGE_WAITING);
@@ -110,7 +119,12 @@ public class ServiceTicketService {
         ticket.setClientDraftId(clientId);
         ticket.setCustomerId(blankToNull(request.customerId()));
         ticket.setRequestedStaffProfileId(requested);
-        ticket = draftRepository.save(ticket);
+        try {
+            ticket = draftRepository.saveAndFlush(ticket);
+        } catch (DataIntegrityViolationException ex) {
+            // Another till took the same number or sent the same client id a moment ago.
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Could not open the ticket; try again");
+        }
 
         List<PosDraftLine> lines = new ArrayList<>();
         int index = 0;
@@ -130,7 +144,11 @@ public class ServiceTicketService {
         List<PosDraftLine> all = lineRepository.findByDraftIdOrderByLineIndexAsc(ticketId);
         int nextIndex = all.stream().mapToInt(PosDraftLine::getLineIndex).max().orElse(-1) + 1;
         PosDraftLine line = buildLine(businessId, ticket, nextIndex, input);
-        line.setPerformerStaffProfileId(ticket.getRequestedStaffProfileId());
+        if (!PosDraftConstants.STAGE_WAITING.equals(ticket.getServiceStage())) {
+            // Already with someone: they must be able to do the extra service too.
+            serviceSaleSupport.resolve(businessId, line.getServiceId(), ticket.getRequestedStaffProfileId());
+            line.setPerformerStaffProfileId(ticket.getRequestedStaffProfileId());
+        }
         lineRepository.save(line);
         List<PosDraftLine> active = activeLines(ticketId);
         recomputeTotal(ticket, active);
@@ -173,7 +191,12 @@ public class ServiceTicketService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "This ticket has already been started");
         }
         String performer = request.performerStaffProfileId().trim();
-        requireBookable(businessId, performer);
+        List<PosDraftLine> lines = activeLines(ticketId);
+        // The same checks payment will make: a current, customer-serving staff member who is
+        // allowed to perform every service on the ticket. Failing here beats failing at the till.
+        for (PosDraftLine line : lines) {
+            serviceSaleSupport.resolve(businessId, line.getServiceId(), performer);
+        }
         branchRepository.findByIdAndBusinessIdForUpdate(ticket.getBranchId(), businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
         int stations = branchStationService.stationCount(businessId, ticket.getBranchId());
@@ -188,7 +211,6 @@ public class ServiceTicketService {
         ticket.setRequestedStaffProfileId(performer);
         ticket.setServiceStage(PosDraftConstants.STAGE_IN_SERVICE);
         ticket.setServiceStartedAt(Instant.now());
-        List<PosDraftLine> lines = activeLines(ticketId);
         for (PosDraftLine line : lines) {
             line.setPerformerStaffProfileId(performer);
         }
@@ -217,6 +239,10 @@ public class ServiceTicketService {
     @Transactional
     public TicketResponse reopen(String businessId, String ticketId) {
         PosDraft ticket = requireOpen(businessId, ticketId);
+        if (PosDraftConstants.STAGE_IN_SERVICE.equals(ticket.getServiceStage())) {
+            // A double tap.
+            return toResponse(ticket, activeLines(ticketId), staffNames(businessId, List.of(ticket)));
+        }
         if (!PosDraftConstants.STAGE_READY_TO_PAY.equals(ticket.getServiceStage())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Only a finished ticket can be reopened");
         }
@@ -251,7 +277,25 @@ public class ServiceTicketService {
         ticket.setCancelledAt(Instant.now());
         String reason = request == null ? null : blankToNull(request.reason());
         ticket.setCancelledReason(reason != null ? reason : (abandoned ? "Customer left" : "Cancelled"));
+        String stageWhenCancelled = ticket.getServiceStage();
         ticket = draftRepository.saveAndFlush(ticket);
+        // A cancelled ticket is work that will never be paid for: keep a trace of who did it.
+        java.util.Map<String, Object> state = new java.util.LinkedHashMap<>();
+        state.put("ticketNumber", ticket.getTicketNumber());
+        state.put("stage", stageWhenCancelled);
+        state.put("total", ticket.getGrandTotal().toPlainString());
+        state.put("reason", ticket.getCancelledReason());
+        auditEventPublisher.publish(auditEventBuilder
+                .builder(zelisline.ub.audit.domain.AuditEventCategory.SALES, "service_ticket.cancelled",
+                        zelisline.ub.audit.domain.AuditEventSeverity.WARN)
+                .businessId(businessId)
+                .branchId(ticket.getBranchId())
+                .actor(userId, zelisline.ub.audit.domain.AuditEventActorType.USER)
+                .target("service_ticket", ticket.getId())
+                .targetLabel("Ticket " + ticket.getTicketNumber())
+                .newState(state)
+                .source("floor")
+                .build());
         return toResponse(ticket, activeLines(ticketId), staffNames(businessId, List.of(ticket)));
     }
 
@@ -259,7 +303,7 @@ public class ServiceTicketService {
      * Takes payment: the ticket becomes a sale with one service line per ticket line, attributed
      * to the staff member on the ticket. Replaying the same idempotency key returns the same sale.
      */
-    @Transactional
+    @Transactional(noRollbackFor = TicketRepricedException.class)
     public PaidTicketResponse pay(
             String businessId,
             String ticketId,
@@ -289,6 +333,27 @@ public class ServiceTicketService {
             if (lines.isEmpty()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This ticket has no services");
             }
+        }
+        // A fixed-price service is sold at today's price. If the catalogue changed since the
+        // ticket was opened, bring the ticket up to date and stop: the till shows the new total
+        // and takes payment again, instead of the sale being refused with nothing to fix.
+        List<String> changed = new ArrayList<>();
+        for (PosDraftLine line : lines) {
+            ServiceOffering service = serviceCatalogService.requireSellable(businessId, line.getServiceId());
+            BigDecimal current = service.getPrice().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+            if (!service.isPriceIsVariable() && line.getUnitPrice().compareTo(current) != 0) {
+                line.setUnitPrice(current);
+                line.setLineTotal(current.multiply(line.getQuantity()).setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+                changed.add(service.getName());
+            }
+        }
+        if (!changed.isEmpty()) {
+            lineRepository.saveAll(lines);
+            recomputeTotal(ticket, lines);
+            draftRepository.saveAndFlush(ticket);
+            throw new TicketRepricedException("The price of " + String.join(", ", changed)
+                    + " has changed. This ticket is now " + ticket.getGrandTotal().toPlainString()
+                    + " — take payment again.");
         }
         List<PostSaleLineRequest> saleLines = new ArrayList<>(lines.size());
         for (PosDraftLine line : lines) {
@@ -321,6 +386,16 @@ public class ServiceTicketService {
         }
         return new PaidTicketResponse(
                 toResponse(ticket, lines, staffNames(businessId, List.of(ticket))), outcome.response());
+    }
+
+    /** Branch and stage of a ticket, for the controller's branch-lock and permission checks. */
+    @Transactional(readOnly = true)
+    public TicketRef ref(String businessId, String ticketId) {
+        PosDraft ticket = requireTicket(businessId, ticketId);
+        return new TicketRef(ticket.getBranchId(), ticket.getServiceStage(), ticket.isPending());
+    }
+
+    public record TicketRef(String branchId, String stage, boolean open) {
     }
 
     // ------------------------------------------------------------------ helpers

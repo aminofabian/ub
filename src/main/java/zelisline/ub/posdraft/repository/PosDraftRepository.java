@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -57,16 +59,23 @@ public interface PosDraftRepository extends JpaRepository<PosDraft, String> {
                and d.branchId = :branchId
                and d.status = 'pending'
                and d.draftKind = 'SERVICE'
-               and d.createdAt >= :since
              order by d.createdAt asc
             """)
     List<PosDraft> findOpenServiceTickets(
             @Param("businessId") String businessId,
-            @Param("branchId") String branchId,
-            @Param("since") Instant since
+            @Param("branchId") String branchId
     );
 
-    /** Open tickets being served in a given chair — used to stop two customers sharing one. */
+    /** Highest ticket number used by the business; the unique key is per business, not per branch. */
+    @Query("select coalesce(max(d.ticketNumber), 0) from PosDraft d where d.businessId = :businessId")
+    long maxTicketNumber(@Param("businessId") String businessId);
+
+    /**
+     * Open tickets being served in a given chair — used to stop two customers sharing one.
+     * A locking read on purpose: under InnoDB's default isolation a plain read would use the
+     * transaction's earlier snapshot and miss a ticket another till has just put in the chair.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             select d from PosDraft d
              where d.businessId = :businessId

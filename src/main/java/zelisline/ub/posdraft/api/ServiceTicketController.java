@@ -19,6 +19,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
+import zelisline.ub.posdraft.PosDraftConstants;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.posdraft.api.dto.ServiceTicketDtos.ServiceBoardResponse;
 import zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CancelTicketRequest;
@@ -46,6 +47,7 @@ public class ServiceTicketController {
 
     private final ServiceTicketService serviceTicketService;
     private final BranchResolutionService branchResolutionService;
+    private final zelisline.ub.platform.security.CurrentUserPermissions currentUserPermissions;
 
     @GetMapping
     public ServiceBoardResponse board(@RequestParam String branchId, HttpServletRequest request) {
@@ -69,33 +71,33 @@ public class ServiceTicketController {
     @PostMapping("/{id}/lines")
     public TicketResponse addLine(
             @PathVariable String id, @Valid @RequestBody TicketLineInput body, HttpServletRequest request) {
-        CurrentTenantUser.requireHuman(request);
+        requireOwnBranch(CurrentTenantUser.requireHuman(request), request, id);
         return serviceTicketService.addLine(TenantRequestIds.resolveBusinessId(request), id, body);
     }
 
     @DeleteMapping("/{id}/lines/{lineId}")
     public TicketResponse removeLine(
             @PathVariable String id, @PathVariable String lineId, HttpServletRequest request) {
-        CurrentTenantUser.requireHuman(request);
+        requireOwnBranch(CurrentTenantUser.requireHuman(request), request, id);
         return serviceTicketService.removeLine(TenantRequestIds.resolveBusinessId(request), id, lineId);
     }
 
     @PostMapping("/{id}/start")
     public TicketResponse start(
             @PathVariable String id, @Valid @RequestBody StartTicketRequest body, HttpServletRequest request) {
-        CurrentTenantUser.requireHuman(request);
+        requireOwnBranch(CurrentTenantUser.requireHuman(request), request, id);
         return serviceTicketService.start(TenantRequestIds.resolveBusinessId(request), id, body);
     }
 
     @PostMapping("/{id}/done")
     public TicketResponse done(@PathVariable String id, HttpServletRequest request) {
-        CurrentTenantUser.requireHuman(request);
+        requireOwnBranch(CurrentTenantUser.requireHuman(request), request, id);
         return serviceTicketService.finish(TenantRequestIds.resolveBusinessId(request), id);
     }
 
     @PostMapping("/{id}/reopen")
     public TicketResponse reopen(@PathVariable String id, HttpServletRequest request) {
-        CurrentTenantUser.requireHuman(request);
+        requireOwnBranch(CurrentTenantUser.requireHuman(request), request, id);
         return serviceTicketService.reopen(TenantRequestIds.resolveBusinessId(request), id);
     }
 
@@ -106,6 +108,13 @@ public class ServiceTicketController {
             HttpServletRequest request
     ) {
         TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
+        ServiceTicketService.TicketRef ticket = requireOwnBranch(caller, request, id);
+        // Anyone who can sell may note a customer who left the queue. Once the customer has been
+        // served, cancelling throws away work that should be paid for, so it needs the same
+        // permission as clearing any held sale.
+        if (ticket.open() && !PosDraftConstants.STAGE_WAITING.equals(ticket.stage())) {
+            currentUserPermissions.requireAny("pos.drafts.cancel.any", "services.catalog.manage");
+        }
         return serviceTicketService.cancel(TenantRequestIds.resolveBusinessId(request), id, body, caller.userId());
     }
 
@@ -120,8 +129,18 @@ public class ServiceTicketController {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Idempotency-Key header is required");
         }
+        requireOwnBranch(caller, request, id);
         return serviceTicketService.pay(
                 TenantRequestIds.resolveBusinessId(request), id, body, idempotencyKey, caller.userId(),
                 caller.roleId(), request.getHeader(TillDeviceService.TILL_DEVICE_HEADER));
+    }
+
+    /** A branch-locked role may only act on tickets of its own branch, as with sales. */
+    private ServiceTicketService.TicketRef requireOwnBranch(
+            TenantPrincipal caller, HttpServletRequest request, String ticketId) {
+        ServiceTicketService.TicketRef ticket =
+                serviceTicketService.ref(TenantRequestIds.resolveBusinessId(request), ticketId);
+        branchResolutionService.requireBranchForLockedRole(caller.roleId(), caller.branchId(), ticket.branchId());
+        return ticket;
     }
 }

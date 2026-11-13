@@ -68,6 +68,7 @@ class ServiceTicketIT extends ServiceSaleTestSupport {
         act(id, "done", "{}", 200);
         // Done by mistake: back in the chair, then done again.
         assertThat(act(id, "reopen", "{}", 200).get("stage").asText()).isEqualTo("IN_SERVICE");
+        act(id, "reopen", "{}", 200);
         act(id, "done", "{}", 200);
 
         String key = "pay-" + UUID.randomUUID();
@@ -131,7 +132,12 @@ class ServiceTicketIT extends ServiceSaleTestSupport {
         mockMvc.perform(as(delete("/api/v1/service-tickets/" + id + "/lines/" + only), TENANT, cashier, ROLE_CASHIER))
                 .andExpect(status().isBadRequest());
 
-        JsonNode left = act(id, "cancel", "{\"abandoned\":true}", 200);
+        // The customer is in the chair: a seller alone cannot throw the ticket away.
+        act(id, "cancel", "{\"abandoned\":true}", 403);
+        MvcResult cancelled = mockMvc.perform(as(post("/api/v1/service-tickets/" + id + "/cancel"), TENANT, owner, ROLE_OWNER)
+                        .content("{\"abandoned\":true}"))
+                .andExpect(status().isOk()).andReturn();
+        JsonNode left = objectMapper.readTree(cancelled.getResponse().getContentAsString());
         assertThat(left.get("status").asText()).isEqualTo("cancelled");
         assertThat(left.get("stage").asText()).isEqualTo("ABANDONED");
         assertThat(posDraftRepository.findById(id).orElseThrow().getCancelledReason()).isEqualTo("Customer left");
@@ -188,6 +194,69 @@ class ServiceTicketIT extends ServiceSaleTestSupport {
         mockMvc.perform(as(post("/api/v1/service-tickets/" + other + "/pay"), TENANT, cashier, ROLE_CASHIER)
                         .content("{\"payments\":[{\"method\":\"cash\",\"amount\":300}]}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void closingAShiftDoesNotThrowAwayOpenTickets() throws Exception {
+        String waiting = createTicket(UUID.randomUUID().toString(), null).get("id").asText();
+        String inChair = createTicket(UUID.randomUUID().toString(), john).get("id").asText();
+        act(inChair, "start", "{\"performerStaffProfileId\":\"" + john + "\",\"stationNo\":1}", 200);
+
+        // What shift close runs for held retail carts.
+        int cancelled = posDraftService.cancelPendingForClosedShift(
+                TENANT, shiftRepository.findAll().getFirst(), cashier.getId());
+
+        assertThat(cancelled).isZero();
+        assertThat(posDraftRepository.findById(waiting).orElseThrow().getStatus()).isEqualTo("pending");
+        assertThat(posDraftRepository.findById(inChair).orElseThrow().getStatus()).isEqualTo("pending");
+        assertThat(board().get("tickets")).hasSize(2);
+    }
+
+    @Test
+    void aPriceChangeUpdatesTheTicketInsteadOfMakingItUnpayable() throws Exception {
+        String id = createTicket(UUID.randomUUID().toString(), john).get("id").asText();
+        act(id, "start", "{\"performerStaffProfileId\":\"" + john + "\",\"stationNo\":1}", 200);
+        mockMvc.perform(as(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .patch("/api/v1/services/" + haircut), TENANT, owner, ROLE_OWNER)
+                        .content("{\"price\":350}"))
+                .andExpect(status().isOk());
+
+        // The first attempt brings the ticket up to date and takes no money.
+        payTicket(id, "rp-" + UUID.randomUUID(), "300", 409);
+        assertThat(saleRepository.count()).isZero();
+        assertThat(posDraftRepository.findById(id).orElseThrow().getGrandTotal()).isEqualByComparingTo("350.00");
+        assertThat(board().get("tickets").get(0).get("total").decimalValue()).isEqualByComparingTo("350.00");
+        // Then it pays at the new price, by a seller with no price-override permission.
+        JsonNode paid = payTicket(id, "rp-" + UUID.randomUUID(), "350", 200);
+        assertThat(paid.get("sale").get("grandTotal").decimalValue()).isEqualByComparingTo("350.00");
+    }
+
+    @Test
+    void aTicketCannotBeStartedBySomeoneWhoDoesNotDoThatService() throws Exception {
+        String peter = createStaff(TENANT, owner, "Peter");
+        mockMvc.perform(as(put("/api/v1/services/" + haircut + "/staff"), TENANT, owner, ROLE_OWNER)
+                        .content("{\"staffProfileIds\":[\"" + peter + "\"]}"))
+                .andExpect(status().isOk());
+        String id = createTicket(UUID.randomUUID().toString(), null).get("id").asText();
+        act(id, "start", "{\"performerStaffProfileId\":\"" + john + "\",\"stationNo\":1}", 400);
+        assertThat(posDraftRepository.findById(id).orElseThrow().getServiceStage()).isEqualTo("WAITING");
+        act(id, "start", "{\"performerStaffProfileId\":\"" + peter + "\",\"stationNo\":1}", 200);
+        payTicket(id, "ok-" + UUID.randomUUID(), "300", 200);
+    }
+
+    @Test
+    void ticketNumbersDoNotCollideAcrossBranches() throws Exception {
+        long first = createTicket(UUID.randomUUID().toString(), null).get("ticketNumber").asLong();
+        zelisline.ub.tenancy.domain.Branch second = new zelisline.ub.tenancy.domain.Branch();
+        second.setBusinessId(TENANT);
+        second.setName("Second");
+        branchRepository.save(second);
+        MvcResult result = mockMvc.perform(as(post("/api/v1/service-tickets"), TENANT, owner, ROLE_OWNER)
+                        .content("{\"branchId\":\"" + second.getId() + "\",\"clientTicketId\":\"" + UUID.randomUUID()
+                                + "\",\"lines\":[{\"serviceId\":\"" + haircut + "\"}]}"))
+                .andExpect(status().isCreated()).andReturn();
+        long other = objectMapper.readTree(result.getResponse().getContentAsString()).get("ticketNumber").asLong();
+        assertThat(other).isGreaterThan(first);
     }
 
     // ------------------------------------------------------------------ helpers

@@ -97,6 +97,10 @@ public class PosDraftService {
 
         String clientDraftId = normalizeClientDraftId(request.clientDraftId());
         var existing = draftRepository.findByBusinessIdAndClientDraftId(businessId, clientDraftId);
+        if (existing.isPresent() && PosDraftConstants.KIND_SERVICE.equals(existing.get().getDraftKind())) {
+            // That id belongs to a walk-in service ticket, which is not a held cart.
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "That draft id is already used");
+        }
         if (existing.isPresent()) {
             PosDraft draft = existing.get();
             if (!draft.getBranchId().equals(request.branchId().trim())) {
@@ -548,6 +552,9 @@ public class PosDraftService {
                 businessId, shift.getId(), PosDraftConstants.STATUS_PENDING)) {
             byId.put(draft.getId(), draft);
         }
+        // Walk-in service tickets share this table. A customer in the chair or waiting to pay
+        // must not have their ticket voided because a cashier handed over the till.
+        byId.values().removeIf(d -> PosDraftConstants.KIND_SERVICE.equals(d.getDraftKind()));
 
         // Till-scoped shifts: only the opener's untagged drafts.
         // Shared branch shifts: every untagged pending draft at the branch.
@@ -560,6 +567,9 @@ public class PosDraftService {
                 PosDraftConstants.STATUS_PENDING,
                 openedAt,
                 createdByFilter)) {
+            if (PosDraftConstants.KIND_SERVICE.equals(draft.getDraftKind())) {
+                continue;
+            }
             byId.putIfAbsent(draft.getId(), draft);
         }
 

@@ -99,6 +99,12 @@ public class FeatureFlagService {
      */
     public static final String FLAG_POS_CASHIER_CLEAR_ALL_SALES = "pos.cashier_clear_all_sales";
 
+    /**
+     * Cashiers may type an M-Pesa transaction code from the customer's message.
+     * Absent / false keeps checkout on the prompt only.
+     */
+    public static final String FLAG_POS_CASHIER_MPESA_CODE = "pos.cashier_mpesa_code";
+
     /** Auto-add scanned barcodes straight to cart when the barcode resolves to
      * exactly one sellable product. When off, scanned barcodes fill the search
      * box (cashier must tap the hit). Independent of pos_drafts.enabled so

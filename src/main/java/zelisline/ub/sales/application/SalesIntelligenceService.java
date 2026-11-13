@@ -539,6 +539,11 @@ public class SalesIntelligenceService {
                    (SELECT GROUP_CONCAT(DISTINCT sp2.method ORDER BY sp2.method SEPARATOR ',')
                       FROM sale_payments sp2
                      WHERE sp2.sale_id = s.id) AS payment_methods,
+                   (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(sp2.reference), '')
+                                         ORDER BY NULLIF(TRIM(sp2.reference), '') SEPARATOR ',')
+                      FROM sale_payments sp2
+                     WHERE sp2.sale_id = s.id
+                       AND sp2.reference IS NOT NULL) AS payment_references,
                    sil.item_id,
                    i.name AS item_name,
                    sil.display_name AS display_name,
@@ -989,7 +994,8 @@ public class SalesIntelligenceService {
                             rs.getString("customer_id"),
                             customerNoOrNull,
                             masked != null ? MaskedMsisdn.displayMasked(masked) : null,
-                            phoneVerified
+                            phoneVerified,
+                            rs.getString("payment_references")
                     ));
                 },
                 businessId,
@@ -1516,6 +1522,7 @@ public class SalesIntelligenceService {
                             rs.getString("status"),
                             rs.getString("channel"),
                             false,
+                            null,
                             null,
                             null,
                             null,

@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -168,6 +169,21 @@ public class SaleService {
         Sale sale = saleRepository.findByBusinessIdAndReceiptNo(businessId, receiptNo)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Sale not found"));
         return toResponse(sale);
+    }
+
+    @Transactional(readOnly = true)
+    public SaleResponse requireSaleByMpesaCode(String businessId, String rawCode) {
+        String code = rawCode == null ? "" : rawCode.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "");
+        if (code.length() < 6 || code.length() > 20) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter an M-Pesa transaction code");
+        }
+        String saleId = salePaymentRepository
+                .findSaleIdsByBusinessAndCode(businessId, code, PageRequest.of(0, 1))
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "No sale for that M-Pesa code"));
+        return requireSale(businessId, saleId);
     }
 
     private SaleResponse completeNewSale(

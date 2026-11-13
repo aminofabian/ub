@@ -28,6 +28,11 @@ public record FeatureFlagsPatchRequest(
          */
         Boolean posCashierClearAllSales,
         /**
+         * Cashiers may type an M-Pesa transaction code from the customer's message.
+         * Absent / false keeps checkout on the prompt only.
+         */
+        Boolean posCashierMpesaCode,
+        /**
          * Search-first hybrid POS catalog (list results + frequent chips).
          * Absent / false keeps the classic product grid.
          */

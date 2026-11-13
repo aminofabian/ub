@@ -157,6 +157,19 @@ public class SalesController {
         );
     }
 
+    @GetMapping("/by-mpesa-code/{code}")
+    @PreAuthorize("hasPermission(null, 'sales.intelligence.read') or hasPermission(null, 'sales.payment.adjust') or hasPermission(null, 'sales.sell')")
+    public SaleResponse getSaleByMpesaCode(
+            @PathVariable String code,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        return saleService.requireSaleByMpesaCode(
+                TenantRequestIds.resolveBusinessId(request),
+                code
+        );
+    }
+
     @GetMapping("/{saleId}")
     @PreAuthorize("hasPermission(null, 'sales.intelligence.read') or hasPermission(null, 'sales.payment.adjust') or hasPermission(null, 'sales.sell')")
     public SaleResponse getSale(@PathVariable String saleId, HttpServletRequest request) {

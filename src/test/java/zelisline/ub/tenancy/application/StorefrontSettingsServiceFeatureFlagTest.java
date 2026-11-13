@@ -42,6 +42,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 drawout,
                 null,
                 null,
+                null,
                 catalogHybrid,
                 shiftPrefill,
                 tillListen,
@@ -55,6 +56,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
         return new FeatureFlagsPatchRequest(
                 null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null,
+                null,
                 enabled);
     }
 
@@ -109,6 +111,19 @@ class StorefrontSettingsServiceFeatureFlagTest {
         assertThat(objectMapper.readTree(merged).path("featureFlags").path("pos.cashier_order_confirm").asBoolean())
                 .isTrue();
         assertThat(objectMapper.readTree(merged).path("featureFlags").path("pos.cashier_drawout").asBoolean())
+                .isTrue();
+    }
+
+    @Test
+    void mergeFeatureFlags_enablesMpesaTransactionCode() throws Exception {
+        String merged = service.mergeFeatureFlags(
+                "{}",
+                new FeatureFlagsPatchRequest(
+                        null, null, null, null, null, null, null, null,
+                        null, null, null, true, null, null, null, null,
+                        null, null));
+
+        assertThat(objectMapper.readTree(merged).path("featureFlags").path("pos.cashier_mpesa_code").asBoolean())
                 .isTrue();
     }
 
@@ -185,6 +200,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
                         null,
                         null,
                         true,
+                        null,
                         null,
                         null,
                         null,

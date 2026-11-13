@@ -14,6 +14,23 @@ public interface SalePaymentRepository extends JpaRepository<SalePayment, String
 
     List<SalePayment> findBySaleIdOrderBySortOrderAsc(String saleId);
 
+    @Query("""
+            select s.id
+              from SalePayment sp
+              join Sale s on s.id = sp.saleId
+             where s.businessId = :businessId
+               and (
+                    upper(trim(sp.reference)) = :code
+                 or upper(trim(sp.gatewayTxnId)) = :code
+               )
+             order by s.soldAt desc
+            """)
+    List<String> findSaleIdsByBusinessAndCode(
+            @Param("businessId") String businessId,
+            @Param("code") String code,
+            org.springframework.data.domain.Pageable pageable
+    );
+
     void deleteBySaleId(String saleId);
 
     @Query("""

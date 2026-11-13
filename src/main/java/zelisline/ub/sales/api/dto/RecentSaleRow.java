@@ -32,6 +32,8 @@ public record RecentSaleRow(
         String customerId,
         Long customerNo,
         String customerMaskedHint,
-        Boolean customerPhoneVerified
+        Boolean customerPhoneVerified,
+        /** Comma-separated M-Pesa and other tender references on the sale. */
+        String paymentReferences
 ) {
 }

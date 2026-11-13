@@ -35,6 +35,7 @@ public class CashierCapabilityAuditService {
             Map.entry(FeatureFlagService.FLAG_POS_CASHIER_DRAWOUT, "Allow cashiers to request drawouts"),
             Map.entry(FeatureFlagService.FLAG_POS_CASHIER_CREATE_PRODUCT, "Allow cashiers to create products"),
             Map.entry(FeatureFlagService.FLAG_POS_CASHIER_WEIGHED_TOGGLE, "Allow cashiers to toggle weighed items"),
+            Map.entry(FeatureFlagService.FLAG_POS_CASHIER_MPESA_CODE, "Allow cashiers to enter an M-Pesa transaction code"),
             Map.entry(FeatureFlagService.FLAG_POS_CASHIER_ORDER_CONFIRM, "Allow cashiers to confirm orders")
     );
 

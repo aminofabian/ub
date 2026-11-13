@@ -80,6 +80,28 @@ public class PosDraft {
     @Column(name = "completed_at")
     private Instant completedAt;
 
+    /** {@code CART} for a held retail cart, {@code SERVICE} for a walk-in service ticket. */
+    @Column(name = "draft_kind", nullable = false, length = 16)
+    private String draftKind = PosDraftConstants.KIND_CART;
+
+    /** Service tickets only: {@code WAITING}, {@code IN_SERVICE}, {@code READY_TO_PAY}, {@code ABANDONED}. */
+    @Column(name = "service_stage", length = 16)
+    private String serviceStage;
+
+    /** Service tickets only: the chair (1-based) the customer is in. */
+    @Column(name = "station_no")
+    private Integer stationNo;
+
+    /** Service tickets only: the staff member the customer asked for, or who took them. */
+    @Column(name = "requested_staff_profile_id", length = 36)
+    private String requestedStaffProfileId;
+
+    @Column(name = "service_started_at")
+    private Instant serviceStartedAt;
+
+    @Column(name = "service_finished_at")
+    private Instant serviceFinishedAt;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

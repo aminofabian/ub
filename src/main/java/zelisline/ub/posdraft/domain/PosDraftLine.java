@@ -33,8 +33,19 @@ public class PosDraftLine {
     @Column(name = "line_index", nullable = false)
     private int lineIndex;
 
-    @Column(name = "item_id", nullable = false, length = 36)
+    /** {@code null} on a service line. */
+    @Column(name = "item_id", length = 36)
     private String itemId;
+
+    @Column(name = "line_kind", nullable = false, length = 16)
+    private String lineKind = "ITEM";
+
+    @Column(name = "service_id", length = 36)
+    private String serviceId;
+
+    /** Service lines: who performs (or performed) it; may be unset until the ticket is started. */
+    @Column(name = "performer_staff_profile_id", length = 36)
+    private String performerStaffProfileId;
 
     @Column(name = "item_name", nullable = false, length = 500)
     private String itemName;

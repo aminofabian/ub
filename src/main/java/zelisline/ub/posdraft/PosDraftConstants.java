@@ -2,6 +2,16 @@ package zelisline.ub.posdraft;
 
 public final class PosDraftConstants {
 
+    /** A held retail cart — every row before service tickets existed. */
+    public static final String KIND_CART = "CART";
+    /** A walk-in service ticket (ADR 0014). */
+    public static final String KIND_SERVICE = "SERVICE";
+
+    public static final String STAGE_WAITING = "WAITING";
+    public static final String STAGE_IN_SERVICE = "IN_SERVICE";
+    public static final String STAGE_READY_TO_PAY = "READY_TO_PAY";
+    public static final String STAGE_ABANDONED = "ABANDONED";
+
     public static final String STATUS_PENDING = "pending";
     public static final String STATUS_COMPLETED = "completed";
     public static final String STATUS_CANCELLED = "cancelled";

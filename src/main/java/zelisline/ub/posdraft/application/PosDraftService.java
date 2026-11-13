@@ -697,6 +697,8 @@ public class PosDraftService {
 
     private PosDraft loadDraftOrThrow(String businessId, String draftId) {
         return draftRepository.findByIdAndBusinessId(draftId, businessId)
+                // A walk-in service ticket shares this table but is not a held cart.
+                .filter(d -> !PosDraftConstants.KIND_SERVICE.equals(d.getDraftKind()))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Draft not found"));
     }
 

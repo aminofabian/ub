@@ -21,6 +21,7 @@ public interface PosDraftRepository extends JpaRepository<PosDraft, String> {
              where d.businessId = :businessId
                and d.branchId = :branchId
                and d.status = :status
+               and d.draftKind = 'CART'
                and d.updatedAt >= :since
              order by d.updatedAt desc
             """)
@@ -37,6 +38,7 @@ public interface PosDraftRepository extends JpaRepository<PosDraft, String> {
                and d.branchId = :branchId
                and d.status = :status
                and d.createdBy = :createdBy
+               and d.draftKind = 'CART'
                and d.updatedAt >= :since
              order by d.updatedAt desc
             """)
@@ -46,6 +48,38 @@ public interface PosDraftRepository extends JpaRepository<PosDraft, String> {
             @Param("status") String status,
             @Param("createdBy") String createdBy,
             @Param("since") Instant since
+    );
+
+    /** Open walk-in service tickets at a branch, oldest first (the queue). */
+    @Query("""
+            select d from PosDraft d
+             where d.businessId = :businessId
+               and d.branchId = :branchId
+               and d.status = 'pending'
+               and d.draftKind = 'SERVICE'
+               and d.createdAt >= :since
+             order by d.createdAt asc
+            """)
+    List<PosDraft> findOpenServiceTickets(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("since") Instant since
+    );
+
+    /** Open tickets being served in a given chair — used to stop two customers sharing one. */
+    @Query("""
+            select d from PosDraft d
+             where d.businessId = :businessId
+               and d.branchId = :branchId
+               and d.status = 'pending'
+               and d.draftKind = 'SERVICE'
+               and d.serviceStage = 'IN_SERVICE'
+               and d.stationNo = :stationNo
+            """)
+    List<PosDraft> findInServiceAtStation(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("stationNo") int stationNo
     );
 
     List<PosDraft> findByBusinessIdAndShiftIdAndStatus(

@@ -192,7 +192,9 @@ public class PublicHostResolverService {
         RegionProfile region = regionDefaults.requireSelfServe(countryCode);
 
         boolean slugChosen = requestedSlug != null && !requestedSlug.isBlank();
-        String slug = slugChosen ? nameToSlug(requestedSlug) : nameToSlug(name);
+        // A chosen handle keeps a hyphen the owner typed. The default from the
+        // business name never inserts one.
+        String slug = slugChosen ? nameToSlug(requestedSlug) : compactShopHandle(name);
         if (slug.isBlank()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST, "Could not generate a valid slug from the provided name");
@@ -204,7 +206,12 @@ public class PublicHostResolverService {
                         HttpStatus.CONFLICT,
                         "That shop address is already taken. Try a different one.");
             }
-            slug = slug + "-" + java.util.UUID.randomUUID().toString().substring(0, 6);
+            String suffix = java.util.UUID.randomUUID().toString().substring(0, 6);
+            int room = 191 - suffix.length();
+            if (slug.length() > room) {
+                slug = slug.substring(0, Math.max(room, 0));
+            }
+            slug = slug + suffix;
         }
 
         // Ensure the subdomain isn't already taken
@@ -266,8 +273,9 @@ public class PublicHostResolverService {
     }
 
     /**
-     * Converts a business display name into a URL-safe slug:
-     * lowercase, whitespace→hyphen, strip non-alphanumeric (except hyphens).
+     * Lookup slug: lowercase, whitespace→hyphen, strip non-alphanumeric
+     * (except hyphens). Also used when the owner typed their own handle,
+     * so a hyphen they chose is kept.
      */
     private String nameToSlug(String name) {
         if (name == null || name.isBlank()) {
@@ -279,6 +287,18 @@ public class PublicHostResolverService {
                 .replaceAll("[^a-z0-9-]", "")
                 .replaceAll("-{2,}", "-")
                 .replaceAll("^-+|-+$", "");
+    }
+
+    /**
+     * Default shop address from a display name. Letters and numbers only —
+     * no hyphen unless the owner typed one into the requested handle.
+     */
+    private String compactShopHandle(String name) {
+        if (name == null || name.isBlank()) {
+            return "";
+        }
+        String compact = name.trim().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+        return compact.length() <= 180 ? compact : compact.substring(0, 180);
     }
 
     private PublicHostResolveResponse toResponse(Business business) {

@@ -135,6 +135,10 @@ abstract class ServiceSaleTestSupport {
     @Autowired
     protected zelisline.ub.serviceops.repository.StaffLedgerEntryRepository staffLedgerEntryRepository;
     @Autowired
+    protected zelisline.ub.posdraft.repository.PosDraftRepository posDraftRepository;
+    @Autowired
+    protected zelisline.ub.posdraft.repository.PosDraftLineRepository posDraftLineRepository;
+    @Autowired
     protected zelisline.ub.credits.repository.CustomerRepository customerRepository;
     @Autowired
     protected zelisline.ub.credits.repository.CustomerPhoneRepository customerPhoneRepository;
@@ -167,6 +171,8 @@ abstract class ServiceSaleTestSupport {
 
     @BeforeEach
     void seed() throws Exception {
+        posDraftLineRepository.deleteAll();
+        posDraftRepository.deleteAll();
         staffLedgerEntryRepository.deleteAll();
         refundPaymentRepository.deleteAll();
         refundLineRepository.deleteAll();

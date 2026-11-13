@@ -51,6 +51,7 @@ public class CommissionsController {
     private static final String TILL_DEVICE_HEADER = zelisline.ub.till.application.TillDeviceService.TILL_DEVICE_HEADER;
 
     private final StaffEarningsService staffEarningsService;
+    private final zelisline.ub.serviceops.application.ServiceInsightsService serviceInsightsService;
     private final StaffProfileService staffProfileService;
     private final RequestPermissionService permissionService;
     private final zelisline.ub.tenancy.application.BranchResolutionService branchResolutionService;
@@ -90,6 +91,35 @@ public class CommissionsController {
         LocalDate end = to != null ? to : start;
         requireSanePeriod(start, end);
         return staffEarningsService.statement(TenantRequestIds.resolveBusinessId(request), start, end);
+    }
+
+    /** What each service and each staff member brought in, less commission. */
+    @GetMapping("/reports/services")
+    @PreAuthorize("hasPermission(null, 'commissions.read')")
+    public zelisline.ub.serviceops.api.dto.CommissionDtos.ServiceReportResponse serviceReport(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        var caller = CurrentTenantUser.requireHuman(request);
+        LocalDate today = LocalDate.now(NAIROBI);
+        LocalDate start = from != null ? from : today;
+        LocalDate end = to != null ? to : start;
+        requireSanePeriod(start, end);
+        // A role locked to one branch sees that branch only, whatever it asks for.
+        String branch = branchResolutionService.requireBranchForLockedRole(caller.roleId(), caller.branchId(),
+                branchId == null || branchId.isBlank() ? caller.branchId() : branchId);
+        return serviceInsightsService.report(TenantRequestIds.resolveBusinessId(request), start, end, branch);
+    }
+
+    /** Texts a staff member what they earned today and what they are owed. */
+    @PostMapping("/staff/{staffProfileId}/earnings-sms")
+    @PreAuthorize("hasPermission(null, 'commissions.payout')")
+    public zelisline.ub.serviceops.api.dto.CommissionDtos.EarningsSmsResponse earningsSms(
+            @PathVariable String staffProfileId, HttpServletRequest request) {
+        CurrentTenantUser.requireHuman(request);
+        return serviceInsightsService.sendEarningsSms(TenantRequestIds.resolveBusinessId(request), staffProfileId);
     }
 
     /** One staff member's entries. Open to {@code commissions.read}, or to the staff member themself. */

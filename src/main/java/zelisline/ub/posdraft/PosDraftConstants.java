@@ -7,6 +7,16 @@ public final class PosDraftConstants {
     /** A walk-in service ticket (ADR 0014). */
     public static final String KIND_SERVICE = "SERVICE";
 
+    /** An appointment that has not arrived yet. */
+    public static final String STAGE_BOOKED = "BOOKED";
+    /** A cancelled appointment the customer did not turn up for. */
+    /** A redo that has been done; closed without a sale. */
+    public static final String STAGE_REDO_DONE = "REDO_DONE";
+    public static final String DEPOSIT_HELD = "HELD";
+    public static final String DEPOSIT_APPLIED = "APPLIED";
+    public static final String DEPOSIT_CREDITED = "CREDITED";
+    public static final String DEPOSIT_FORFEITED = "FORFEITED";
+    public static final String STAGE_NO_SHOW = "NO_SHOW";
     public static final String STAGE_WAITING = "WAITING";
     public static final String STAGE_IN_SERVICE = "IN_SERVICE";
     public static final String STAGE_READY_TO_PAY = "READY_TO_PAY";

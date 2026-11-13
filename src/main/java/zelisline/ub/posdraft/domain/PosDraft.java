@@ -107,6 +107,51 @@ public class PosDraft {
     @Column(name = "service_finished_at")
     private Instant serviceFinishedAt;
 
+    /** Appointments only: when the customer is booked to start and finish. */
+    @Column(name = "scheduled_start")
+    private Instant scheduledStart;
+
+    @Column(name = "scheduled_end")
+    private Instant scheduledEnd;
+
+    /** Who booked, when they are not (yet) a customer record. Customer details: never log. */
+    @Column(name = "booking_name", length = 191)
+    private String bookingName;
+
+    @Column(name = "booking_phone", length = 32)
+    private String bookingPhone;
+
+    /** {@code STAFF} when taken at the counter or by phone. */
+    @Column(name = "booking_source", length = 16)
+    private String bookingSource;
+
+    /** Higher is served sooner among waiting tickets; 0 is the normal queue. */
+    @Column(name = "queue_priority", nullable = false)
+    private int queuePriority;
+
+    /** Whether to text the customer shortly before a booking. Costs the shop an SMS. */
+    @Column(name = "send_reminder", nullable = false)
+    private boolean sendReminder;
+
+    /** Set when the reminder is claimed for sending, so it is sent at most once. */
+    @Column(name = "reminder_sent_at")
+    private Instant reminderSentAt;
+
+    /** Money taken in advance against this ticket (ADR 0015). */
+    @Column(name = "deposit_amount", precision = 14, scale = 2)
+    private java.math.BigDecimal depositAmount;
+
+    /** {@code HELD}, {@code APPLIED} (spent on the sale), {@code CREDITED} (to the customer's wallet) or {@code FORFEITED}. */
+    @Column(name = "deposit_state", length = 16)
+    private String depositState;
+
+    @Column(name = "deposit_method", length = 32)
+    private String depositMethod;
+
+    /** A free repeat of work that was not right: the sale being put right. Never charged. */
+    @Column(name = "redo_of_sale_id", length = 36)
+    private String redoOfSaleId;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

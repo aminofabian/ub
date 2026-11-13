@@ -37,8 +37,15 @@ public final class ServiceTicketDtos {
             @Size(max = 36) String customerId,
             /** The staff member the customer asked for; null means next available. */
             @Size(max = 36) String requestedStaffProfileId,
-            @NotEmpty @Size(max = 20) @Valid List<TicketLineInput> lines
+            @NotEmpty @Size(max = 20) @Valid List<TicketLineInput> lines,
+            /** For a redo: the sale whose work is being put right. The ticket is then never charged. */
+            @Size(max = 36) String redoOfSaleId
     ) {
+        public CreateServiceTicketRequest(
+                String branchId, String clientTicketId, String customerId, String requestedStaffProfileId,
+                List<TicketLineInput> lines) {
+            this(branchId, clientTicketId, customerId, requestedStaffProfileId, lines, null);
+        }
     }
 
     public record StartTicketRequest(
@@ -55,7 +62,8 @@ public final class ServiceTicketDtos {
     }
 
     public record PayTicketRequest(
-            @NotEmpty @Valid List<PostSalePaymentRequest> payments,
+            /** May be empty when a deposit covers the whole ticket. */
+            @Valid List<PostSalePaymentRequest> payments,
             @Valid List<PostSaleTipRequest> tips,
             @DecimalMin("0") BigDecimal cashReceived,
             Instant clientSoldAt
@@ -88,7 +96,74 @@ public final class ServiceTicketDtos {
             Instant finishedAt,
             String saleId,
             long version,
-            List<TicketLineResponse> lines
+            List<TicketLineResponse> lines,
+            /** Appointments: when the customer is booked for. Null for a walk-in. */
+            Instant scheduledStart,
+            Instant scheduledEnd,
+            String bookingName,
+            String bookingPhone,
+            /** Higher is served sooner among waiting tickets. */
+            int priority,
+            /** Rough minutes until a waiting ticket is likely to start; null when it cannot be estimated. */
+            Integer estimatedWaitMinutes,
+            /** Money taken in advance; null when none. */
+            BigDecimal depositAmount,
+            /** {@code HELD}, {@code APPLIED}, {@code CREDITED} or {@code FORFEITED}. */
+            String depositState,
+            /** Set on a redo: the sale being put right. A redo is never charged. */
+            String redoOfSaleId,
+            boolean sendReminder
+    ) {
+    }
+
+    public record TakeDepositRequest(
+            @NotNull @DecimalMin("1") BigDecimal amount,
+            /** {@code cash} or {@code mpesa_manual}. */
+            @NotBlank @Size(max = 32) String method,
+            @Size(max = 64) String reference
+    ) {
+    }
+
+    public record NoShowRequest(
+            /** True keeps a deposit as credit for the customer; otherwise the shop keeps it. */
+            Boolean keepDepositAsCredit
+    ) {
+    }
+
+    public record FloorStaffResponse(
+            String staffProfileId,
+            String displayName,
+            /** {@code AVAILABLE}, {@code ON_BREAK} or {@code OFF}. */
+            String floorStatus
+    ) {
+    }
+
+    public record SetFloorStatusRequest(@NotBlank @Size(max = 16) String status) {
+    }
+
+    /** Above zero moves a customer up the queue; below zero sends them to the back (skipped). */
+    public record SetPriorityRequest(@NotNull @Min(-9) @Max(9) Integer priority) {
+    }
+
+    public record CreateAppointmentRequest(
+            @NotBlank @Size(max = 36) String branchId,
+            /** Made up once by the client; sending it again returns the same appointment. */
+            @NotBlank @Size(max = 64) String clientTicketId,
+            @NotBlank @Size(max = 36) String staffProfileId,
+            @NotNull Instant start,
+            @NotEmpty @Size(max = 20) @Valid List<TicketLineInput> lines,
+            @Size(max = 36) String customerId,
+            @NotBlank @Size(max = 191) String name,
+            @Size(max = 32) String phone,
+            /** Text the customer shortly before the booking. Needs a phone number; uses SMS credits. */
+            Boolean sendReminder
+    ) {
+    }
+
+    public record RescheduleRequest(
+            @NotNull Instant start,
+            /** Move the booking to someone else; null keeps the same staff member. */
+            @Size(max = 36) String staffProfileId
     ) {
     }
 
@@ -96,7 +171,9 @@ public final class ServiceTicketDtos {
             String branchId,
             /** Number of chairs at the branch (1..N). */
             int stationCount,
-            List<TicketResponse> tickets
+            List<TicketResponse> tickets,
+            /** Staff who serve customers, with whether each can take the next one. */
+            List<FloorStaffResponse> staff
     ) {
     }
 

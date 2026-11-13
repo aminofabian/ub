@@ -206,6 +206,8 @@ public final class AuditEventTypes {
     public static final String CATALOG_RESOLVED = "catalog.resolved";
     public static final String CATALOG_PACK_ADOPTED = "catalog.pack_adopted";
     public static final String BUSINESS_REGION_CHANGED = "business.region_changed";
+    /** A shop switched its primary free address (name.kiosk.ke); old/new carry the hostnames. */
+    public static final String BUSINESS_ADDRESS_CHANGED = "business.address_changed";
     /**
      * Owner/admin flipped a cashier capability flag (allow clear sale, price
      * edit, drawout, ...). One row per changed flag; old/new carry the boolean.

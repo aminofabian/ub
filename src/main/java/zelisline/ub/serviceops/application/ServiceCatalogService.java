@@ -266,6 +266,21 @@ public class ServiceCatalogService {
         return row;
     }
 
+    /** Planned minutes by service id, for the given ids of this business (deleted ones included). */
+    @Transactional(readOnly = true)
+    public Map<String, Integer> durationsByIds(String businessId, java.util.Collection<String> serviceIds) {
+        Map<String, Integer> out = new HashMap<>();
+        if (serviceIds == null || serviceIds.isEmpty()) {
+            return out;
+        }
+        for (ServiceOffering service : serviceRepository.findAllById(serviceIds)) {
+            if (businessId.equals(service.getBusinessId())) {
+                out.put(service.getId(), service.getDurationMinutes());
+            }
+        }
+        return out;
+    }
+
     // ------------------------------------------------------------------- helpers
 
     /** Two creates racing past the name check land on the unique key; report that as the 409 it is. */

@@ -492,6 +492,32 @@ public class StaffProfileService {
                 businessId, EmploymentStatus.TERMINATED));
     }
 
+    /** Sets whether a staff member can take the next customer. Unknown values are refused. */
+    @Transactional
+    public String setFloorStatus(String businessId, String staffProfileId, String status) {
+        StaffProfile profile = staffProfileRepository.findByIdAndBusinessId(staffProfileId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Staff member not found"));
+        String normalized = status == null ? "" : status.trim().toUpperCase(Locale.ROOT);
+        if (!"AVAILABLE".equals(normalized) && !"ON_BREAK".equals(normalized) && !"OFF".equals(normalized)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Status must be AVAILABLE, ON_BREAK or OFF");
+        }
+        profile.setFloorStatus(normalized);
+        staffProfileRepository.save(profile);
+        return normalized;
+    }
+
+    /** Floor status by staff profile id for current, customer-serving staff ({@code AVAILABLE} when unset). */
+    @Transactional(readOnly = true)
+    public Map<String, String> floorStatuses(String businessId) {
+        Map<String, String> out = new LinkedHashMap<>();
+        for (StaffProfile profile : staffProfileRepository.findByBusinessIdOrderByDisplayNameAsc(businessId)) {
+            if (profile.isBookable() && !EmploymentStatus.TERMINATED.equals(profile.getEmploymentStatus())) {
+                out.put(profile.getId(), profile.getFloorStatus() == null ? "AVAILABLE" : profile.getFloorStatus());
+            }
+        }
+        return out;
+    }
+
     // ------------------------------------------------------------ commission plans (ADR 0014)
 
     /** Every staff profile of the business with its commission plan, current staff first by name. */

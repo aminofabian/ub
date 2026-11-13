@@ -52,14 +52,18 @@ public interface PosDraftRepository extends JpaRepository<PosDraft, String> {
             @Param("since") Instant since
     );
 
-    /** Open walk-in service tickets at a branch, oldest first (the queue). */
+    /**
+     * Open service tickets on the floor at a branch (the queue): priority first, then oldest.
+     * Appointments that have not arrived yet are not on the floor.
+     */
     @Query("""
             select d from PosDraft d
              where d.businessId = :businessId
                and d.branchId = :branchId
                and d.status = 'pending'
                and d.draftKind = 'SERVICE'
-             order by d.createdAt asc
+               and d.serviceStage <> 'BOOKED'
+             order by d.queuePriority desc, d.createdAt asc
             """)
     List<PosDraft> findOpenServiceTickets(
             @Param("businessId") String businessId,
@@ -87,6 +91,79 @@ public interface PosDraftRepository extends JpaRepository<PosDraft, String> {
             @Param("businessId") String businessId,
             @Param("branchId") String branchId,
             @Param("stationNo") int stationNo
+    );
+
+    /** Bookings, in any business, that are due a reminder text. */
+    @Query("""
+            select d from PosDraft d
+             where d.draftKind = 'SERVICE'
+               and d.status = 'pending'
+               and d.serviceStage = 'BOOKED'
+               and d.sendReminder = true
+               and d.reminderSentAt is null
+               and d.bookingPhone is not null
+               and d.scheduledStart > :now
+               and d.scheduledStart <= :until
+               and d.createdAt < :bookedBefore
+             order by d.scheduledStart asc
+            """)
+    List<PosDraft> findDueReminders(
+            @Param("now") Instant now,
+            @Param("until") Instant until,
+            @Param("bookedBefore") Instant bookedBefore,
+            org.springframework.data.domain.Pageable page
+    );
+
+    /** Claims a reminder so that only one sender ever texts the customer. @return 1 when claimed */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update versioned PosDraft d
+               set d.reminderSentAt = :now
+             where d.id = :id
+               and d.reminderSentAt is null
+               and d.status = 'pending'
+               and d.serviceStage = 'BOOKED'
+            """)
+    int claimReminder(@Param("id") String id, @Param("now") Instant now);
+
+    /** Appointments at a branch that start within a window, earliest first (the day calendar). */
+    @Query("""
+            select d from PosDraft d
+             where d.businessId = :businessId
+               and d.branchId = :branchId
+               and d.draftKind = 'SERVICE'
+               and d.scheduledStart is not null
+               and d.scheduledStart >= :from
+               and d.scheduledStart < :to
+             order by d.scheduledStart asc
+            """)
+    List<PosDraft> findAppointmentsBetween(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("from") Instant from,
+            @Param("to") Instant to
+    );
+
+    /**
+     * A staff member's booked appointments that overlap a time window. A locking read, taken
+     * under that staff member's row lock, so two people booking the same slot cannot both pass.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select d from PosDraft d
+             where d.businessId = :businessId
+               and d.draftKind = 'SERVICE'
+               and d.status = 'pending'
+               and d.serviceStage = 'BOOKED'
+               and d.requestedStaffProfileId = :staffProfileId
+               and d.scheduledStart < :end
+               and d.scheduledEnd > :start
+            """)
+    List<PosDraft> findBookedOverlapping(
+            @Param("businessId") String businessId,
+            @Param("staffProfileId") String staffProfileId,
+            @Param("start") Instant start,
+            @Param("end") Instant end
     );
 
     List<PosDraft> findByBusinessIdAndShiftIdAndStatus(

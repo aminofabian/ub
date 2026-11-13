@@ -23,6 +23,13 @@ import zelisline.ub.posdraft.PosDraftConstants;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.posdraft.api.dto.ServiceTicketDtos.ServiceBoardResponse;
 import zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CancelTicketRequest;
+import zelisline.ub.posdraft.api.dto.ServiceTicketDtos.TakeDepositRequest;
+import zelisline.ub.posdraft.api.dto.ServiceTicketDtos.NoShowRequest;
+import zelisline.ub.posdraft.api.dto.ServiceTicketDtos.SetPriorityRequest;
+import zelisline.ub.posdraft.api.dto.ServiceTicketDtos.SetFloorStatusRequest;
+import zelisline.ub.posdraft.api.dto.ServiceTicketDtos.FloorStaffResponse;
+import zelisline.ub.posdraft.api.dto.ServiceTicketDtos.RescheduleRequest;
+import zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CreateAppointmentRequest;
 import zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CreateServiceTicketRequest;
 import zelisline.ub.posdraft.api.dto.ServiceTicketDtos.PaidTicketResponse;
 import zelisline.ub.posdraft.api.dto.ServiceTicketDtos.PayTicketRequest;
@@ -47,6 +54,7 @@ public class ServiceTicketController {
 
     private final ServiceTicketService serviceTicketService;
     private final BranchResolutionService branchResolutionService;
+    private final zelisline.ub.payroll.application.StaffProfileService staffProfileService;
     private final zelisline.ub.platform.security.CurrentUserPermissions currentUserPermissions;
 
     @GetMapping
@@ -64,7 +72,8 @@ public class ServiceTicketController {
         String branch = branchResolutionService.requireBranchForLockedRole(
                 caller.roleId(), caller.branchId(), body.branchId());
         CreateServiceTicketRequest safe = new CreateServiceTicketRequest(
-                branch, body.clientTicketId(), body.customerId(), body.requestedStaffProfileId(), body.lines());
+                branch, body.clientTicketId(), body.customerId(), body.requestedStaffProfileId(), body.lines(),
+                body.redoOfSaleId());
         return serviceTicketService.create(TenantRequestIds.resolveBusinessId(request), safe, caller.userId());
     }
 
@@ -112,7 +121,9 @@ public class ServiceTicketController {
         // Anyone who can sell may note a customer who left the queue. Once the customer has been
         // served, cancelling throws away work that should be paid for, so it needs the same
         // permission as clearing any held sale.
-        if (ticket.open() && !PosDraftConstants.STAGE_WAITING.equals(ticket.stage())) {
+        if (ticket.open()
+                && !PosDraftConstants.STAGE_WAITING.equals(ticket.stage())
+                && !PosDraftConstants.STAGE_BOOKED.equals(ticket.stage())) {
             currentUserPermissions.requireAny("pos.drafts.cancel.any", "services.catalog.manage");
         }
         return serviceTicketService.cancel(TenantRequestIds.resolveBusinessId(request), id, body, caller.userId());
@@ -133,6 +144,94 @@ public class ServiceTicketController {
         return serviceTicketService.pay(
                 TenantRequestIds.resolveBusinessId(request), id, body, idempotencyKey, caller.userId(),
                 caller.roleId(), request.getHeader(TillDeviceService.TILL_DEVICE_HEADER));
+    }
+
+    @PostMapping("/{id}/priority")
+    public TicketResponse setPriority(
+            @PathVariable String id, @Valid @RequestBody SetPriorityRequest body, HttpServletRequest request) {
+        requireOwnBranch(CurrentTenantUser.requireHuman(request), request, id);
+        return serviceTicketService.setPriority(TenantRequestIds.resolveBusinessId(request), id, body.priority());
+    }
+
+    /** Whether a staff member can take the next customer. Set from the floor board. */
+    @PostMapping("/staff/{staffProfileId}/floor-status")
+    public FloorStaffResponse setFloorStatus(
+            @PathVariable String staffProfileId,
+            @Valid @RequestBody SetFloorStatusRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String status = staffProfileService.setFloorStatus(businessId, staffProfileId, body.status());
+        return new FloorStaffResponse(staffProfileId,
+                staffProfileService.displayNamesByIds(businessId, java.util.List.of(staffProfileId))
+                        .getOrDefault(staffProfileId, "Staff"),
+                status);
+    }
+
+    // ------------------------------------------------------------ appointments
+
+    @GetMapping("/appointments")
+    public java.util.List<TicketResponse> appointments(
+            @RequestParam String branchId,
+            @RequestParam java.time.Instant from,
+            @RequestParam java.time.Instant to,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
+        String branch = branchResolutionService.requireBranchForLockedRole(
+                caller.roleId(), caller.branchId(), branchId);
+        if (!to.isAfter(from) || java.time.Duration.between(from, to).toDays() > 62) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a period of up to two months");
+        }
+        return serviceTicketService.appointments(TenantRequestIds.resolveBusinessId(request), branch, from, to);
+    }
+
+    @PostMapping("/appointments")
+    @ResponseStatus(HttpStatus.CREATED)
+    public TicketResponse book(@Valid @RequestBody CreateAppointmentRequest body, HttpServletRequest request) {
+        TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
+        String branch = branchResolutionService.requireBranchForLockedRole(
+                caller.roleId(), caller.branchId(), body.branchId());
+        CreateAppointmentRequest safe = new CreateAppointmentRequest(
+                branch, body.clientTicketId(), body.staffProfileId(), body.start(), body.lines(),
+                body.customerId(), body.name(), body.phone(), body.sendReminder());
+        return serviceTicketService.book(TenantRequestIds.resolveBusinessId(request), safe, caller.userId());
+    }
+
+    @PostMapping("/{id}/reschedule")
+    public TicketResponse reschedule(
+            @PathVariable String id, @Valid @RequestBody RescheduleRequest body, HttpServletRequest request) {
+        requireOwnBranch(CurrentTenantUser.requireHuman(request), request, id);
+        return serviceTicketService.reschedule(TenantRequestIds.resolveBusinessId(request), id, body);
+    }
+
+    @PostMapping("/{id}/arrive")
+    public TicketResponse arrive(@PathVariable String id, HttpServletRequest request) {
+        requireOwnBranch(CurrentTenantUser.requireHuman(request), request, id);
+        return serviceTicketService.arrive(TenantRequestIds.resolveBusinessId(request), id);
+    }
+
+    @PostMapping("/{id}/no-show")
+    public TicketResponse noShow(
+            @PathVariable String id,
+            @RequestBody(required = false) NoShowRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
+        requireOwnBranch(caller, request, id);
+        return serviceTicketService.noShow(TenantRequestIds.resolveBusinessId(request), id, caller.userId(),
+                body != null && Boolean.TRUE.equals(body.keepDepositAsCredit()));
+    }
+
+    /** Money taken in advance against a ticket or booking. Cash goes into the open shift's drawer. */
+    @PostMapping("/{id}/deposit")
+    public TicketResponse takeDeposit(
+            @PathVariable String id, @Valid @RequestBody TakeDepositRequest body, HttpServletRequest request) {
+        TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
+        requireOwnBranch(caller, request, id);
+        return serviceTicketService.takeDeposit(TenantRequestIds.resolveBusinessId(request), id, body,
+                caller.userId(), request.getHeader(TillDeviceService.TILL_DEVICE_HEADER));
     }
 
     /** A branch-locked role may only act on tickets of its own branch, as with sales. */

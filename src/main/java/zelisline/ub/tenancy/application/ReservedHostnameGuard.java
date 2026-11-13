@@ -56,6 +56,11 @@ public class ReservedHostnameGuard {
         this.slugDomainSuffix = blankToNull(slugDomainSuffix);
     }
 
+    /** True for a single label (the part before the shared parent zone) that tenants may never hold. */
+    public boolean isReservedLabel(String label) {
+        return label != null && HARD_RESERVED.contains(label.trim().toLowerCase(Locale.ROOT));
+    }
+
     public void assertClaimable(String hostname) {
         String host = normalize(hostname);
         if (host == null || host.isBlank()) {

@@ -178,6 +178,20 @@ public class WalletLedgerService {
         return restoreAr;
     }
 
+    /**
+     * Credits the wallet with money the business was already holding for this customer under
+     * another liability (a booking deposit, a prepaid session). The caller posts the journal that
+     * moves it between the two liability accounts; no cash moves here.
+     */
+    @Transactional
+    public void creditWalletFromHeldLiability(String businessId, String customerId, BigDecimal amount, String walletTxnType) {
+        BigDecimal amt = requirePositive(amount);
+        if (blank(customerId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer required for wallet");
+        }
+        creditWallet(businessId, customerId, null, walletTxnType, amt, null);
+    }
+
     @Transactional
     public void refundToWallet(String businessId, String saleId, String customerId, BigDecimal amount) {
         BigDecimal amt = n(amount);

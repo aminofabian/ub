@@ -18,6 +18,9 @@ public interface DomainMappingRepository extends JpaRepository<DomainMapping, St
 
     List<DomainMapping> findByBusinessIdAndDeletedAtIsNull(String businessId);
 
+    /** Every mapping the business ever had, removed ones included (address-change limits count those too). */
+    List<DomainMapping> findByBusinessId(String businessId);
+
     List<DomainMapping> findByDeletedAtIsNull();
 
     List<DomainMapping> findByStatusAndDeletedAtIsNull(zelisline.ub.tenancy.domain.DomainStatus status);

@@ -50,6 +50,13 @@ public class StaffProfile {
     @Column(name = "loginless_name_key", length = 255)
     private String loginlessNameKey;
 
+    /**
+     * Whether this person can take the next customer: {@code AVAILABLE}, {@code ON_BREAK},
+     * {@code OFF}, or {@code null} (treated as available). Set on the floor board; not attendance.
+     */
+    @Column(name = "floor_status", length = 16)
+    private String floorStatus;
+
     /** The chair (station, room) this person usually works at, 1-based; {@code null} if none. */
     @Column(name = "usual_station_no")
     private Integer usualStationNo;

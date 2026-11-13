@@ -60,6 +60,36 @@ public class DrawerPaidOutService {
         return shift.getId();
     }
 
+    /**
+     * Cash taken at the till that is not a sale (a booking deposit, a prepaid package). It joins
+     * the drawer so the shift still balances.
+     *
+     * @return the id of the shift the cash went into
+     */
+    @Transactional
+    public String payIn(
+            String businessId,
+            String branchId,
+            String tillDeviceKey,
+            BigDecimal amount,
+            String referenceId,
+            String userId
+    ) {
+        BigDecimal cash = amount.setScale(2, RoundingMode.HALF_UP);
+        if (cash.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Amount must be positive");
+        }
+        Shift shift = openShiftResolver.findOpenForUpdate(businessId, branchId, tillDeviceKey)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.CONFLICT, "Open a shift on this till before taking cash"));
+        shift.setExpectedClosingCash(shift.getExpectedClosingCash().add(cash).setScale(2, RoundingMode.HALF_UP));
+        shiftRepository.save(shift);
+        cashDrawerLedgerService.recordAmount(
+                shift.getId(), CashDrawerLedgerService.EVENT_PAID_IN, CashDrawerLedgerService.REF_ADJUSTMENT,
+                referenceId, cash, CashDrawerLedgerService.CONFIDENCE_CONFIRMED, userId, null);
+        return shift.getId();
+    }
+
     /** Puts a mistaken payout back, if the shift it came from is still open. */
     @Transactional
     public void reverse(String businessId, String shiftId, BigDecimal amount, String referenceId, String userId) {

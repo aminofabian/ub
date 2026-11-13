@@ -66,6 +66,48 @@ public final class CommissionDtos {
     ) {
     }
 
+    /** What each service brought in and what it cost in commission, for a period. */
+    public record ServiceReportResponse(
+            LocalDate from,
+            LocalDate to,
+            String branchId,
+            List<ServiceReportRow> services,
+            List<StaffReportRow> staff,
+            BigDecimal revenue,
+            BigDecimal commission,
+            /** Revenue less commission. Tips and the cost of products used are not in it. */
+            BigDecimal contribution
+    ) {
+    }
+
+    public record ServiceReportRow(
+            String serviceId,
+            String name,
+            long timesDone,
+            BigDecimal revenue,
+            BigDecimal commission,
+            BigDecimal contribution,
+            /** Planned minutes of work, from the duration set on the service when it was sold. */
+            long minutes
+    ) {
+    }
+
+    public record StaffReportRow(
+            String staffProfileId,
+            String displayName,
+            long servicesDone,
+            BigDecimal revenue,
+            BigDecimal commission,
+            BigDecimal tips,
+            long minutes,
+            /** Free redos this person did in the period. */
+            long redos
+    ) {
+    }
+
+    public record EarningsSmsResponse(boolean sent, String phoneMasked, String message) {
+    }
+
     public record LedgerEntryResponse(
             String id,
             String staffProfileId,

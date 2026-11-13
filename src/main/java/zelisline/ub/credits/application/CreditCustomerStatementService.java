@@ -109,6 +109,8 @@ public class CreditCustomerStatementService {
                 || WalletTxnTypes.CREDIT_COUNTER_TOPUP.equals(type)
                 || WalletTxnTypes.CREDIT_MPESA_STK.equals(type)
                 || WalletTxnTypes.CREDIT_REFUND.equals(type)
+                || WalletTxnTypes.CREDIT_DEPOSIT_RELEASE.equals(type)
+                || WalletTxnTypes.CREDIT_PACKAGE_SESSION.equals(type)
                 || WalletTxnTypes.REVERSAL_VOID_SPEND_RESTORE.equals(type);
         return c ? amt : zeroMoney();
     }

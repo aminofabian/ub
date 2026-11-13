@@ -237,9 +237,12 @@ public class TillDeviceService {
         if ("ledger".equals(value)) {
             return "ledger";
         }
+        if ("counter".equals(value)) {
+            return "counter";
+        }
         throw new ResponseStatusException(
                 HttpStatus.BAD_REQUEST,
-                "cashierTemplate must be shelf or ledger"
+                "cashierTemplate must be shelf, ledger, or counter"
         );
     }
 

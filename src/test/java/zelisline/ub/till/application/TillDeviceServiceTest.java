@@ -67,6 +67,11 @@ class TillDeviceServiceTest {
     }
 
     @Test
+    void resolveCashierTemplateAcceptsCounter() {
+        assertEquals("counter", TillDeviceService.resolveCashierTemplate(" Counter "));
+    }
+
+    @Test
     void resolveCashierTemplateRejectsUnknown() {
         ResponseStatusException ex = assertThrows(
                 ResponseStatusException.class,

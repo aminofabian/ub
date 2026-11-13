@@ -497,6 +497,58 @@ class ServiceCatalogIT {
                 .andExpect(jsonPath("$.content[0].id").value(id));
     }
 
+    @Test
+    void sellersDoNotSeeWhatAServicePaysItsPerformer() throws Exception {
+        String body = mockMvc.perform(as(post("/api/v1/services"), TENANT_A, ownerA, ROLE_OWNER)
+                        .content("{\"name\":\"Colour\",\"durationMinutes\":90,\"price\":1500,"
+                                + "\"commissionType\":\"PERCENT\",\"commissionValue\":40}"))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String id = JsonPath.read(body, "$.id");
+
+        mockMvc.perform(as(get("/api/v1/services"), TENANT_A, ownerA, ROLE_OWNER))
+                .andExpect(jsonPath("$.content[0].commissionValue").value(40.00));
+        mockMvc.perform(as(get("/api/v1/services"), TENANT_A, cashierA, ROLE_CASHIER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].name").value("Colour"))
+                .andExpect(jsonPath("$.content[0].price").value(1500.00))
+                .andExpect(jsonPath("$.content[0].commissionType").doesNotExist())
+                .andExpect(jsonPath("$.content[0].commissionValue").doesNotExist());
+        mockMvc.perform(as(get("/api/v1/services/" + id), TENANT_A, cashierA, ROLE_CASHIER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.commissionValue").doesNotExist());
+    }
+
+    @Test
+    void theTillCanListWhoServesCustomers() throws Exception {
+        StaffProfile barber = staffProfileService.ensureProfile(TENANT_A, viewerA.getId());
+        barber.setDisplayName("John");
+        barber.setBookable(true);
+        staffProfileService.save(barber);
+        // Has a profile but does not serve customers.
+        staffProfileService.ensureProfile(TENANT_A, cashierA.getId());
+        // Left the shop.
+        StaffProfile gone = staffProfileService.ensureProfile(TENANT_A, ownerA.getId());
+        gone.setBookable(true);
+        gone.setEmploymentStatus(EmploymentStatus.TERMINATED);
+        staffProfileService.save(gone);
+        // Another business's barber.
+        StaffProfile other = staffProfileService.ensureProfile(TENANT_B, ownerB.getId());
+        other.setBookable(true);
+        staffProfileService.save(other);
+
+        mockMvc.perform(as(get("/api/v1/services/performers"), TENANT_A, cashierA, ROLE_CASHIER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].staffProfileId").value(barber.getId()))
+                .andExpect(jsonPath("$[0].displayName").value("John"))
+                // Names only: nothing about pay.
+                .andExpect(jsonPath("$[0].rate").doesNotExist())
+                .andExpect(jsonPath("$[0].type").doesNotExist());
+        mockMvc.perform(as(get("/api/v1/services/performers"), TENANT_A, viewerA, ROLE_VIEWER))
+                .andExpect(status().isForbidden());
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private String createCategory(String tenant, User user, String name) throws Exception {

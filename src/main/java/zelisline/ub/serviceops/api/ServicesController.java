@@ -1,5 +1,7 @@
 package zelisline.ub.serviceops.api;
 
+import java.util.List;
+
 import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -22,6 +24,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.serviceops.api.dto.CreateServiceRequest;
 import zelisline.ub.serviceops.api.dto.PatchServiceRequest;
+import zelisline.ub.serviceops.api.dto.ServicePerformerResponse;
 import zelisline.ub.serviceops.api.dto.ServiceResponse;
 import zelisline.ub.serviceops.api.dto.SetServiceStaffRequest;
 import zelisline.ub.serviceops.application.ServiceCatalogService;
@@ -38,6 +41,8 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class ServicesController {
 
     private final ServiceCatalogService serviceCatalogService;
+    private final zelisline.ub.payroll.application.StaffProfileService staffProfileService;
+    private final zelisline.ub.platform.security.CurrentUserPermissions currentUserPermissions;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'sales.sell') or hasPermission(null, 'services.catalog.manage')")
@@ -50,15 +55,31 @@ public class ServicesController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        return serviceCatalogService.listServices(
+        Page<ServiceResponse> services = serviceCatalogService.listServices(
                 TenantRequestIds.resolveBusinessId(request), categoryId, active, q, page, size);
+        // What a service pays its performer is not a seller's business.
+        return currentUserPermissions.has(ServiceCatalogService.PERM_MANAGE)
+                ? services
+                : services.map(ServiceResponse::withoutCommission);
+    }
+
+    /** Staff who serve customers, for the till's "who did it" picker. Names only. */
+    @GetMapping("/performers")
+    @PreAuthorize("hasPermission(null, 'sales.sell') or hasPermission(null, 'services.catalog.manage')")
+    public List<ServicePerformerResponse> performers(HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        return staffProfileService.commissionPlans(TenantRequestIds.resolveBusinessId(request)).stream()
+                .filter(plan -> plan.current() && plan.bookable())
+                .map(plan -> new ServicePerformerResponse(plan.staffProfileId(), plan.displayName()))
+                .toList();
     }
 
     @GetMapping("/{id}")
     @PreAuthorize("hasPermission(null, 'sales.sell') or hasPermission(null, 'services.catalog.manage')")
     public ServiceResponse get(@PathVariable String id, HttpServletRequest request) {
         CurrentTenantUser.require(request);
-        return serviceCatalogService.getService(TenantRequestIds.resolveBusinessId(request), id);
+        ServiceResponse service = serviceCatalogService.getService(TenantRequestIds.resolveBusinessId(request), id);
+        return currentUserPermissions.has(ServiceCatalogService.PERM_MANAGE) ? service : service.withoutCommission();
     }
 
     @PostMapping

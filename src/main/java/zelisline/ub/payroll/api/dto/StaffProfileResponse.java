@@ -31,7 +31,8 @@ public record StaffProfileResponse(
             boolean includeInPayroll,
             boolean prorateJoinMonth,
             String joinPayMode,
-            boolean bookable
+            boolean bookable,
+            Integer usualStationNo
     ) {
     }
 

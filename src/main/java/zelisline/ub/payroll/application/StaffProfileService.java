@@ -287,6 +287,9 @@ public class StaffProfileService {
         if (body.bookable() != null) {
             profile.setBookable(body.bookable());
         }
+        if (body.usualStationNo() != null) {
+            profile.setUsualStationNo(body.usualStationNo() == 0 ? null : body.usualStationNo());
+        }
     }
 
     private StaffProfile createDefault(String businessId, String userId) {
@@ -338,7 +341,8 @@ public class StaffProfileService {
                 profile.isIncludeInPayroll(),
                 profile.isProrateJoinMonth(),
                 resolveJoinPayMode(profile),
-                profile.isBookable()
+                profile.isBookable(),
+                profile.getUsualStationNo()
         );
 
         StaffProfileResponse.PrivateFields priv = null;
@@ -380,7 +384,8 @@ public class StaffProfileService {
                 true,
                 true,
                 JoinPayMode.HALF,
-                false
+                false,
+                null
         );
         StaffProfileResponse.PrivateFields priv = null;
         if (includePrivate) {

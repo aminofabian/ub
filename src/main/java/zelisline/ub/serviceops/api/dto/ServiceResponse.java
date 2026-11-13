@@ -19,4 +19,9 @@ public record ServiceResponse(
         List<String> staffProfileIds,
         long version
 ) {
+    /** The same service without its commission override, for callers who only sell. */
+    public ServiceResponse withoutCommission() {
+        return new ServiceResponse(id, categoryId, name, description, durationMinutes, price, priceIsVariable,
+                null, null, sortOrder, active, staffProfileIds, version);
+    }
 }

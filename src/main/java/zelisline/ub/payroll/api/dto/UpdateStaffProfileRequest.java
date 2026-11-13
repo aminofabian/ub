@@ -22,6 +22,8 @@ public record UpdateStaffProfileRequest(
         @Size(max = 50) String emergencyContactPhone,
         Map<String, Object> bankDetails,
         String notes,
-        Boolean bookable
+        Boolean bookable,
+        /** The chair this person usually works at (1-based); 0 clears it. */
+        @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(50) Integer usualStationNo
 ) {
 }

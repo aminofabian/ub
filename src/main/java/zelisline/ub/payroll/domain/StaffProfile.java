@@ -50,6 +50,10 @@ public class StaffProfile {
     @Column(name = "loginless_name_key", length = 255)
     private String loginlessNameKey;
 
+    /** The chair (station, room) this person usually works at, 1-based; {@code null} if none. */
+    @Column(name = "usual_station_no")
+    private Integer usualStationNo;
+
     /** How this person earns on services: {@code PERCENT}, {@code FIXED} or {@code null} for none. */
     @Column(name = "commission_type", length = 16)
     private String commissionType;

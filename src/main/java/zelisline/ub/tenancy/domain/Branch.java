@@ -47,6 +47,10 @@ public class Branch {
     @Column(name = "restock_cover_days", nullable = false)
     private int restockCoverDays = 3;
 
+    /** Chairs, stations or rooms where a customer is served, numbered 1..N. 0 for a retail branch. */
+    @Column(name = "service_station_count", nullable = false)
+    private int serviceStationCount;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

@@ -731,6 +731,9 @@ public class SaleService {
         row.setDisplayName(name);
         row.setServiceId(service.serviceId());
         row.setPerformerStaffProfileId(line.performerStaffProfileId().trim());
+        row.setServiceHelpers(zelisline.ub.serviceops.domain.ServiceHelpers.encode(helpersOf(line)));
+        row.setPerformerAmount(line.performerAmount() == null
+                ? null : line.performerAmount().setScale(MONEY_SCALE, RoundingMode.HALF_UP));
         row.setServiceMinutes(service.durationMinutes());
         row.setQuantity(qty);
         row.setUnitPrice(unitPrice);
@@ -970,6 +973,12 @@ public class SaleService {
             if (line.isService() && line.performerStaffProfileId() != null) {
                 performers.add(line.performerStaffProfileId().trim());
             }
+            // Whoever helped on a service worked on it too, and a customer may tip them.
+            if (line.isService() && line.helpers() != null) {
+                for (var helper : line.helpers()) {
+                    performers.add(helper.staffProfileId().trim());
+                }
+            }
         }
         for (PostSaleTipRequest tip : req.tips()) {
             String staffId = tip.staffProfileId() == null ? "" : tip.staffProfileId().trim();
@@ -1006,7 +1015,9 @@ public class SaleService {
                     item.getPerformerStaffProfileId(),
                     item.getLineTotal(),
                     item.getTaxAmount(),
-                    item.getQuantity()));
+                    item.getQuantity(),
+                    zelisline.ub.serviceops.domain.ServiceHelpers.decode(item.getServiceHelpers()),
+                    item.getPerformerAmount()));
         }
         return out;
     }
@@ -1301,6 +1312,59 @@ public class SaleService {
         } catch (ResponseStatusException ex) {
             throw new ResponseStatusException(ex.getStatusCode(), prefix + ex.getReason());
         }
+        java.util.Set<String> sharing = new java.util.HashSet<>();
+        sharing.add(line.performerStaffProfileId().trim());
+        List<zelisline.ub.serviceops.domain.ServiceHelpers.Helper> helpers;
+        try {
+            helpers = helpersOf(line);
+        } catch (ResponseStatusException ex) {
+            throw new ResponseStatusException(ex.getStatusCode(), prefix + ex.getReason());
+        }
+        for (zelisline.ub.serviceops.domain.ServiceHelpers.Helper helper : helpers) {
+            if (!sharing.add(helper.staffProfileId())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        prefix + "each person sharing a service must be named once");
+            }
+            try {
+                // Same rule as the performer: a current, customer-serving member who does this service.
+                serviceSaleSupport.resolve(businessId, line.serviceId(), helper.staffProfileId());
+            } catch (ResponseStatusException ex) {
+                throw new ResponseStatusException(ex.getStatusCode(), prefix + ex.getReason());
+            }
+        }
+        // Amounts typed for this service replace what each person's plan would give. They must be
+        // whole shillings, together no more than the service costs, and set by someone allowed to
+        // decide commission (or already authorised on the visit they come from).
+        List<BigDecimal> setAmounts = new ArrayList<>();
+        if (line.performerAmount() != null) {
+            setAmounts.add(line.performerAmount());
+        }
+        for (zelisline.ub.serviceops.domain.ServiceHelpers.Helper helper : helpers) {
+            if (helper.amount() != null) {
+                setAmounts.add(helper.amount());
+            }
+        }
+        if (!setAmounts.isEmpty()) {
+            BigDecimal sumSet = BigDecimal.ZERO;
+            for (BigDecimal amount : setAmounts) {
+                if (amount.signum() < 0 || amount.stripTrailingZeros().scale() > 0) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            prefix + "an amount paid to staff must be whole shillings, zero or more");
+                }
+                sumSet = sumSet.add(amount);
+            }
+            if (sumSet.compareTo(line.quantity().multiply(line.unitPrice())) > 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        prefix + "the amounts paid to staff come to more than the service costs");
+            }
+            boolean allowed = zelisline.ub.serviceops.application.EarningsApproval.isApproved()
+                    || (roleId != null && (requestPermissionService.hasPermission(roleId, "commissions.plans.manage")
+                            || requestPermissionService.hasPermission(roleId, "commissions.adjust")));
+            if (!allowed) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                        prefix + "you are not allowed to set what staff are paid for a service");
+            }
+        }
         // A fixed-price service sells at its listed price. Only a variable-price service (braids
         // priced by length) or someone allowed to set sell prices may charge something else.
         if (!service.priceIsVariable() && line.unitPrice().compareTo(service.price()) != 0) {
@@ -1312,6 +1376,49 @@ public class SaleService {
                                 + "; refresh the till or ask a manager to change the price");
             }
         }
+    }
+
+    /**
+     * Everyone sharing a service line with its performer. With no shares given the line is split
+     * equally between all of them, performer included. The performer always keeps at least 1%.
+     */
+    private static List<zelisline.ub.serviceops.domain.ServiceHelpers.Helper> helpersOf(PostSaleLineRequest line) {
+        List<zelisline.ub.sales.api.dto.PostSaleLineHelper> asked = new ArrayList<>();
+        if (line.helpers() != null) {
+            asked.addAll(line.helpers());
+        }
+        if (line.assistantStaffProfileId() != null && !line.assistantStaffProfileId().isBlank()) {
+            asked.add(new zelisline.ub.sales.api.dto.PostSaleLineHelper(
+                    line.assistantStaffProfileId(),
+                    line.assistantSharePercent() == null ? new BigDecimal("50") : line.assistantSharePercent()));
+        } else if (line.assistantSharePercent() != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "a share needs someone to give it to");
+        }
+        if (asked.size() > zelisline.ub.serviceops.domain.ServiceHelpers.MAX_HELPERS) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "at most "
+                    + (zelisline.ub.serviceops.domain.ServiceHelpers.MAX_HELPERS + 1) + " people can share one service");
+        }
+        BigDecimal equal = new BigDecimal("100").divide(BigDecimal.valueOf(asked.size() + 1L), 2, RoundingMode.DOWN);
+        List<zelisline.ub.serviceops.domain.ServiceHelpers.Helper> out = new ArrayList<>();
+        BigDecimal total = BigDecimal.ZERO;
+        for (zelisline.ub.sales.api.dto.PostSaleLineHelper helper : asked) {
+            if (helper.staffProfileId() == null || helper.staffProfileId().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "choose who shared the service");
+            }
+            BigDecimal share = (helper.sharePercent() == null ? equal : helper.sharePercent())
+                    .setScale(2, RoundingMode.HALF_UP);
+            if (share.compareTo(BigDecimal.ONE) < 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "each share must be at least 1 percent");
+            }
+            total = total.add(share);
+            out.add(new zelisline.ub.serviceops.domain.ServiceHelpers.Helper(
+                    helper.staffProfileId().trim(), share, helper.amount()));
+        }
+        if (total.compareTo(new BigDecimal("99")) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "the shares must leave at least 1 percent for the person who led the service");
+        }
+        return out;
     }
 
     private void validateAirtimeSaleLine(int i, PostSaleLineRequest line) {

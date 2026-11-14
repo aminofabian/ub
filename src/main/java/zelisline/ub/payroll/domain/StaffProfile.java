@@ -57,6 +57,10 @@ public class StaffProfile {
     @Column(name = "floor_status", length = 16)
     private String floorStatus;
 
+    /** Periods when this person cannot be booked (see {@code StaffTimeOff}); null when none. */
+    @Column(name = "time_off", length = 2000)
+    private String timeOff;
+
     /** The chair (station, room) this person usually works at, 1-based; {@code null} if none. */
     @Column(name = "usual_station_no")
     private Integer usualStationNo;

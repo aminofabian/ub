@@ -66,8 +66,15 @@ public final class ServiceTicketDtos {
             @Valid List<PostSalePaymentRequest> payments,
             @Valid List<PostSaleTipRequest> tips,
             @DecimalMin("0") BigDecimal cashReceived,
-            Instant clientSoldAt
+            Instant clientSoldAt,
+            /** Use one session of this prepaid package toward the ticket. The ticket must name the customer. */
+            @Size(max = 36) String packageId
     ) {
+        public PayTicketRequest(
+                List<PostSalePaymentRequest> payments, List<PostSaleTipRequest> tips,
+                BigDecimal cashReceived, Instant clientSoldAt) {
+            this(payments, tips, cashReceived, clientSoldAt, null);
+        }
     }
 
     public record TicketLineResponse(
@@ -75,8 +82,100 @@ public final class ServiceTicketDtos {
             String serviceId,
             String name,
             BigDecimal unitPrice,
-            BigDecimal lineTotal
+            BigDecimal lineTotal,
+            /** Staff sharing the work on this line with the person serving, each with their share. */
+            List<LineHelper> helpers,
+            /** Who is doing, or did, this service. Null until someone is chosen. */
+            String performerStaffProfileId,
+            String performerName,
+            /** The chair, bed or room it uses; optional. */
+            String resourceId,
+            String resourceName,
+            /** {@code WAITING}, {@code IN_SERVICE} or {@code DONE}. */
+            String stage,
+            Instant startedAt,
+            Instant finishedAt,
+            /** Planned minutes, from the service. */
+            int plannedMinutes,
+            /** What the person leading it is paid for this service when set at the till; null means by their plan. */
+            BigDecimal performerAmount
     ) {
+    }
+
+    public record TicketProductResponse(
+            String id, String itemId, String name, BigDecimal quantity, BigDecimal unitPrice, BigDecimal lineTotal) {
+    }
+
+    /** A product added to a visit. The price is today's shelf price, never the caller's. */
+    public record AddProductRequest(
+            @NotBlank @Size(max = 36) String itemId,
+            @NotNull @DecimalMin("0.001") @Digits(integer = 6, fraction = 3) BigDecimal quantity
+    ) {
+    }
+
+    /** Who does one service of a visit and where. Sent to assign, and to start. */
+    public record LineAssignmentRequest(
+            @Size(max = 36) String performerStaffProfileId,
+            /** Null leaves the resource as it is; blank clears it. */
+            @Size(max = 36) String resourceId
+    ) {
+    }
+
+    public record EarningsShare(String staffProfileId, String staffName, BigDecimal commission, String rule) {
+    }
+
+    public record EarningsLine(
+            String lineId, String name, BigDecimal price, List<EarningsShare> shares,
+            /** The price less every commission on the line. */
+            BigDecimal shopShare
+    ) {
+    }
+
+    public record StaffEarning(String staffProfileId, String staffName, BigDecimal commission) {
+    }
+
+    /** What a visit would pay out if it were paid now. Tips are not in it: they are never revenue. */
+    public record VisitEarningsResponse(
+            String ticketId,
+            BigDecimal serviceTotal,
+            BigDecimal commissionTotal,
+            BigDecimal shopShare,
+            List<EarningsLine> lines,
+            List<StaffEarning> staff
+    ) {
+    }
+
+    public record LineHelper(
+            @NotBlank @Size(max = 36) String staffProfileId,
+            /** Their share of the line in percent; an equal split when left out. */
+            @DecimalMin("1") @jakarta.validation.constraints.DecimalMax("99") BigDecimal sharePercent,
+            /** What they are paid for this service, in whole shillings; null means by their plan. */
+            @DecimalMin("0") @Digits(integer = 9, fraction = 0) BigDecimal amount,
+            /**
+             * A helper role the owner set beforehand. When given, the share and the amount come
+             * from the role and anything sent for them is ignored. Never returned: the line keeps
+             * the pay that was worked out, not the role.
+             */
+            @Size(max = 36) String roleId
+    ) {
+        public LineHelper(String staffProfileId, BigDecimal sharePercent) {
+            this(staffProfileId, sharePercent, null, null);
+        }
+
+        public LineHelper(String staffProfileId, BigDecimal sharePercent, BigDecimal amount) {
+            this(staffProfileId, sharePercent, amount, null);
+        }
+    }
+
+    /**
+     * Everyone working on one service, in one go. The first person leads it; the rest help. An
+     * amount, where given, is what that person is paid for this service instead of their plan.
+     */
+    public record SetTeamRequest(@NotEmpty @Size(max = 6) @Valid List<LineHelper> members) {
+    }
+
+    /** Everyone sharing a line with the person serving. An empty list means they did it alone. */
+    public record SetHelpersRequest(@NotNull @Size(max = 5) @Valid List<LineHelper> helpers) {
     }
 
     public record TicketResponse(
@@ -112,7 +211,11 @@ public final class ServiceTicketDtos {
             String depositState,
             /** Set on a redo: the sale being put right. A redo is never charged. */
             String redoOfSaleId,
-            boolean sendReminder
+            boolean sendReminder,
+            /** The prepaid package a session of which paid for this visit, if any. */
+            String redeemedPackageId,
+            /** Products the customer is buying on this visit, paid for with the services. */
+            List<TicketProductResponse> products
     ) {
     }
 
@@ -156,8 +259,46 @@ public final class ServiceTicketDtos {
             @NotBlank @Size(max = 191) String name,
             @Size(max = 32) String phone,
             /** Text the customer shortly before the booking. Needs a phone number; uses SMS credits. */
-            Boolean sendReminder
+            Boolean sendReminder,
+            /** The chair, bed or room to hold for the booking; optional. */
+            @Size(max = 36) String resourceId
     ) {
+        public CreateAppointmentRequest(
+                String branchId, String clientTicketId, String staffProfileId, Instant start,
+                List<TicketLineInput> lines, String customerId, String name, String phone, Boolean sendReminder) {
+            this(branchId, clientTicketId, staffProfileId, start, lines, customerId, name, phone, sendReminder, null);
+        }
+    }
+
+    /** One block on the calendar: a booking, a service under way or done, time off, or a resource out of use. */
+    public record CalendarEntry(
+            /** {@code BOOKED}, {@code IN_SERVICE}, {@code DONE}, {@code NO_SHOW}, {@code TIME_OFF} or {@code BLOCKED}. */
+            String kind,
+            String ticketId,
+            Long ticketNumber,
+            String title,
+            String customerName,
+            String staffProfileId,
+            String resourceId,
+            Instant start,
+            Instant end
+    ) {
+    }
+
+    public record CalendarColumn(String id, String name) {
+    }
+
+    public record CalendarResponse(
+            String branchId,
+            Instant from,
+            Instant to,
+            List<CalendarColumn> staff,
+            List<CalendarColumn> resources,
+            List<CalendarEntry> entries
+    ) {
+    }
+
+    public record TimeOffRequest(@NotNull Instant from, @NotNull Instant to, @Size(max = 40) String reason) {
     }
 
     public record RescheduleRequest(

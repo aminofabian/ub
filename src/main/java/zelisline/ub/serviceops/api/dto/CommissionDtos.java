@@ -25,7 +25,9 @@ public final class CommissionDtos {
             /** {@code PERCENT}, {@code FIXED} or null for no commission on services. */
             String type,
             BigDecimal rate,
-            BigDecimal productRate
+            BigDecimal productRate,
+            /** Whether this person has a login and can see their own earnings. */
+            boolean canSignIn
     ) {
     }
 
@@ -75,7 +77,9 @@ public final class CommissionDtos {
             List<StaffReportRow> staff,
             BigDecimal revenue,
             BigDecimal commission,
-            /** Revenue less commission. Tips and the cost of products used are not in it. */
+            /** Products used, where a service lists them, at the latest delivery costs. */
+            BigDecimal productCost,
+            /** Revenue less commission and products used. Tips are not in it. */
             BigDecimal contribution
     ) {
     }
@@ -86,6 +90,8 @@ public final class CommissionDtos {
             long timesDone,
             BigDecimal revenue,
             BigDecimal commission,
+            /** Products used: times done multiplied by today's cost of the products the service lists. */
+            BigDecimal productCost,
             BigDecimal contribution,
             /** Planned minutes of work, from the duration set on the service when it was sold. */
             long minutes
@@ -102,6 +108,36 @@ public final class CommissionDtos {
             long minutes,
             /** Free redos this person did in the period. */
             long redos
+    ) {
+    }
+
+    /**
+     * What each chair, bed or room brought in over a period: the services done on it and their
+     * value. {@code unplaced} is work that was paid for with no place recorded against it.
+     */
+    public record ChairReportResponse(
+            LocalDate from,
+            LocalDate to,
+            String branchId,
+            List<ChairReportRow> chairs,
+            BigDecimal revenue,
+            BigDecimal unplacedRevenue,
+            long unplacedServices
+    ) {
+    }
+
+    public record ChairReportRow(
+            String resourceId,
+            String name,
+            String resourceType,
+            /** False for a place taken out of use that still earned something in the period. */
+            boolean active,
+            long servicesDone,
+            /** Visits that had at least one service on this place. */
+            long customers,
+            BigDecimal revenue,
+            /** Planned minutes of the services done on it. */
+            long minutes
     ) {
     }
 

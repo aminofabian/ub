@@ -53,6 +53,12 @@ public record PublicHostResolveResponse(
          * The storefront skips catalog calls when this is false — those endpoints
          * answer 404 until a branch is chosen, which is a setup gap, not an outage.
          */
-        boolean publicCatalogReady
+        boolean publicCatalogReady,
+        /**
+         * When set, the host that was asked about should send the browser here.
+         * Path and query stay. Absent when this host is the one visitors should
+         * stay on.
+         */
+        String canonicalHost
 ) {
 }

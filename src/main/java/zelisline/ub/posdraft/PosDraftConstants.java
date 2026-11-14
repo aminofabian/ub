@@ -12,6 +12,8 @@ public final class PosDraftConstants {
     /** A cancelled appointment the customer did not turn up for. */
     /** A redo that has been done; closed without a sale. */
     public static final String STAGE_REDO_DONE = "REDO_DONE";
+    /** A service of a visit that is finished (its line stage; the visit may still be going on). */
+    public static final String LINE_DONE = "DONE";
     public static final String DEPOSIT_HELD = "HELD";
     public static final String DEPOSIT_APPLIED = "APPLIED";
     public static final String DEPOSIT_CREDITED = "CREDITED";

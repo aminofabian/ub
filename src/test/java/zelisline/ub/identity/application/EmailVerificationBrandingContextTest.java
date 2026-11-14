@@ -57,7 +57,8 @@ class EmailVerificationBrandingContextTest {
                 "KE",
                 java.util.List.of(),
                 new zelisline.ub.tenancy.api.dto.MetaPixelPublicConfig(false, null),
-                true);
+                true,
+                null);
         var ctx = EmailVerificationBrandingContext.fromHost(Optional.of(tenant), "uzapoint.kiosk.ke");
         assertThat(ctx.displayName()).isEqualTo("UzaPoint POS");
         assertThat(ctx.primaryColor()).isEqualTo("#111827");

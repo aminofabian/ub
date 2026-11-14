@@ -14,6 +14,9 @@ public interface ServiceOfferingRepository extends JpaRepository<ServiceOffering
 
     Optional<ServiceOffering> findByIdAndBusinessIdAndDeletedAtIsNull(String id, String businessId);
 
+    /** Services that offer a prepaid package. */
+    java.util.List<ServiceOffering> findByBusinessIdAndPackageSessionsIsNotNullAndDeletedAtIsNull(String businessId);
+
     boolean existsByBusinessIdAndNameKey(String businessId, String nameKey);
 
     boolean existsByBusinessIdAndNameKeyAndIdNot(String businessId, String nameKey, String id);

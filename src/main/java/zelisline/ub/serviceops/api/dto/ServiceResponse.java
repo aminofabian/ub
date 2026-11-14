@@ -17,11 +17,13 @@ public record ServiceResponse(
         boolean active,
         /** Staff profiles that may perform this service; empty means anyone. */
         List<String> staffProfileIds,
-        long version
+        long version,
+        /** What the product for one service costs the shop; null when it uses none. */
+        BigDecimal productCost
 ) {
     /** The same service without its commission override, for callers who only sell. */
     public ServiceResponse withoutCommission() {
         return new ServiceResponse(id, categoryId, name, description, durationMinutes, price, priceIsVariable,
-                null, null, sortOrder, active, staffProfileIds, version);
+                null, null, sortOrder, active, staffProfileIds, version, productCost);
     }
 }

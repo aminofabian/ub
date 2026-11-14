@@ -102,6 +102,20 @@ class ShopAddressServiceTest {
         when(domains.findById(anyString())).thenAnswer(inv -> held.stream()
                 .filter(d -> d.getId().equals(inv.getArgument(0)))
                 .findFirst());
+        when(domains.markDemotedPlatformPrimaryAsRedirect(eq(BUSINESS), anyString(), any())).thenAnswer(inv -> {
+            String keep = inv.getArgument(1);
+            int n = 0;
+            for (DomainMapping d : held) {
+                if (!d.getId().equals(keep)
+                        && d.isPrimary()
+                        && d.getSource() == DomainSource.PLATFORM_SUBDOMAIN
+                        && d.getDeletedAt() == null) {
+                    d.setRedirectToPrimary(true);
+                    n++;
+                }
+            }
+            return n;
+        });
         when(domains.clearPrimaryForBusinessExcept(eq(BUSINESS), anyString(), any())).thenAnswer(inv -> {
             String keep = inv.getArgument(1);
             held.stream().filter(d -> !d.getId().equals(keep)).forEach(d -> d.setPrimary(false));
@@ -146,6 +160,8 @@ class ShopAddressServiceTest {
         assertThat(original.isPrimary()).isFalse();
         assertThat(original.isActive()).isTrue();
         assertThat(original.getDeletedAt()).isNull();
+        assertThat(original.isRedirectToPrimary()).isTrue();
+        assertThat(added.isRedirectToPrimary()).isFalse();
     }
 
     @Test
@@ -158,7 +174,7 @@ class ShopAddressServiceTest {
                 eq("owner@example.com"), anyString(), text.capture(), anyString(), anyString());
         assertThat(text.getValue())
                 .contains("https://kingkong.kiosk.ke")
-                .contains("king-kong.kiosk.ke, still works");
+                .contains("king-kong.kiosk.ke, sends people to the new one");
     }
 
     @Test
@@ -233,7 +249,9 @@ class ShopAddressServiceTest {
         assertThat(back.host()).isEqualTo("king-kong.kiosk.ke");
         assertThat(held).hasSize(2);
         assertThat(held.get(0).isPrimary()).isTrue();
+        assertThat(held.get(0).isRedirectToPrimary()).isFalse();
         assertThat(held.get(1).isPrimary()).isFalse();
+        assertThat(held.get(1).isRedirectToPrimary()).isTrue();
     }
 
     @Test

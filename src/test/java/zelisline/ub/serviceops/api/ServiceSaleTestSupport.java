@@ -313,6 +313,32 @@ abstract class ServiceSaleTestSupport {
         return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText();
     }
 
+    /** A customer with a phone and a credit account (so a wallet), in the main tenant. */
+    protected String seedCustomer(String name, String phone) {
+        zelisline.ub.credits.domain.Customer c = new zelisline.ub.credits.domain.Customer();
+        c.setBusinessId(TENANT);
+        c.setName(name);
+        customerRepository.save(c);
+        zelisline.ub.credits.domain.CustomerPhone ph = new zelisline.ub.credits.domain.CustomerPhone();
+        ph.setBusinessId(TENANT);
+        ph.setCustomerId(c.getId());
+        ph.setPhone(phone);
+        ph.setPrimary(true);
+        customerPhoneRepository.save(ph);
+        zelisline.ub.credits.domain.CreditAccount a = new zelisline.ub.credits.domain.CreditAccount();
+        a.setBusinessId(TENANT);
+        a.setCustomerId(c.getId());
+        a.setCreditLimit(BigDecimal.ZERO);
+        creditAccountRepository.save(a);
+        return c.getId();
+    }
+
+    /** Net credit balance of a ledger account across every journal of the main tenant. */
+    protected BigDecimal accountBalance(String code) {
+        List<JournalLine> all = journalLineRepository.findAll();
+        return credit(all, code).subtract(debit(all, code));
+    }
+
     protected BigDecimal credit(List<JournalLine> lines, String code) {
         String accountId = ledgerAccountRepository.findByBusinessIdAndCode(TENANT, code).orElseThrow().getId();
         return lines.stream().filter(l -> accountId.equals(l.getLedgerAccountId()))

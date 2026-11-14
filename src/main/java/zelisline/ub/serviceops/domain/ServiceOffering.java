@@ -73,8 +73,38 @@ public class ServiceOffering {
     @Column(name = "commission_value", precision = 14, scale = 2)
     private BigDecimal commissionValue;
 
+    /**
+     * What the product for one of these costs the shop, as the owner says it. Taken off the price
+     * before commission when the shop pays commission after product cost (ADR 0019); null: none.
+     */
+    @Column(name = "product_cost", precision = 14, scale = 2)
+    private BigDecimal productCost;
+
     @Column(name = "sort_order", nullable = false)
     private int sortOrder;
+
+    /** The kind of resource this service needs (a chair, a bed); null when any or none will do. */
+    @Column(name = "resource_type", length = 24)
+    private String resourceType;
+
+    /** A prepaid package of this service: how many sessions it holds. Null when none is offered. */
+    @Column(name = "package_sessions")
+    private Integer packageSessions;
+
+    /** What the whole package costs. */
+    @Column(name = "package_price", precision = 14, scale = 2)
+    private BigDecimal packagePrice;
+
+    /** How many days a package lasts after it is bought; null means it does not run out. */
+    @Column(name = "package_valid_days")
+    private Integer packageValidDays;
+
+    /**
+     * Products used up each time this service is done: a JSON list of
+     * {@code {"itemId": "...", "quantity": 0.5}}. Null when none is recorded.
+     */
+    @Column(name = "consumables_json", length = 4000)
+    private String consumablesJson;
 
     @Column(name = "active", nullable = false)
     private boolean active = true;

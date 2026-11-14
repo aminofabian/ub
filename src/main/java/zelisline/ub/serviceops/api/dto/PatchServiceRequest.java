@@ -30,6 +30,8 @@ public record PatchServiceRequest(
         Boolean clearCommission,
         Integer sortOrder,
         Boolean active,
-        Long version
+        Long version,
+        /** What the product for one service costs the shop, in whole shillings; 0 clears it. */
+        @DecimalMin("0") @Digits(integer = 9, fraction = 0) BigDecimal productCost
 ) {
 }

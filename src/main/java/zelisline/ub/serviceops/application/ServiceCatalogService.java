@@ -153,6 +153,7 @@ public class ServiceCatalogService {
         row.setPrice(money(request.price()));
         row.setPriceIsVariable(Boolean.TRUE.equals(request.priceIsVariable()));
         applyCommission(row, request.commissionType(), request.commissionValue());
+        row.setProductCost(productCost(request.productCost()));
         row.setSortOrder(request.sortOrder() != null ? request.sortOrder() : 0);
         row.setActive(true);
         List<String> staffIds = validatedStaffIds(businessId, request.staffProfileIds());
@@ -211,6 +212,9 @@ public class ServiceCatalogService {
             // Type and value always travel together: a lone type would silently reinterpret the
             // stored number (40 % becoming KES 40).
             applyCommission(row, request.commissionType(), request.commissionValue());
+        }
+        if (request.productCost() != null) {
+            row.setProductCost(productCost(request.productCost()));
         }
         if (request.sortOrder() != null) {
             row.setSortOrder(request.sortOrder());
@@ -441,7 +445,13 @@ public class ServiceCatalogService {
                 row.getSortOrder(),
                 row.isActive(),
                 staffProfileIds,
-                version
+                version,
+                row.getProductCost()
         );
+    }
+
+    /** Nothing, or zero, means the service uses no shop product. */
+    private static BigDecimal productCost(BigDecimal sent) {
+        return sent == null || sent.signum() <= 0 ? null : money(sent);
     }
 }

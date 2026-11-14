@@ -56,12 +56,15 @@ public class ServiceReminderService {
     @Value("${app.services.reminders.lead-minutes:120}")
     private int leadMinutes;
 
+    /** A booking made more recently than this is fresh in the customer's mind and is not texted. */
+    @Value("${app.services.reminders.min-age-minutes:30}")
+    private int minAgeMinutes;
+
     /** @return how many reminders were handed to the SMS provider */
     public int sendDue() {
         Instant now = Instant.now();
-        // A booking made in the last half hour is fresh in the customer's mind; do not text it.
         List<PosDraft> due = draftRepository.findDueReminders(
-                now, now.plus(leadMinutes, ChronoUnit.MINUTES), now.minus(30, ChronoUnit.MINUTES),
+                now, now.plus(leadMinutes, ChronoUnit.MINUTES), now.minus(minAgeMinutes, ChronoUnit.MINUTES),
                 PageRequest.of(0, BATCH));
         Map<String, TenantMessagingConfig> configs = new HashMap<>();
         int sent = 0;

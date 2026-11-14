@@ -33,5 +33,23 @@ public final class StoreTypeCodes {
         return false;
     }
 
+    /** True when the business has shop formats and every one of them is a service format: it sells no goods. */
+    public static boolean isServiceOnlyBusiness(Collection<String> storeTypes) {
+        if (storeTypes == null || storeTypes.isEmpty()) {
+            return false;
+        }
+        boolean any = false;
+        for (String raw : storeTypes) {
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            if (!SERVICE_TYPES.contains(raw.trim().toLowerCase(Locale.ROOT))) {
+                return false;
+            }
+            any = true;
+        }
+        return any;
+    }
+
     private StoreTypeCodes() {}
 }

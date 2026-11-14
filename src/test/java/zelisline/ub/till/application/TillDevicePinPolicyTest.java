@@ -64,4 +64,17 @@ class TillDevicePinPolicyTest {
         );
         assertEquals(HttpStatus.FORBIDDEN, unknown.getStatusCode());
     }
+
+    @Test
+    void theRuleAppliesOnlyToPeopleWhoWorkATill() {
+        // A barber who can only see their own earnings is not using a till.
+        assertEquals(false, TillDeviceService.worksATill(java.util.List.of("commissions.read_own")));
+        assertEquals(false, TillDeviceService.worksATill(java.util.List.of()));
+        // Anyone who can sell, refund, void or run a shift is.
+        assertEquals(true, TillDeviceService.worksATill(java.util.List.of("commissions.read_own", "sales.sell")));
+        assertEquals(true, TillDeviceService.worksATill(java.util.List.of("SHIFTS.OPEN")));
+        assertEquals(true, TillDeviceService.worksATill(java.util.List.of("sales.refund.create")));
+        // Permissions that could not be read never loosen the rule.
+        assertEquals(true, TillDeviceService.worksATill(null));
+    }
 }

@@ -43,9 +43,9 @@ class LedgerBootstrapServiceAccountsTest {
                 .containsEntry(LedgerAccountCodes.COMMISSION_EXPENSE, "expense")
                 .containsEntry(LedgerAccountCodes.COMMISSIONS_PAYABLE, "liability")
                 .containsEntry(LedgerAccountCodes.TIPS_PAYABLE, "liability")
-                // Reserved for later phases; not created yet.
-                .doesNotContainKey(LedgerAccountCodes.CUSTOMER_DEPOSITS)
-                .doesNotContainKey(LedgerAccountCodes.DEFERRED_SERVICE_REVENUE);
+                // Money held for customers: booking deposits and prepaid packages (ADR 0015).
+                .containsEntry(LedgerAccountCodes.CUSTOMER_DEPOSITS, "liability")
+                .containsEntry(LedgerAccountCodes.DEFERRED_SERVICE_REVENUE, "liability");
         // No code is created twice in one pass.
         assertThat(saved()).extracting(LedgerAccount::getCode).doesNotHaveDuplicates();
         assertThat(saved()).allMatch(a -> BUSINESS.equals(a.getBusinessId()));
@@ -57,7 +57,9 @@ class LedgerBootstrapServiceAccountsTest {
                 LedgerAccountCodes.SERVICE_REVENUE,
                 LedgerAccountCodes.COMMISSION_EXPENSE,
                 LedgerAccountCodes.COMMISSIONS_PAYABLE,
-                LedgerAccountCodes.TIPS_PAYABLE);
+                LedgerAccountCodes.TIPS_PAYABLE,
+                LedgerAccountCodes.CUSTOMER_DEPOSITS,
+                LedgerAccountCodes.DEFERRED_SERVICE_REVENUE);
         when(repository.existsByBusinessIdAndCode(eq(BUSINESS), anyString()))
                 .thenAnswer(inv -> !added.contains(inv.<String>getArgument(1)));
 

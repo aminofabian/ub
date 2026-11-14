@@ -30,3 +30,25 @@
 * **Payout** — an amount paid to a staff member against their balance; partial payouts are normal, tips are settled first. From the till it is a paid-out movement on the open shift (`DrawerPaidOutService`), not a cash drawout.
 * **Reconciliation** — the sum of the staff ledger for a business must equal the credit balance of 2300 + 2310. The commission statement reports it as `reconciled`.
 
+## Held customer money, bookings and packages (ADR 0015)
+
+* **Booking** — a service ticket that has not arrived yet: the same `pos_drafts` row, stage `BOOKED`, with a scheduled start and end. `arrive` makes it a waiting ticket. A staff member cannot hold two overlapping bookings.
+* **Deposit** — money taken in advance against a ticket, held in `CUSTOMER_DEPOSITS` (2320) for a named customer. Never in the wallet until it is used, returned as credit or forfeited. `HeldMoneyService` is the only writer.
+* **Package** — sessions of one service paid for up front (`customer_service_packages`), held in `DEFERRED_SERVICE_REVENUE` (2330) and recognised one session at a time. The last session carries the rounding.
+* **Release to wallet** — how held money is spent: Dr 2320 or 2330 / Cr `CUSTOMER_WALLET_LIABILITY`, then the sale takes the ordinary `customer_wallet` tender. There is no "deposit" or "package" tender.
+* **Helper** — a staff profile that shared a service line with its performer, with a share in percent (`service_helpers`, up to five). The performer keeps the rest. Each earns on their own share.
+* **Service staff** — the `service_staff` role: someone who serves customers and signs in only to see their own earnings (`/api/v1/service-team/me`). No till.
+* **Redo** — a ticket with `redo_of_sale_id`; it closes at Done with no sale and no commission.
+* **Booking hours** — `branches.booking_hours`; set means customers may book that branch online, null means they may not.
+
+## Customer visit (ADR 0016)
+
+* **Visit** — what the screens call a service ticket: one customer, one reference, several service lines, one payment. Stored as `pos_drafts` (kind `SERVICE`); never a separate table.
+* **Service line execution** — each `pos_draft_lines` row has its own performer, helpers, resource, `line_stage` (`WAITING` / `IN_SERVICE` / `DONE`) and start and finish times. The visit's stage is derived from its lines.
+* **Resource** — a chair, bed, room or machine at a branch (`service_resources`), used by one service at a time, with a type, a cleaning time and a block. Independent of people: starting a service needs a free person *and*, if one is named, a free resource.
+* **Assign vs start** — assigning names who does a line (and where) without starting it; starting also takes the person and the resource. Payment needs every line assigned, not started.
+* **Shop's share** — a line's price less every commission on it. Tips are never part of it.
+* **Set amount** — what a person is paid for one service when typed on the visit, replacing their plan for that line only (`performer_amount`, or the third field of a helper). A commission decision: needs permission when set, not when paid.
+* **Time off** — dated periods on a staff profile when they cannot be booked (`staff_profiles.time_off`). It stops bookings, not walk-ins.
+* **Calendar entry** — one block on the branch calendar: a booking (from the ticket's scheduled time), a service under way or done (from the line's own start and finish), time off, or a resource out of use.
+

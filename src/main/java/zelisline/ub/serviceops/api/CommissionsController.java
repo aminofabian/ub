@@ -54,14 +54,17 @@ public class CommissionsController {
     private final zelisline.ub.serviceops.application.ServiceInsightsService serviceInsightsService;
     private final StaffProfileService staffProfileService;
     private final RequestPermissionService permissionService;
+    private final zelisline.ub.serviceops.application.ServiceTeamService serviceTeamService;
     private final zelisline.ub.tenancy.application.BranchResolutionService branchResolutionService;
 
     @GetMapping("/plans")
     @PreAuthorize("hasPermission(null, 'commissions.plans.manage') or hasPermission(null, 'commissions.read')")
     public List<CommissionPlanResponse> plans(HttpServletRequest request) {
         CurrentTenantUser.requireHuman(request);
-        return staffProfileService.commissionPlans(TenantRequestIds.resolveBusinessId(request)).stream()
-                .map(CommissionsController::toResponse)
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        java.util.Set<String> canSignIn = serviceTeamService.userIdsWhoCanSignIn(businessId);
+        return staffProfileService.commissionPlans(businessId).stream()
+                .map(plan -> toResponse(plan, canSignIn))
                 .toList();
     }
 
@@ -73,9 +76,10 @@ public class CommissionsController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
         return toResponse(staffProfileService.setCommissionPlan(
-                TenantRequestIds.resolveBusinessId(request), staffProfileId, body.type(), body.rate(),
-                body.productRate()));
+                businessId, staffProfileId, body.type(), body.rate(), body.productRate()),
+                serviceTeamService.userIdsWhoCanSignIn(businessId));
     }
 
     @GetMapping("/statement")
@@ -111,6 +115,30 @@ public class CommissionsController {
         String branch = branchResolutionService.requireBranchForLockedRole(caller.roleId(), caller.branchId(),
                 branchId == null || branchId.isBlank() ? caller.branchId() : branchId);
         return serviceInsightsService.report(TenantRequestIds.resolveBusinessId(request), start, end, branch);
+    }
+
+    /** What each chair, bed or room at a branch brought in over a period. */
+    @GetMapping("/reports/chairs")
+    @PreAuthorize("hasPermission(null, 'commissions.read')")
+    public zelisline.ub.serviceops.api.dto.CommissionDtos.ChairReportResponse chairReport(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String branchId,
+            HttpServletRequest request
+    ) {
+        var caller = CurrentTenantUser.requireHuman(request);
+        LocalDate today = LocalDate.now(NAIROBI);
+        LocalDate start = from != null ? from : today;
+        LocalDate end = to != null ? to : start;
+        requireSanePeriod(start, end);
+        // Chairs belong to a branch. A role locked to one branch sees that branch only.
+        String branch = branchResolutionService.requireBranchForLockedRole(caller.roleId(), caller.branchId(),
+                branchId == null || branchId.isBlank() ? caller.branchId() : branchId);
+        if (branch == null || branch.isBlank()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "Choose a branch");
+        }
+        return serviceInsightsService.chairReport(TenantRequestIds.resolveBusinessId(request), start, end, branch.trim());
     }
 
     /** Texts a staff member what they earned today and what they are owed. */
@@ -199,8 +227,10 @@ public class CommissionsController {
         }
     }
 
-    private static CommissionPlanResponse toResponse(StaffCommissionPlan plan) {
+    /** An account is not a sign-in: someone added by name has an account with no way in yet. */
+    private static CommissionPlanResponse toResponse(StaffCommissionPlan plan, java.util.Set<String> canSignIn) {
         return new CommissionPlanResponse(plan.staffProfileId(), plan.displayName(), plan.bookable(),
-                plan.current(), plan.type(), plan.rate(), plan.productRate());
+                plan.current(), plan.type(), plan.rate(), plan.productRate(),
+                plan.userId() != null && canSignIn.contains(plan.userId()));
     }
 }

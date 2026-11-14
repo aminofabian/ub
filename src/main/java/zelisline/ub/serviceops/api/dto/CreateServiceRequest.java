@@ -21,6 +21,8 @@ public record CreateServiceRequest(
         @Size(max = 16) String commissionType,
         @DecimalMin("0") @Digits(integer = 12, fraction = 2) BigDecimal commissionValue,
         Integer sortOrder,
-        @Size(max = 200) List<@NotBlank @Size(max = 36) String> staffProfileIds
+        @Size(max = 200) List<@NotBlank @Size(max = 36) String> staffProfileIds,
+        /** What the product for one service costs the shop, in whole shillings; null or 0 for none. */
+        @DecimalMin("0") @Digits(integer = 9, fraction = 0) BigDecimal productCost
 ) {
 }

@@ -56,4 +56,25 @@ public interface DomainMappingRepository extends JpaRepository<DomainMapping, St
             @Param("businessId") String businessId,
             @Param("promotedId") String promotedId,
             @Param("ts") Instant ts);
+
+    /**
+     * The free address being replaced starts sending visitors to whatever becomes
+     * primary. Custom domains are left as they are; the owner turns those on.
+     * Run this while the old row is still primary.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update DomainMapping d
+           set d.redirectToPrimary = true,
+               d.updatedAt = :ts
+         where d.businessId = :businessId
+           and d.id <> :promotedId
+           and d.primary = true
+           and d.source = zelisline.ub.tenancy.domain.DomainSource.PLATFORM_SUBDOMAIN
+           and d.deletedAt is null
+        """)
+    int markDemotedPlatformPrimaryAsRedirect(
+            @Param("businessId") String businessId,
+            @Param("promotedId") String promotedId,
+            @Param("ts") Instant ts);
 }

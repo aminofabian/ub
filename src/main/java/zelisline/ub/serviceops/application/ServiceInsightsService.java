@@ -53,9 +53,92 @@ public class ServiceInsightsService {
     private final StaffProfileService staffProfileService;
     private final StaffProfileRepository staffProfileRepository;
     private final StaffEarningsService staffEarningsService;
+    private final ServiceConsumablesService serviceConsumablesService;
     private final BusinessRepository businessRepository;
     private final BusinessCreditMessagingSettingsService messagingSettingsService;
     private final SmsMessagingClient smsMessagingClient;
+    private final zelisline.ub.serviceops.repository.ServiceResourceRepository serviceResourceRepository;
+    private final zelisline.ub.serviceops.repository.ServiceOfferingRepository serviceOfferingRepository;
+    private final zelisline.ub.tenancy.repository.BranchRepository branchRepository;
+
+    /**
+     * What each chair, bed or room at a branch brought in (Africa/Nairobi days, both inclusive):
+     * the value of the services done on it, from visits that were paid. Voided and fully refunded
+     * sales are left out, as in {@link #report}. Every place of the branch is listed, busy or not,
+     * so an idle chair shows as idle rather than missing. Work paid for with no place recorded is
+     * returned apart, never spread across the chairs.
+     */
+    @Transactional(readOnly = true)
+    public zelisline.ub.serviceops.api.dto.CommissionDtos.ChairReportResponse chairReport(
+            String businessId, LocalDate from, LocalDate to, String branchId) {
+        // The branch must be this business's own: another shop's branch is not found, not empty.
+        branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(branchId, businessId)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "Branch not found"));
+        Instant start = from.atStartOfDay(NAIROBI).toInstant();
+        Instant end = to.plusDays(1).atStartOfDay(NAIROBI).toInstant();
+        List<Object[]> lines = entityManager.createQuery("""
+                select l.resourceId, l.draftId, l.lineTotal, l.serviceId
+                  from PosDraftLine l, PosDraft d, Sale s
+                 where l.draftId = d.id
+                   and d.saleId = s.id
+                   and d.businessId = :businessId
+                   and l.businessId = :businessId
+                   and s.businessId = :businessId
+                   and d.branchId = :branch
+                   and s.status = 'completed'
+                   and l.deleted = false
+                   and l.serviceId is not null
+                   and s.soldAt >= :start and s.soldAt < :end
+                """, Object[].class)
+                .setParameter("businessId", businessId)
+                .setParameter("branch", branchId)
+                .setParameter("start", start)
+                .setParameter("end", end)
+                .getResultList();
+
+        Map<String, long[]> counts = new LinkedHashMap<>();          // [services, minutes]
+        Map<String, BigDecimal> money = new LinkedHashMap<>();
+        Map<String, java.util.Set<String>> visits = new LinkedHashMap<>();
+        Map<String, Integer> minutesByService = new LinkedHashMap<>();
+        BigDecimal unplaced = ZERO;
+        long unplacedServices = 0;
+        BigDecimal total = ZERO;
+        for (Object[] r : lines) {
+            String resourceId = (String) r[0];
+            BigDecimal value = r[2] == null ? ZERO : (BigDecimal) r[2];
+            total = total.add(value);
+            if (resourceId == null) {
+                unplaced = unplaced.add(value);
+                unplacedServices++;
+                continue;
+            }
+            String serviceId = (String) r[3];
+            int minutes = minutesByService.computeIfAbsent(serviceId, id -> serviceOfferingRepository
+                    .findByIdAndBusinessIdAndDeletedAtIsNull(id, businessId).map(o -> o.getDurationMinutes()).orElse(0));
+            long[] c = counts.computeIfAbsent(resourceId, k -> new long[2]);
+            c[0]++;
+            c[1] += minutes;
+            money.merge(resourceId, value, BigDecimal::add);
+            visits.computeIfAbsent(resourceId, k -> new java.util.HashSet<>()).add((String) r[1]);
+        }
+
+        List<zelisline.ub.serviceops.api.dto.CommissionDtos.ChairReportRow> rows = new ArrayList<>();
+        for (zelisline.ub.serviceops.domain.ServiceResource place : serviceResourceRepository
+                .findByBusinessIdAndBranchIdOrderBySortOrderAscNameAsc(businessId, branchId)) {
+            long[] c = counts.getOrDefault(place.getId(), new long[2]);
+            if (!place.isActive() && c[0] == 0) {
+                continue;
+            }
+            rows.add(new zelisline.ub.serviceops.api.dto.CommissionDtos.ChairReportRow(
+                    place.getId(), place.getName(), place.getResourceType(), place.isActive(), c[0],
+                    visits.getOrDefault(place.getId(), java.util.Set.of()).size(),
+                    money.getOrDefault(place.getId(), ZERO).setScale(2, RoundingMode.HALF_UP), c[1]));
+        }
+        return new zelisline.ub.serviceops.api.dto.CommissionDtos.ChairReportResponse(
+                from, to, branchId, rows, total.setScale(2, RoundingMode.HALF_UP),
+                unplaced.setScale(2, RoundingMode.HALF_UP), unplacedServices);
+    }
 
     /**
      * Revenue, commission and contribution per service and per staff member (Africa/Nairobi days,
@@ -168,14 +251,20 @@ public class ServiceInsightsService {
         List<ServiceReportRow> serviceRows = new ArrayList<>();
         BigDecimal revenue = ZERO;
         BigDecimal commission = ZERO;
+        BigDecimal productCost = ZERO;
+        Map<String, BigDecimal> costPerVisit =
+                serviceConsumablesService.costPerVisitByService(businessId, serviceMoney.keySet());
         for (Map.Entry<String, BigDecimal[]> entry : serviceMoney.entrySet()) {
             long[] c = serviceCounts.getOrDefault(entry.getKey(), new long[2]);
             BigDecimal[] m = entry.getValue();
             String name = serviceNames.get(entry.getKey());
+            BigDecimal products = costPerVisit.getOrDefault(entry.getKey(), ZERO).multiply(BigDecimal.valueOf(c[0]));
             serviceRows.add(new ServiceReportRow(entry.getKey(), name == null ? "Service" : name,
-                    c[0], money(m[0]), money(m[1]), money(m[0].subtract(m[1])), c[1]));
+                    c[0], money(m[0]), money(m[1]), money(products),
+                    money(m[0].subtract(m[1]).subtract(products)), c[1]));
             revenue = revenue.add(m[0]);
             commission = commission.add(m[1]);
+            productCost = productCost.add(products);
         }
         serviceRows.sort(Comparator.comparing(ServiceReportRow::contribution).reversed());
 
@@ -191,7 +280,8 @@ public class ServiceInsightsService {
         }
         staffRows.sort(Comparator.comparing(StaffReportRow::revenue).reversed());
         return new ServiceReportResponse(from, to, branch, serviceRows, staffRows,
-                money(revenue), money(commission), money(revenue.subtract(commission)));
+                money(revenue), money(commission), money(productCost),
+                money(revenue.subtract(commission).subtract(productCost)));
     }
 
     /**

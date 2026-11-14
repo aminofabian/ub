@@ -59,6 +59,17 @@ public class SaleItem {
     @Column(name = "service_minutes")
     private Integer serviceMinutes;
 
+/**
+     * Staff who shared this service line with its performer, as {@code id:percent;id:percent}
+     * (see {@code ServiceHelpers}). Null when one person did it.
+     */
+    @Column(name = "service_helpers", length = 400)
+    private String serviceHelpers;
+
+    /** What the performer is paid for this service when set at the till; null means by their plan. */
+    @Column(name = "performer_amount", precision = 14, scale = 2)
+    private java.math.BigDecimal performerAmount;
+
     @Column(name = "item_id", length = 36)
     private String itemId;
 

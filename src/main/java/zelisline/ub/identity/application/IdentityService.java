@@ -139,6 +139,87 @@ public class IdentityService {
         return toResponse(saved, role);
     }
 
+    /**
+     * Placeholder address of an account that cannot sign in yet (a barber added by name). Never
+     * used for mail: {@code .invalid} is reserved and resolves nowhere.
+     */
+    public static final String NO_SIGN_IN_EMAIL_DOMAIN = "team.invalid";
+
+    public static boolean isNoSignInEmail(String email) {
+        return email != null && email.trim().toLowerCase(Locale.ROOT).endsWith("@" + NO_SIGN_IN_EMAIL_DOMAIN);
+    }
+
+    /**
+     * Creates an account for someone on the team who has no way to sign in: a placeholder address,
+     * no PIN, and a password nobody knows. They are a user like any other for lists, payroll and
+     * reports, and count toward the plan's user limit; {@link #giveSignIn} later lets them in.
+     *
+     * <p>The database requires every active account to hold a credential
+     * ({@code chk_users_credentials_v3}), so the account stores the hash of a long random secret
+     * that is thrown away here. Nothing can match it, so every sign-in attempt fails.
+     */
+    @Transactional
+    public UserResponse createUserWithoutSignIn(
+            String businessId, String name, String phone, String roleId, String branchId) {
+        requireTenant(businessId);
+        Role role = requireRoleAssignableToTenant(businessId, roleId);
+        var guard = planLimitGuard != null ? planLimitGuard.getIfAvailable() : null;
+        if (guard != null) {
+            guard.assertCanAddUser(businessId);
+        }
+        User user = new User();
+        user.setBusinessId(businessId);
+        user.setBranchId(blankToNull(branchId));
+        user.setEmail("staff." + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16)
+                + "@" + NO_SIGN_IN_EMAIL_DOMAIN);
+        user.setName(name.trim());
+        user.setPhone(blankToNull(phone));
+        user.setRoleId(role.getId());
+        user.setStatus(UserStatus.ACTIVE);
+        byte[] secret = new byte[32];
+        new java.security.SecureRandom().nextBytes(secret);
+        user.setPasswordHash(passwordEncoder.encode(java.util.Base64.getEncoder().encodeToString(secret)));
+        User saved = userRepository.save(user);
+        var progress = setupProgressInvalidate != null ? setupProgressInvalidate.getIfAvailable() : null;
+        if (progress != null) {
+            progress.invalidate(businessId);
+        }
+        return toResponse(saved, role);
+    }
+
+    /**
+     * Gives a real address and a PIN to an account made by {@link #createUserWithoutSignIn}.
+     * Refused for any account that can already sign in: this is not a way to change someone's
+     * email or reset their PIN.
+     */
+    @Transactional
+    public UserResponse giveSignIn(String businessId, String userId, String emailRaw, String pin) {
+        User user = requireTenantUser(businessId, userId);
+        // The placeholder address is the mark of an account that cannot sign in; a PIN on it would
+        // mean it was already given one.
+        boolean hasPin = user.getPinHash() != null && !user.getPinHash().isBlank();
+        if (!isNoSignInEmail(user.getEmail()) || hasPin) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This person can already sign in");
+        }
+        String email = normaliseEmail(emailRaw);
+        if (email == null || email.isBlank() || isNoSignInEmail(email)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter their email address");
+        }
+        if (userRepository.existsByBusinessIdAndEmailAndDeletedAtIsNull(businessId, email)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "A user with this email already exists in this tenant");
+        }
+        if (pin == null || !pin.trim().matches("\\d{4,6}")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "PIN must be 4 to 6 digits");
+        }
+        user.setEmail(email);
+        applyPin(user, businessId, pin.trim());
+        // The unknowable password has done its job; from here the PIN is their credential.
+        user.setPasswordHash(null);
+        User saved = userRepository.save(user);
+        return toResponse(saved, roleRepository.findById(saved.getRoleId()).orElse(null));
+    }
+
     @Transactional(readOnly = true)
     public Page<UserResponse> listUsers(
             String businessId,

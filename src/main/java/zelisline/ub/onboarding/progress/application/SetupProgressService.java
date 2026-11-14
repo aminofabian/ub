@@ -47,6 +47,8 @@ public class SetupProgressService {
     private final SetupProgressSettingsService setupProgressSettingsService;
     private final ObjectMapper objectMapper;
     private final ObjectProvider<SmsCreditService> smsCreditService;
+    /** Absent in a deployment without the service module; a service shop then gets the standard steps. */
+    private final ObjectProvider<zelisline.ub.serviceops.application.ServiceSetupFacts> serviceSetupFacts;
 
     @Transactional
     public SetupProgressResponse getForBusiness(String businessId) {
@@ -91,6 +93,14 @@ public class SetupProgressService {
         boolean hasVariant = itemRepository.existsActiveVariantByBusinessId(businessId);
         boolean storefrontEnabled = readStorefrontEnabled(business.getSettings());
 
+        // A shop that only sells services has no shelf to stock and no supplier to link: asking for
+        // them would leave its setup unfinishable. It gets steps about its menu and its team instead.
+        zelisline.ub.serviceops.application.ServiceSetupFacts serviceFacts =
+                isServiceOnly(business.getSettings()) ? serviceSetupFacts.getIfAvailable() : null;
+        if (serviceFacts != null) {
+            return buildForServiceShop(business, snap, prefs, phoneVerified, serviceFacts.facts(businessId), now, mayGrantReward);
+        }
+
         boolean shopCreated = snap.questionnaireDone();
         boolean stocked = snap.sellableSkuCount() > 0;
         boolean supplierDone = snap.supplierCount() > 0 && supplierLinks > 0;
@@ -108,10 +118,50 @@ public class SetupProgressService {
                 stepFirstSale(saleDone),
                 stepGoLive(liveDone));
 
+        boolean shopReady = shopCreated && stocked && supplierDone && phoneDone && saleDone;
+        return assemble(business, prefs, defs, shopCreated, shopReady, now, mayGrantReward);
+    }
+
+    /** The steps of a shop that only sells services: its menu, its team, its phone, a first payment, online booking. */
+    private SetupProgressResponse buildForServiceShop(
+            Business business,
+            MerchantOnboardingGateService.Snapshot snap,
+            SetupProgressSettingsService.SetupProgressPrefs prefs,
+            boolean phoneVerified,
+            zelisline.ub.serviceops.application.ServiceSetupFacts.Facts facts,
+            Instant now,
+            boolean mayGrantReward) {
+        boolean shopCreated = snap.questionnaireDone();
+        boolean menuDone = facts.pricedServices() > 0;
+        boolean teamDone = facts.team() > 0;
+        boolean saleDone = snap.hasCompletedSale();
+        List<StepDef> defs = List.of(
+                stepShopCreated(shopCreated),
+                new StepDef("service_menu", "Put your services on the menu", true, menuDone, menuDone ? 10 : 0, 10,
+                        "/services/setup", null, List.of(sub("service", "Add a service with a price", 10, menuDone))),
+                new StepDef("service_team", "Add the people who do the work", true, teamDone, teamDone ? 10 : 0, 10,
+                        "/commissions", null, List.of(sub("member", "Add a team member", 10, teamDone))),
+                stepPhoneVerified(phoneVerified),
+                new StepDef("first_sale", "Take your first payment", true, saleDone, saleDone ? 15 : 0, 15,
+                        "/cashier?activate=first-sale", null, List.of(sub("sale", "Take payment for a service", 15, saleDone))),
+                new StepDef("online_booking", "Let customers book online", false, facts.onlineBooking(),
+                        facts.onlineBooking() ? 10 : 0, 10, "/services/appointments", null,
+                        List.of(sub("hours", "Set your online booking hours", 10, facts.onlineBooking()))));
+        boolean shopReady = shopCreated && menuDone && teamDone && phoneVerified && saleDone;
+        return assemble(business, prefs, defs, shopCreated, shopReady, now, mayGrantReward);
+    }
+
+    private SetupProgressResponse assemble(
+            Business business,
+            SetupProgressSettingsService.SetupProgressPrefs prefs,
+            List<StepDef> defs,
+            boolean shopCreated,
+            boolean shopReady,
+            Instant now,
+            boolean mayGrantReward) {
         int earnedPoints = defs.stream().mapToInt(StepDef::earnedPoints).sum();
         int maxPoints = defs.stream().mapToInt(StepDef::maxPoints).sum();
         int percent = maxPoints <= 0 ? 0 : Math.min(100, Math.round(earnedPoints * 100f / maxPoints));
-        boolean shopReady = shopCreated && stocked && supplierDone && phoneDone && saleDone;
 
         SetupProgressRewardDto reward = null;
         if (shopReady) {
@@ -203,6 +253,39 @@ public class SetupProgressService {
             log.warn("setup completion SMS grant failed businessId={}", business.getId(), ex);
             return null;
         }
+    }
+
+    /** Store formats as the shop's profile has them, or failing that as its onboarding answers do. */
+    private boolean isServiceOnly(String settingsJson) {
+        if (settingsJson == null || settingsJson.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(settingsJson);
+            List<String> types = storeTypes(root.path("profile"));
+            if (types.isEmpty()) {
+                types = storeTypes(root.path("onboarding").path("answers"));
+            }
+            return zelisline.ub.tenancy.api.dto.StoreTypeCodes.isServiceOnlyBusiness(types);
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+
+    private static List<String> storeTypes(JsonNode node) {
+        List<String> out = new ArrayList<>();
+        JsonNode many = node.path("storeTypes");
+        if (many.isArray()) {
+            for (JsonNode type : many) {
+                if (type.isTextual() && !type.asText().isBlank()) {
+                    out.add(type.asText());
+                }
+            }
+        }
+        if (out.isEmpty() && node.path("storeType").isTextual() && !node.path("storeType").asText().isBlank()) {
+            out.add(node.path("storeType").asText());
+        }
+        return out;
     }
 
     private boolean readStorefrontEnabled(String settingsJson) {

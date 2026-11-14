@@ -47,9 +47,11 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
  * hyphen or shorten it.
  *
  * <p>The address a shop is reached at is a row in {@code domains}; the business slug is left
- * alone because sync, exports and the shop finder key on it. A change adds the new address,
- * makes it the primary one, and keeps the old address active, so printed QR codes, bookmarks
- * and anyone still signed in on the old address carry on working.
+ * alone because sync, exports and the shop finder key on it. A change adds the new address
+ * and makes it the primary one. The old free address stays in the shop's name and sends
+ * visitors to the new one, keeping the page they asked for. The owner can turn that
+ * redirect off so the old address keeps opening the shop on its own host. Anyone who was
+ * signed in on the old address signs in again on the new one.
  *
  * <ul>
  *   <li>A name is letters, digits and single hyphens, {@value #MIN_LENGTH}–{@value #MAX_LENGTH}
@@ -207,6 +209,7 @@ public class ShopAddressService {
             added.setDomain(host);
             // Not primary yet: the one-primary-per-business index must never see two.
             added.setPrimary(false);
+            added.setRedirectToPrimary(false);
             added.setActive(true);
             added.setStatus(DomainStatus.ACTIVE);
             added.setSource(DomainSource.PLATFORM_SUBDOMAIN);
@@ -214,12 +217,15 @@ public class ShopAddressService {
             added.setVerifiedAt(now);
             promotedId = domainMappingRepository.saveAndFlush(added).getId();
         }
+        // While the old row is still primary, mark that free address as a redirect.
+        domainMappingRepository.markDemotedPlatformPrimaryAsRedirect(businessId, promotedId, now);
         domainMappingRepository.clearPrimaryForBusinessExcept(businessId, promotedId, now);
         // The update above clears the persistence context, so load the row afresh.
         DomainMapping promoted = domainMappingRepository.findById(promotedId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Address could not be saved"));
-        if (!promoted.isPrimary()) {
+        if (!promoted.isPrimary() || promoted.isRedirectToPrimary()) {
             promoted.setPrimary(true);
+            promoted.setRedirectToPrimary(false);
             domainMappingRepository.saveAndFlush(promoted);
         }
         return new Applied(business.getName(), host, previousHost, verdict.existingOwnId() == null);
@@ -381,7 +387,7 @@ public class ShopAddressService {
         String newUrl = "https://" + applied.newHost();
         String oldLine = applied.previousHost() == null
                 ? ""
-                : " The old address, " + applied.previousHost() + ", still works.";
+                : " The old address, " + applied.previousHost() + ", sends people to the new one.";
         String text = shop + ": your shop address is now " + newUrl + "." + oldLine
                 + " If you did not make this change, sign in and check Business > Domains.";
 
@@ -394,7 +400,8 @@ public class ShopAddressService {
                 String html = "<p>" + escape(shop) + ": your shop address is now <a href=\"" + newUrl + "\">"
                         + escape(applied.newHost()) + "</a>.</p>"
                         + (applied.previousHost() == null ? ""
-                                : "<p>The old address, " + escape(applied.previousHost()) + ", still works.</p>")
+                                : "<p>The old address, " + escape(applied.previousHost())
+                                        + ", sends people to the new one.</p>")
                         + "<p>If you did not make this change, sign in and check Business &gt; Domains.</p>";
                 outboundMail.sendNotificationEmail(
                         email, "Your shop address has changed", text, html, FROM_DISPLAY);

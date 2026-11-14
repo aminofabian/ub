@@ -148,6 +148,10 @@ public class PosDraft {
     @Column(name = "deposit_method", length = 32)
     private String depositMethod;
 
+    /** The prepaid package a session of which paid for this visit, if any. */
+    @Column(name = "redeemed_package_id", length = 36)
+    private String redeemedPackageId;
+
     /** A free repeat of work that was not right: the sale being put right. Never charged. */
     @Column(name = "redo_of_sale_id", length = 36)
     private String redoOfSaleId;

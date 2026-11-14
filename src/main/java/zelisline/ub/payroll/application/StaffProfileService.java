@@ -506,6 +506,66 @@ public class StaffProfileService {
         return normalized;
     }
 
+    /** Adds a period when this person cannot be booked. Periods already over are dropped as it is saved. */
+    @Transactional
+    public List<zelisline.ub.serviceops.domain.StaffTimeOff.Period> addTimeOff(
+            String businessId, String staffProfileId, java.time.Instant from, java.time.Instant to, String reason) {
+        StaffProfile profile = staffProfileRepository.findByIdAndBusinessIdForUpdate(staffProfileId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Staff member not found"));
+        if (from == null || to == null || !to.isAfter(from)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The end must be after the start");
+        }
+        if (java.time.Duration.between(from, to).toDays() > 366) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Time off can be at most a year long");
+        }
+        java.time.Instant now = java.time.Instant.now();
+        List<zelisline.ub.serviceops.domain.StaffTimeOff.Period> periods =
+                zelisline.ub.serviceops.domain.StaffTimeOff.decode(profile.getTimeOff());
+        periods.removeIf(p -> !p.to().isAfter(now));
+        if (periods.size() >= zelisline.ub.serviceops.domain.StaffTimeOff.MAX_PERIODS) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Remove an old period before adding another");
+        }
+        periods.add(new zelisline.ub.serviceops.domain.StaffTimeOff.Period(from, to, reason));
+        profile.setTimeOff(zelisline.ub.serviceops.domain.StaffTimeOff.encode(periods));
+        staffProfileRepository.save(profile);
+        return zelisline.ub.serviceops.domain.StaffTimeOff.decode(profile.getTimeOff());
+    }
+
+    /** Removes the period that starts at {@code from}. Removing one that is not there changes nothing. */
+    @Transactional
+    public List<zelisline.ub.serviceops.domain.StaffTimeOff.Period> removeTimeOff(
+            String businessId, String staffProfileId, java.time.Instant from) {
+        StaffProfile profile = staffProfileRepository.findByIdAndBusinessIdForUpdate(staffProfileId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Staff member not found"));
+        List<zelisline.ub.serviceops.domain.StaffTimeOff.Period> periods =
+                zelisline.ub.serviceops.domain.StaffTimeOff.decode(profile.getTimeOff());
+        periods.removeIf(p -> p.from().getEpochSecond() == from.getEpochSecond());
+        profile.setTimeOff(zelisline.ub.serviceops.domain.StaffTimeOff.encode(periods));
+        staffProfileRepository.save(profile);
+        return periods;
+    }
+
+    /** Time off by staff profile id, for current customer-serving staff who have any. */
+    @Transactional(readOnly = true)
+    public Map<String, List<zelisline.ub.serviceops.domain.StaffTimeOff.Period>> timeOff(String businessId) {
+        Map<String, List<zelisline.ub.serviceops.domain.StaffTimeOff.Period>> out = new LinkedHashMap<>();
+        for (StaffProfile profile : staffProfileRepository.findByBusinessIdOrderByDisplayNameAsc(businessId)) {
+            if (profile.isBookable() && profile.getTimeOff() != null) {
+                out.put(profile.getId(), zelisline.ub.serviceops.domain.StaffTimeOff.decode(profile.getTimeOff()));
+            }
+        }
+        return out;
+    }
+
+    /** Whether this person is off for any part of a window. */
+    @Transactional(readOnly = true)
+    public boolean isOff(String businessId, String staffProfileId, java.time.Instant start, java.time.Instant end) {
+        return staffProfileRepository.findByIdAndBusinessId(staffProfileId, businessId)
+                .map(p -> zelisline.ub.serviceops.domain.StaffTimeOff.decode(p.getTimeOff()).stream()
+                        .anyMatch(period -> period.overlaps(start, end)))
+                .orElse(false);
+    }
+
     /** Floor status by staff profile id for current, customer-serving staff ({@code AVAILABLE} when unset). */
     @Transactional(readOnly = true)
     public Map<String, String> floorStatuses(String businessId) {

@@ -47,6 +47,31 @@ public class PosDraftLine {
     @Column(name = "performer_staff_profile_id", length = 36)
     private String performerStaffProfileId;
 
+/**
+     * Staff who shared this service line with its performer, as {@code id:percent;id:percent}
+     * (see {@code ServiceHelpers}). Null when one person did it.
+     */
+    @Column(name = "service_helpers", length = 400)
+    private String serviceHelpers;
+
+    /** What the performer is paid for this service when set at the till; null means by their plan. */
+    @Column(name = "performer_amount", precision = 14, scale = 2)
+    private java.math.BigDecimal performerAmount;
+
+    /** The chair, bed or room this service used ({@code service_resources.id}); optional. */
+    @Column(name = "resource_id", length = 36)
+    private String resourceId;
+
+    /** {@code WAITING}, {@code IN_SERVICE} or {@code DONE} for a service line; null on cart lines. */
+    @Column(name = "line_stage", length = 16)
+    private String lineStage;
+
+    @Column(name = "started_at")
+    private java.time.Instant startedAt;
+
+    @Column(name = "finished_at")
+    private java.time.Instant finishedAt;
+
     @Column(name = "item_name", nullable = false, length = 500)
     private String itemName;
 

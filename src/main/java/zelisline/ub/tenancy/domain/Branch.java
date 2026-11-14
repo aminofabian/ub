@@ -51,6 +51,13 @@ public class Branch {
     @Column(name = "service_station_count", nullable = false)
     private int serviceStationCount;
 
+    /**
+     * When customers may book online at this branch: JSON of opening and closing time per weekday
+     * and who switched it on. Null means online booking is off here.
+     */
+    @Column(name = "booking_hours", length = 600)
+    private String bookingHours;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

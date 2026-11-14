@@ -19,6 +19,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.tenancy.api.dto.AddDomainRequest;
 import zelisline.ub.tenancy.api.dto.DomainResponse;
+import zelisline.ub.tenancy.api.dto.SetDomainRedirectRequest;
 import zelisline.ub.tenancy.application.TenancyService;
 
 /**
@@ -66,6 +67,20 @@ public class MyDomainsController {
         return tenancyService.setPrimaryDomain(
                 TenantRequestIds.resolveBusinessId(request),
                 domainId
+        );
+    }
+
+    @PostMapping("/{domainId}/redirect")
+    @PreAuthorize(REQUIRES_MANAGE_SETTINGS)
+    public DomainResponse setMyDomainRedirect(
+            HttpServletRequest request,
+            @PathVariable String domainId,
+            @Valid @RequestBody SetDomainRedirectRequest body
+    ) {
+        return tenancyService.setRedirectToPrimary(
+                TenantRequestIds.resolveBusinessId(request),
+                domainId,
+                Boolean.TRUE.equals(body.enabled())
         );
     }
 

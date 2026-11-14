@@ -33,6 +33,14 @@ public class DomainMapping {
     @Column(name = "is_primary", nullable = false)
     private boolean primary;
 
+    /**
+     * When true, and this row is not the primary, visitors who open this host
+     * are sent to the business's current primary host. The page and query they
+     * asked for are kept. Primary rows are never a redirect target of themselves.
+     */
+    @Column(name = "redirect_to_primary", nullable = false)
+    private boolean redirectToPrimary;
+
     @Column(name = "active", nullable = false)
     private boolean active = true;
 

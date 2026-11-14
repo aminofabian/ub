@@ -430,16 +430,48 @@ public class TenancyService {
         }
 
         Instant now = Instant.now();
+        domainMappingRepository.markDemotedPlatformPrimaryAsRedirect(
+            businessId,
+            toPromote.getId(),
+            now
+        );
         domainMappingRepository.clearPrimaryForBusinessExcept(
             businessId,
             toPromote.getId(),
             now
         );
-        if (!toPromote.isPrimary()) {
+        if (!toPromote.isPrimary() || toPromote.isRedirectToPrimary()) {
             toPromote.setPrimary(true);
+            toPromote.setRedirectToPrimary(false);
             toPromote = domainMappingRepository.save(toPromote);
         }
         return toResponse(toPromote);
+    }
+
+    /**
+     * Turns a live, non-primary address into a redirect to the main one, or
+     * leaves it serving the shop on its own host.
+     */
+    @Transactional
+    public DomainResponse setRedirectToPrimary(String businessId, String domainId, boolean enabled) {
+        DomainMapping domain = requireOwnedDomain(businessId, domainId);
+        if (domain.getDeletedAt() != null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Domain not found");
+        }
+        if (domain.isPrimary()) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "The main address is where visitors arrive. Turn this on for an older address."
+            );
+        }
+        if (!domain.isActive() || domain.getStatus() != DomainStatus.ACTIVE) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "That address is not live yet."
+            );
+        }
+        domain.setRedirectToPrimary(enabled);
+        return toResponse(domainMappingRepository.save(domain));
     }
 
     @Transactional(readOnly = true)
@@ -1163,6 +1195,7 @@ public class TenancyService {
             domain.getBusinessId(),
             domain.getDomain(),
             domain.isPrimary(),
+            domain.isRedirectToPrimary(),
             domain.isActive(),
             domain.getStatus() == null ? null : domain.getStatus().name().toLowerCase(Locale.ROOT),
             domain.getSource() == null ? null : domain.getSource().name().toLowerCase(Locale.ROOT),

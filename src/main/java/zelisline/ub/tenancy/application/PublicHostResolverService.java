@@ -21,6 +21,7 @@ import zelisline.ub.tenancy.api.dto.TenantConfigBundle;
 import zelisline.ub.tenancy.domain.Branch;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.domain.DomainMapping;
+import zelisline.ub.tenancy.domain.DomainStatus;
 import zelisline.ub.tenancy.domain.TenantStatus;
 import zelisline.ub.tenancy.infrastructure.TenantHostParsing;
 import zelisline.ub.tenancy.repository.BranchRepository;
@@ -111,9 +112,8 @@ public class PublicHostResolverService {
             return Optional.empty();
         }
         return domainMappingRepository.findByDomainAndActiveTrue(lookup)
-                .map(DomainMapping::getBusinessId)
-                .flatMap(businessRepository::findByIdAndDeletedAtIsNull)
-                .map(this::toResponse);
+                .flatMap(mapping -> businessRepository.findByIdAndDeletedAtIsNull(mapping.getBusinessId())
+                        .map(business -> toResponse(business, redirectTarget(mapping))));
     }
 
     /**
@@ -343,8 +343,57 @@ public class PublicHostResolverService {
                 countryCode,
                 localities.isEmpty() ? List.of() : localities,
                 metaPixel,
-                catalogReady(storefront.catalogBranchId(), branches)
+                catalogReady(storefront.catalogBranchId(), branches),
+                null
         );
+    }
+
+    private PublicHostResolveResponse toResponse(Business business, String canonicalHost) {
+        PublicHostResolveResponse base = toResponse(business);
+        if (canonicalHost == null || canonicalHost.isBlank()) {
+            return base;
+        }
+        return new PublicHostResolveResponse(
+                base.tenantId(),
+                base.tenantName(),
+                base.slug(),
+                base.status(),
+                base.branding(),
+                base.authConfig(),
+                base.featureFlags(),
+                base.storefrontEnabled(),
+                base.storeThemeId(),
+                base.landingTemplateId(),
+                base.landingContent(),
+                base.designJson(),
+                base.resolvedAt(),
+                base.countryCode(),
+                base.branchLocalities(),
+                base.metaPixel(),
+                base.publicCatalogReady(),
+                canonicalHost
+        );
+    }
+
+    /**
+     * Host visitors should be sent to, or null when this host should keep serving.
+     * Only a non-primary row that the owner left as a redirect qualifies, and only
+     * when the main address is a different live host.
+     */
+    private String redirectTarget(DomainMapping requested) {
+        if (requested == null || !requested.isRedirectToPrimary() || requested.isPrimary()) {
+            return null;
+        }
+        String self = requested.getDomain();
+        return domainMappingRepository.findByBusinessIdAndDeletedAtIsNull(requested.getBusinessId()).stream()
+                .filter(d -> d.isPrimary() && d.isActive() && d.getDeletedAt() == null)
+                .filter(d -> d.getStatus() == null || d.getStatus() == DomainStatus.ACTIVE)
+                .map(DomainMapping::getDomain)
+                .filter(host -> host != null && !host.isBlank())
+                .map(host -> host.toLowerCase(Locale.ROOT))
+                .filter(host -> self == null || !self.equalsIgnoreCase(host))
+                .findFirst()
+                .orElse(null);
     }
 
     /** Matches {@code PublicStorefrontContextService} catalog gate: branch set and active. */

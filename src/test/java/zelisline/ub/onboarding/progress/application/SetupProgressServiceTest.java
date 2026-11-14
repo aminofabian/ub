@@ -36,6 +36,10 @@ class SetupProgressServiceTest {
     private ItemRepository itemRepository;
     @Mock
     private ObjectProvider<SmsCreditService> smsCreditService;
+    @Mock
+    private ObjectProvider<zelisline.ub.serviceops.application.ServiceSetupFacts> serviceSetupFacts;
+    @Mock
+    private zelisline.ub.serviceops.application.ServiceSetupFacts serviceFacts;
 
     private SetupProgressService service;
 
@@ -49,7 +53,8 @@ class SetupProgressServiceTest {
                 itemRepository,
                 new SetupProgressSettingsService(new ObjectMapper()),
                 new ObjectMapper(),
-                smsCreditService);
+                smsCreditService,
+                serviceSetupFacts);
     }
 
     @Test
@@ -140,6 +145,62 @@ class SetupProgressServiceTest {
         assertThat(response.reward().justGranted()).isTrue();
         assertThat(response.reward().smsCredits()).isEqualTo(25);
         assertThat(business.getSettings()).contains("rewardGrantedAt");
+    }
+
+    private static final String SALON =
+            "{\"profile\":{\"storeTypes\":[\"barbershop\",\"salon\"]}}";
+
+    @Test
+    void aShopThatOnlySellsServicesIsAskedForItsMenuAndTeamNotForProducts() {
+        Business business = business("biz-1", SALON);
+        when(businessRepository.findByIdAndDeletedAtIsNull("biz-1")).thenReturn(java.util.Optional.of(business));
+        when(gateService.snapshot("biz-1")).thenReturn(snapshot(true, 0, 0, 0, false, false, false));
+        when(opsAlertSettingsService.resolveForBusiness("biz-1")).thenReturn(new BusinessOpsAlertSettings());
+        when(serviceSetupFacts.getIfAvailable()).thenReturn(serviceFacts);
+        when(serviceFacts.facts("biz-1"))
+                .thenReturn(new zelisline.ub.serviceops.application.ServiceSetupFacts.Facts(0, 0, false));
+
+        var response = service.getForBusiness("biz-1");
+
+        assertThat(response.visible()).isTrue();
+        assertThat(response.currentStepKey()).isEqualTo("service_menu");
+        assertThat(response.steps()).extracting(s -> s.key())
+                .containsExactly("shop_created", "service_menu", "service_team", "phone_verified", "first_sale", "online_booking")
+                .doesNotContain("stock_shelf", "supplier_loop");
+    }
+
+    @Test
+    void aServiceShopCanFinishItsSetupWithNoProductAndNoSupplier() {
+        Business business = business("biz-1", SALON);
+        when(businessRepository.findByIdAndDeletedAtIsNull("biz-1")).thenReturn(java.util.Optional.of(business));
+        // Nothing on a shelf, no supplier: for a product shop this could never be ready.
+        when(gateService.snapshot("biz-1")).thenReturn(snapshot(true, 0, 0, 0, false, true, false));
+        when(opsAlertSettingsService.resolveForBusiness("biz-1")).thenReturn(verifiedPhone());
+        when(serviceSetupFacts.getIfAvailable()).thenReturn(serviceFacts);
+        when(serviceFacts.facts("biz-1"))
+                .thenReturn(new zelisline.ub.serviceops.application.ServiceSetupFacts.Facts(3, 2, false));
+
+        var response = service.getForBusiness("biz-1");
+
+        assertThat(response.shopReady()).isTrue();
+        assertThat(response.visible()).isFalse();
+        // Online booking is a nice-to-have: leaving it off does not hold the shop back.
+        assertThat(response.currentStepKey()).isEqualTo("online_booking");
+        assertThat(response.percentComplete()).isLessThan(100);
+    }
+
+    @Test
+    void aShopThatAlsoSellsGoodsKeepsTheProductSteps() {
+        Business business = business("biz-1", "{\"profile\":{\"storeTypes\":[\"salon\",\"cosmetics\"]}}");
+        when(businessRepository.findByIdAndDeletedAtIsNull("biz-1")).thenReturn(java.util.Optional.of(business));
+        when(gateService.snapshot("biz-1")).thenReturn(snapshot(true, 0, 0, 0, false, false, false));
+        when(opsAlertSettingsService.resolveForBusiness("biz-1")).thenReturn(new BusinessOpsAlertSettings());
+        when(supplierProductRepository.countActiveLinksForBusiness("biz-1")).thenReturn(0L);
+        when(itemRepository.existsActiveVariantByBusinessId("biz-1")).thenReturn(false);
+
+        var response = service.getForBusiness("biz-1");
+
+        assertThat(response.currentStepKey()).isEqualTo("stock_shelf");
     }
 
     private static Business business(String id, String settings) {

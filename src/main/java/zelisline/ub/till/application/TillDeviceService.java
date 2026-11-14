@@ -1,6 +1,8 @@
 package zelisline.ub.till.application;
 
 import java.time.Instant;
+import java.util.Set;
+import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
@@ -174,6 +176,32 @@ public class TillDeviceService {
     }
 
     /**
+     * Permissions that mean a person works a till: selling, voiding, refunding, opening or closing
+     * a shift, holding carts. The trusted-till rule exists to keep a short PIN from being used to
+     * do those things on a device the owner has not approved.
+     */
+    private static final Set<String> TILL_WORK_PERMISSIONS = Set.of(
+            "sales.sell", "sales.refund.create", "sales.void.any", "sales.void.own", "sales.payment.adjust",
+            "sales.weighed.refund", "shifts.open", "shifts.close", "shifts.update", "pos.drafts.write");
+
+    /**
+     * Whether the trusted-till rule applies to someone holding these permissions. A person who
+     * can do none of the till's work (a barber who signs in on their own phone only to see their
+     * earnings) is not using a till, so there is no till to register.
+     */
+    public static boolean worksATill(Collection<String> permissionKeys) {
+        if (permissionKeys == null) {
+            return true;
+        }
+        for (String key : permissionKeys) {
+            if (key != null && TILL_WORK_PERMISSIONS.contains(key.trim().toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Hybrid trusted-till policy for PIN login:
      * <ul>
      *   <li>If the branch has <em>no</em> active registered tills → allow (gradual rollout).</li>
@@ -240,9 +268,13 @@ public class TillDeviceService {
         if ("counter".equals(value)) {
             return "counter";
         }
+        if ("floor".equals(value)) {
+            // The queue-and-chairs till of a service business.
+            return "floor";
+        }
         throw new ResponseStatusException(
                 HttpStatus.BAD_REQUEST,
-                "cashierTemplate must be shelf, ledger, or counter"
+                "cashierTemplate must be shelf, ledger, counter, or floor"
         );
     }
 

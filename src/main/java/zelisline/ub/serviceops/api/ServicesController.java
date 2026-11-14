@@ -41,6 +41,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class ServicesController {
 
     private final ServiceCatalogService serviceCatalogService;
+    private final zelisline.ub.serviceops.application.ServiceConsumablesService serviceConsumablesService;
     private final zelisline.ub.payroll.application.StaffProfileService staffProfileService;
     private final zelisline.ub.platform.security.CurrentUserPermissions currentUserPermissions;
 
@@ -99,6 +100,26 @@ public class ServicesController {
     ) {
         CurrentTenantUser.require(request);
         return serviceCatalogService.updateService(TenantRequestIds.resolveBusinessId(request), id, body);
+    }
+
+    /** Products used up each time the service is done, with what they cost for one visit. */
+    @GetMapping("/{id}/consumables")
+    @PreAuthorize("hasPermission(null, 'services.catalog.manage')")
+    public zelisline.ub.serviceops.api.dto.ConsumableDtos.ServiceConsumablesResponse consumables(
+            @PathVariable String id, HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        return serviceConsumablesService.get(TenantRequestIds.resolveBusinessId(request), id);
+    }
+
+    @PutMapping("/{id}/consumables")
+    @PreAuthorize("hasPermission(null, 'services.catalog.manage')")
+    public zelisline.ub.serviceops.api.dto.ConsumableDtos.ServiceConsumablesResponse setConsumables(
+            @PathVariable String id,
+            @Valid @RequestBody zelisline.ub.serviceops.api.dto.ConsumableDtos.SetConsumablesRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return serviceConsumablesService.set(TenantRequestIds.resolveBusinessId(request), id, body.items());
     }
 
     @PutMapping("/{id}/staff")

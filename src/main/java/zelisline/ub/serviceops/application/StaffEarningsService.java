@@ -75,6 +75,7 @@ public class StaffEarningsService {
     private final StaffLedgerEntryRepository ledgerRepository;
     private final ServiceOfferingRepository serviceRepository;
     private final StaffProfileService staffProfileService;
+    private final ServicePayModelService payModelService;
     private final LedgerPostingPort ledgerPostingPort;
     private final LedgerAccountResolver ledgerAccountResolver;
     private final LedgerBalanceQuery ledgerBalanceQuery;
@@ -90,8 +91,118 @@ public class StaffEarningsService {
             String performerStaffProfileId,
             BigDecimal lineTotal,
             BigDecimal taxAmount,
-            BigDecimal quantity
+            BigDecimal quantity,
+            /** Staff who shared a service line with the performer, each with their share. */
+            List<zelisline.ub.serviceops.domain.ServiceHelpers.Helper> helpers,
+            /** What the performer is paid for this line when set at the till; null means by their plan. */
+            BigDecimal performerAmount
     ) {
+        public SaleLine(
+                String saleItemId, boolean service, String serviceId, String performerStaffProfileId,
+                BigDecimal lineTotal, BigDecimal taxAmount, BigDecimal quantity,
+                List<zelisline.ub.serviceops.domain.ServiceHelpers.Helper> helpers) {
+            this(saleItemId, service, serviceId, performerStaffProfileId, lineTotal, taxAmount, quantity, helpers, null);
+        }
+
+        public SaleLine(
+                String saleItemId, boolean service, String serviceId, String performerStaffProfileId,
+                BigDecimal lineTotal, BigDecimal taxAmount, BigDecimal quantity) {
+            this(saleItemId, service, serviceId, performerStaffProfileId, lineTotal, taxAmount, quantity, List.of(), null);
+        }
+    }
+
+    /** One person's part of a service line: the share of its price that is theirs, and what they earn on it. */
+    public record ServiceShare(int index, String staffProfileId, BigDecimal base, BigDecimal commission, String rule) {
+    }
+
+    /**
+     * What each person on a service line would earn if it were sold now. The same calculation the
+     * sale uses, so a preview at the till can never disagree with what is then recorded.
+     */
+    @Transactional(readOnly = true)
+    public List<ServiceShare> previewServiceLine(String businessId, SaleLine line) {
+        if (!line.service() || line.performerStaffProfileId() == null) {
+            return List.of();
+        }
+        return serviceShares(businessId, line, new LinkedHashMap<>());
+    }
+
+    /**
+     * Everyone on a service line earns on their own share of it, by their own plan. The performer
+     * keeps what the helpers do not take, so the shares always add up to the line.
+     *
+     * <p>A helper paid a set amount (typed at the till, or from a helper role) is paid out of
+     * what the person leading earns, never out of the shop's part. The person leading earns on
+     * the whole price by their plan and keeps what is left of that after the helpers. A 500
+     * service led by a barber on 50%, with a groomer on a quarter of the barber's part, leaves
+     * the shop 250, the groomer 62 and the barber 188. An amount set for the person leading is
+     * theirs as typed.</p>
+     *
+     * <p>Where the shop pays commission after product cost (ADR 0019), the service's product cost
+     * comes off the price before any plan is applied and stays with the shop. Amounts that were
+     * set are not changed by it, and neither is what each person is recorded as bringing in.</p>
+     */
+    private List<ServiceShare> serviceShares(
+            String businessId, SaleLine line, Map<String, Optional<StaffCommissionPlan>> planCache) {
+        BigDecimal base = money(line.lineTotal()).subtract(money(line.taxAmount()));
+        List<zelisline.ub.serviceops.domain.ServiceHelpers.Helper> helpers =
+                line.helpers() == null ? List.of() : line.helpers();
+        String[] staff = new String[helpers.size() + 1];
+        BigDecimal[] bases = new BigDecimal[helpers.size() + 1];
+        BigDecimal[] fractions = new BigDecimal[helpers.size() + 1];
+        staff[0] = line.performerStaffProfileId();
+        bases[0] = base;
+        fractions[0] = BigDecimal.ONE;
+        for (int h = 0; h < helpers.size(); h++) {
+            staff[h + 1] = helpers.get(h).staffProfileId();
+            if (helpers.get(h).amount() != null) {
+                fractions[h + 1] = BigDecimal.ZERO;
+                bases[h + 1] = ZERO;
+                continue;
+            }
+            BigDecimal f = helpers.get(h).sharePercent().divide(HUNDRED, 4, RoundingMode.HALF_UP);
+            fractions[h + 1] = f;
+            bases[h + 1] = money(base.multiply(f));
+            bases[0] = bases[0].subtract(bases[h + 1]);
+            fractions[0] = fractions[0].subtract(f);
+        }
+        BigDecimal toHelpers = ZERO;
+        for (zelisline.ub.serviceops.domain.ServiceHelpers.Helper helper : helpers) {
+            if (helper.amount() != null) {
+                toHelpers = toHelpers.add(money(helper.amount()));
+            }
+        }
+        // What commission is worked out on: each person's part of the price, less their part of
+        // the product cost when the shop takes that off first.
+        BigDecimal productCost = productCost(businessId, line, base);
+        List<ServiceShare> out = new ArrayList<>(staff.length);
+        for (int who = 0; who < staff.length; who++) {
+            Optional<StaffCommissionPlan> plan = planCache.computeIfAbsent(
+                    staff[who], id -> staffProfileService.commissionPlan(businessId, id));
+            BigDecimal set = who == 0 ? line.performerAmount() : helpers.get(who - 1).amount();
+            if (set != null) {
+                // Decided at the till for this service: it replaces whatever their plan would give.
+                out.add(new ServiceShare(who, staff[who], bases[who], money(set),
+                        "SET " + money(set).toPlainString() + " (at the till)"));
+                continue;
+            }
+            Rule rule = serviceRule(businessId, line.serviceId(), plan.orElse(null));
+            BigDecimal earnsOn = bases[who].subtract(money(productCost.multiply(fractions[who]))).max(ZERO);
+            BigDecimal earned = rule.apply(earnsOn, line.quantity(), fractions[who]);
+            String label = rule.label();
+            if (productCost.signum() > 0 && rule.type() != null && bases[who].signum() > 0) {
+                label += " after " + productCost.setScale(0, RoundingMode.HALF_UP).toPlainString() + " product cost";
+            }
+            if (who == 0 && toHelpers.signum() > 0 && earned.signum() > 0) {
+                // The helpers' set amounts come out of what the person leading earns.
+                out.add(new ServiceShare(who, staff[who], bases[who], earned.subtract(toHelpers).max(ZERO),
+                        label + " less " + toHelpers.setScale(0, RoundingMode.HALF_UP).toPlainString()
+                                + " to helpers"));
+                continue;
+            }
+            out.add(new ServiceShare(who, staff[who], bases[who], earned, label));
+        }
+        return out;
     }
 
     // ------------------------------------------------------------------ earning
@@ -125,20 +236,19 @@ public class StaffEarningsService {
                 if (line.performerStaffProfileId() == null) {
                     continue;
                 }
-                Optional<StaffCommissionPlan> plan = planCache.computeIfAbsent(
-                        line.performerStaffProfileId(),
-                        id -> staffProfileService.commissionPlan(businessId, id));
-                Rule rule = serviceRule(businessId, line.serviceId(), plan.orElse(null));
-                BigDecimal amount = rule.apply(base, line.quantity());
-                StaffLedgerEntry row = entry(businessId, branchId, line.performerStaffProfileId(),
-                        StaffLedgerKinds.COMMISSION, StaffLedgerKinds.BUCKET_COMMISSION, amount,
-                        "C:" + line.saleItemId(), soldAt, sellerUserId);
-                row.setBaseAmount(base);
-                row.setRule(rule.label());
-                row.setSource(StaffLedgerKinds.SOURCE_SERVICE);
-                row.setSaleId(saleId);
-                row.setSaleItemId(line.saleItemId());
-                commissionRows.add(row);
+                boolean shared = line.helpers() != null && !line.helpers().isEmpty();
+                for (ServiceShare share : serviceShares(businessId, line, planCache)) {
+                    StaffLedgerEntry row = entry(businessId, branchId, share.staffProfileId(),
+                            StaffLedgerKinds.COMMISSION, StaffLedgerKinds.BUCKET_COMMISSION, share.commission(),
+                            (share.index() == 0 ? "C:" : "C" + (share.index() + 1) + ":") + line.saleItemId(),
+                            soldAt, sellerUserId);
+                    row.setBaseAmount(share.base());
+                    row.setRule(share.rule() + (shared ? " shared" : ""));
+                    row.setSource(StaffLedgerKinds.SOURCE_SERVICE);
+                    row.setSaleId(saleId);
+                    row.setSaleItemId(line.saleItemId());
+                    commissionRows.add(row);
+                }
             } else {
                 productLines.add(line);
             }
@@ -582,6 +692,25 @@ public class StaffEarningsService {
 
     // ------------------------------------------------------------------ helpers
 
+    /**
+     * The product cost taken off a service line before commission: the service's own, for each
+     * one sold, never more than the line. Zero unless the shop pays commission after product cost.
+     */
+    private BigDecimal productCost(String businessId, SaleLine line, BigDecimal base) {
+        if (line.serviceId() == null || base.signum() <= 0 || !payModelService.deductsProductCost(businessId)) {
+            return ZERO;
+        }
+        BigDecimal each = serviceRepository.findById(line.serviceId())
+                .filter(s -> businessId.equals(s.getBusinessId()))
+                .map(ServiceOffering::getProductCost)
+                .orElse(null);
+        if (each == null || each.signum() <= 0) {
+            return ZERO;
+        }
+        BigDecimal quantity = line.quantity() == null || line.quantity().signum() <= 0 ? BigDecimal.ONE : line.quantity();
+        return money(each.multiply(quantity)).min(base);
+    }
+
     /** The commission rule for a service line: the service's own override, else the staff plan. */
     private Rule serviceRule(String businessId, String serviceId, StaffCommissionPlan plan) {
         if (serviceId != null) {
@@ -600,13 +729,18 @@ public class StaffEarningsService {
 
     private record Rule(String type, BigDecimal value, String origin) {
 
-        BigDecimal apply(BigDecimal base, BigDecimal quantity) {
+        /**
+         * @param base     this person's share of the line, after discount and before tax
+         * @param fraction this person's share of the work (1 when they did it alone); a fixed
+         *                 amount per service is shared out by it
+         */
+        BigDecimal apply(BigDecimal base, BigDecimal quantity, BigDecimal fraction) {
             if (type == null || value == null || base.signum() <= 0) {
                 return ZERO;
             }
             BigDecimal raw = "PERCENT".equals(type)
                     ? base.multiply(value).divide(HUNDRED, 4, RoundingMode.HALF_UP)
-                    : value.multiply(quantity == null ? BigDecimal.ONE : quantity);
+                    : value.multiply(quantity == null ? BigDecimal.ONE : quantity).multiply(fraction);
             // A fixed amount can never exceed what the customer paid for the line.
             return wholeShillings(raw).min(base.setScale(0, RoundingMode.DOWN).setScale(2, RoundingMode.HALF_UP));
         }

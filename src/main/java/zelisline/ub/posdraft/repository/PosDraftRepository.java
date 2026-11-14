@@ -93,6 +93,65 @@ public interface PosDraftRepository extends JpaRepository<PosDraft, String> {
             @Param("stationNo") int stationNo
     );
 
+    /** A staff member's bookings that touch a window, for working out free times. Not a locking read. */
+    @Query("""
+            select d from PosDraft d
+             where d.businessId = :businessId
+               and d.draftKind = 'SERVICE'
+               and d.status = 'pending'
+               and d.serviceStage = 'BOOKED'
+               and d.scheduledStart < :end
+               and d.scheduledEnd > :start
+            """)
+    List<PosDraft> findBookedBetween(
+            @Param("businessId") String businessId, @Param("start") Instant start, @Param("end") Instant end);
+
+    /** Upcoming online bookings made with one phone number: the cap that stops one person filling the book. */
+    @Query("""
+            select count(d) from PosDraft d
+             where d.businessId = :businessId
+               and d.draftKind = 'SERVICE'
+               and d.status = 'pending'
+               and d.serviceStage = 'BOOKED'
+               and d.bookingSource = 'ONLINE'
+               and d.bookingPhone = :phone
+               and d.scheduledStart > :now
+            """)
+    long countUpcomingOnlineForPhone(
+            @Param("businessId") String businessId, @Param("phone") String phone, @Param("now") Instant now);
+
+    /** Online bookings a business has received since a moment, whatever became of them. */
+    @Query("""
+            select count(d) from PosDraft d
+             where d.businessId = :businessId
+               and d.draftKind = 'SERVICE'
+               and d.bookingSource = 'ONLINE'
+               and d.createdAt > :since
+            """)
+    long countOnlineCreatedSince(@Param("businessId") String businessId, @Param("since") Instant since);
+
+    /**
+     * Bookings holding a resource that overlap a time window. A locking read, taken under the
+     * resource's row lock, so two people cannot book the same bed for the same time.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select d from PosDraft d
+             where d.businessId = :businessId
+               and d.draftKind = 'SERVICE'
+               and d.status = 'pending'
+               and d.serviceStage = 'BOOKED'
+               and d.scheduledStart < :end
+               and d.scheduledEnd > :start
+               and exists (select 1 from PosDraftLine l
+                            where l.draftId = d.id and l.deleted = false and l.resourceId = :resourceId)
+            """)
+    List<PosDraft> findBookedOverlappingResource(
+            @Param("businessId") String businessId,
+            @Param("resourceId") String resourceId,
+            @Param("start") Instant start,
+            @Param("end") Instant end);
+
     /** Bookings, in any business, that are due a reminder text. */
     @Query("""
             select d from PosDraft d

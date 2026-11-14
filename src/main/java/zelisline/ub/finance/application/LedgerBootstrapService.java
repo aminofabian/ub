@@ -40,6 +40,8 @@ public class LedgerBootstrapService {
         ensure(businessId, LedgerAccountCodes.ACCOUNTS_PAYABLE, "Accounts Payable – Suppliers", "liability");
         ensure(businessId, LedgerAccountCodes.COMMISSIONS_PAYABLE, "Commissions payable to staff", "liability");
         ensure(businessId, LedgerAccountCodes.TIPS_PAYABLE, "Tips payable to staff", "liability");
+        ensure(businessId, LedgerAccountCodes.CUSTOMER_DEPOSITS, "Customer booking deposits held", "liability");
+        ensure(businessId, LedgerAccountCodes.DEFERRED_SERVICE_REVENUE, "Prepaid service packages not yet used", "liability");
         ensure(businessId, LedgerAccountCodes.VAT_PAYABLE, "VAT payable", "liability");
         ensure(businessId, LedgerAccountCodes.GOODS_RECEIVED_NOT_INVOICED, "Goods received not invoiced (GRNI)", "liability");
         ensure(businessId, LedgerAccountCodes.INVENTORY_SHRINKAGE, "Inventory shrinkage (wastage)", "expense");

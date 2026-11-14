@@ -71,6 +71,14 @@ public class ServiceTicketService {
     private final zelisline.ub.audit.application.AuditEventPublisher auditEventPublisher;
     private final zelisline.ub.audit.application.AuditEventBuilder auditEventBuilder;
     private final zelisline.ub.serviceops.application.HeldMoneyService heldMoneyService;
+    private final zelisline.ub.serviceops.application.ServiceResourceService resourceService;
+    private final zelisline.ub.catalog.repository.ItemRepository itemRepository;
+    private final zelisline.ub.discounts.application.DiscountResolutionService discountResolutionService;
+    private final zelisline.ub.serviceops.repository.ServiceResourceRepository resourceRepository;
+    private final zelisline.ub.serviceops.application.StaffEarningsService staffEarningsService;
+    private final zelisline.ub.credits.repository.CustomerRepository customerRepository;
+    private final zelisline.ub.serviceops.application.ServicePackageService servicePackageService;
+    private final zelisline.ub.serviceops.application.ServiceHelperRoleService helperRoleService;
 
     /**
      * Every open ticket at a branch, oldest first, with the number of chairs. Not limited to
@@ -148,7 +156,7 @@ public class ServiceTicketService {
         ticket.setServiceStage(PosDraftConstants.STAGE_WAITING);
         ticket.setCreatedBy(userId);
         ticket.setClientDraftId(clientId);
-        ticket.setCustomerId(blankToNull(request.customerId()));
+        ticket.setCustomerId(requireOwnCustomer(businessId, request.customerId()));
         ticket.setRequestedStaffProfileId(requested);
         try {
             ticket = draftRepository.saveAndFlush(ticket);
@@ -193,7 +201,14 @@ public class ServiceTicketService {
         PosDraftLine line = lineRepository.findByIdAndDraftId(lineId, ticketId)
                 .filter(l -> !l.isDeleted())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Line not found"));
-        if (lineRepository.countByDraftIdAndDeletedFalse(ticketId) <= 1) {
+        if (PosDraftConstants.STAGE_IN_SERVICE.equals(line.getLineStage())
+                || PosDraftConstants.LINE_DONE.equals(line.getLineStage())) {
+            if (activeLines(ticketId).size() > 1) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "This service has been started; it can no longer be removed");
+            }
+        }
+        if (activeLines(ticketId).size() <= 1) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "A ticket needs at least one service; cancel the ticket instead");
         }
@@ -204,6 +219,477 @@ public class ServiceTicketService {
         ticket = draftRepository.saveAndFlush(ticket);
         return toResponse(ticket, active, staffNames(businessId, List.of(ticket)));
     }
+
+    // ------------------------------------------------------ products on a visit
+
+    /**
+     * Adds a product the customer is buying on this visit (hair food after a haircut). It is paid
+     * for with the services, as one sale. The price is today's shelf price; adding the same
+     * product again increases its quantity. Stock is taken when the visit is paid, not before.
+     */
+    @Transactional
+    public TicketResponse addProduct(
+            String businessId, String ticketId, zelisline.ub.posdraft.api.dto.ServiceTicketDtos.AddProductRequest request) {
+        PosDraft ticket = requireOpen(businessId, ticketId);
+        if (ticket.getRedoOfSaleId() != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "A free redo cannot carry products; ring them on the till");
+        }
+        var item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(request.itemId().trim(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Product not found"));
+        String cannotSell = zelisline.ub.catalog.application.ItemSellability.sellabilityViolation(item);
+        if (cannotSell != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, cannotSell);
+        }
+        BigDecimal price = currentProductPrice(businessId, ticket.getBranchId(), item.getId(), item.getName());
+        List<PosDraftLine> all = lineRepository.findByDraftIdOrderByLineIndexAsc(ticketId);
+        PosDraftLine line = all.stream()
+                .filter(l -> !l.isDeleted() && !SaleLineKinds.isService(l.getLineKind()) && item.getId().equals(l.getItemId()))
+                .findFirst()
+                .orElse(null);
+        if (line == null) {
+            if (productLines(ticketId).size() >= 30) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A visit can carry up to 30 different products");
+            }
+            line = new PosDraftLine();
+            line.setDraftId(ticket.getId());
+            line.setBusinessId(businessId);
+            line.setLineIndex(all.stream().mapToInt(PosDraftLine::getLineIndex).max().orElse(-1) + 1);
+            line.setLineKind(SaleLineKinds.ITEM);
+            line.setItemId(item.getId());
+            line.setItemName(item.getName().length() > 255 ? item.getName().substring(0, 255) : item.getName());
+            line.setQuantity(BigDecimal.ZERO);
+        }
+        line.setQuantity(line.getQuantity().add(request.quantity()));
+        line.setUnitPrice(price);
+        line.setLineTotal(price.multiply(line.getQuantity()).setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+        lineRepository.saveAndFlush(line);
+        recomputeTotal(ticket, null);
+        PosDraft saved = draftRepository.saveAndFlush(ticket);
+        return toResponse(saved, activeLines(ticketId), staffNames(businessId, List.of(saved)));
+    }
+
+    @Transactional
+    public TicketResponse removeProduct(String businessId, String ticketId, String lineId) {
+        PosDraft ticket = requireOpen(businessId, ticketId);
+        PosDraftLine line = lineRepository.findByIdAndDraftId(lineId, ticketId)
+                .filter(l -> !l.isDeleted() && !SaleLineKinds.isService(l.getLineKind()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found on this visit"));
+        line.setDeleted(true);
+        lineRepository.saveAndFlush(line);
+        recomputeTotal(ticket, null);
+        PosDraft saved = draftRepository.saveAndFlush(ticket);
+        return toResponse(saved, activeLines(ticketId), staffNames(businessId, List.of(saved)));
+    }
+
+    /** Today's price for a product at a branch, after any running discount. */
+    private BigDecimal currentProductPrice(String businessId, String branchId, String itemId, String name) {
+        var resolved = discountResolutionService.resolveForItem(businessId, itemId, branchId);
+        BigDecimal price = resolved.finalPrice() != null ? resolved.finalPrice() : resolved.regularPrice();
+        if (price == null || price.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Set a selling price for " + name + " first");
+        }
+        return price.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+    }
+
+    // ------------------------------------------------------ one service at a time
+
+    @Transactional(readOnly = true)
+    public TicketResponse get(String businessId, String ticketId) {
+        PosDraft ticket = requireTicket(businessId, ticketId);
+        return toResponse(ticket, activeLines(ticketId), staffNames(businessId, List.of(ticket)));
+    }
+
+    /**
+     * Says who does one service of a visit, and optionally where, without starting it. A small
+     * shop uses this to pick the barber and take payment straight away.
+     */
+    @Transactional
+    public TicketResponse assignLine(
+            String businessId, String ticketId, String lineId,
+            zelisline.ub.posdraft.api.dto.ServiceTicketDtos.LineAssignmentRequest request) {
+        PosDraft ticket = requireOpen(businessId, ticketId);
+        PosDraftLine line = requireLine(ticketId, lineId);
+        if (PosDraftConstants.STAGE_IN_SERVICE.equals(line.getLineStage())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "This service is in progress; mark it done before changing who does it");
+        }
+        String performer = blankToNull(request.performerStaffProfileId());
+        if (performer != null) {
+            serviceSaleSupport.resolve(businessId, line.getServiceId(), performer);
+            dropHelper(line, performer);
+            line.setPerformerStaffProfileId(performer);
+        }
+        if (request.resourceId() != null) {
+            String resourceId = blankToNull(request.resourceId());
+            if (resourceId != null) {
+                var resource = resourceRepository.findByIdAndBusinessId(resourceId, businessId)
+                        .filter(found -> found.getBranchId().equals(ticket.getBranchId()))
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Resource not found"));
+                resourceId = resource.getId();
+            }
+            line.setResourceId(resourceId);
+        }
+        lineRepository.save(line);
+        PosDraft saved = draftRepository.saveAndFlush(ticket);
+        return toResponse(saved, activeLines(ticketId), staffNames(businessId, List.of(saved)));
+    }
+
+    /**
+     * Starts one service of a visit: this person, at this chair or bed, now. Refused when the
+     * person is in the middle of another service or the resource is taken, being prepared or out
+     * of use — two separate questions, both of which must be yes.
+     */
+    @Transactional
+    public TicketResponse startLine(
+            String businessId, String ticketId, String lineId,
+            zelisline.ub.posdraft.api.dto.ServiceTicketDtos.LineAssignmentRequest request) {
+        PosDraft ticket = requireOpen(businessId, ticketId);
+        PosDraftLine line = requireLine(ticketId, lineId);
+        String performer = blankToNull(request.performerStaffProfileId()) != null
+                ? request.performerStaffProfileId().trim()
+                : line.getPerformerStaffProfileId();
+        if (performer == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose who is doing " + line.getItemName());
+        }
+        String resourceId = request.resourceId() != null ? blankToNull(request.resourceId()) : line.getResourceId();
+        if (PosDraftConstants.STAGE_IN_SERVICE.equals(line.getLineStage())) {
+            if (performer.equals(line.getPerformerStaffProfileId())
+                    && java.util.Objects.equals(resourceId, line.getResourceId())) {
+                // A double tap on Start.
+                return toResponse(ticket, activeLines(ticketId), staffNames(businessId, List.of(ticket)));
+            }
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This service has already been started");
+        }
+        serviceSaleSupport.resolve(businessId, line.getServiceId(), performer);
+        // Always the person first, then the place, so two tills cannot wait on each other.
+        requireStaffFree(businessId, performer, line.getId());
+        Integer stationNo = null;
+        if (resourceId != null) {
+            var resource = resourceService.claim(businessId, ticket.getBranchId(), resourceId, line.getId(), line.getServiceId());
+            stationNo = resource.getStationNo();
+        }
+        Instant now = Instant.now();
+        dropHelper(line, performer);
+        line.setPerformerStaffProfileId(performer);
+        line.setResourceId(resourceId);
+        line.setLineStage(PosDraftConstants.STAGE_IN_SERVICE);
+        if (line.getStartedAt() == null) {
+            line.setStartedAt(now);
+        }
+        line.setFinishedAt(null);
+        lineRepository.saveAndFlush(line);
+        List<PosDraftLine> lines = activeLines(ticketId);
+        restage(ticket, lines);
+        if (stationNo != null) {
+            ticket.setStationNo(stationNo);
+        }
+        if (ticket.getRequestedStaffProfileId() == null) {
+            ticket.setRequestedStaffProfileId(performer);
+        }
+        PosDraft saved = draftRepository.saveAndFlush(ticket);
+        return toResponse(saved, lines, staffNames(businessId, List.of(saved)));
+    }
+
+    /** One service is finished: its person and its chair or bed are free, whatever else is still going on. */
+    @Transactional
+    public TicketResponse finishLine(String businessId, String ticketId, String lineId) {
+        PosDraft ticket = requireOpen(businessId, ticketId);
+        PosDraftLine line = requireLine(ticketId, lineId);
+        if (PosDraftConstants.LINE_DONE.equals(line.getLineStage())) {
+            return toResponse(ticket, activeLines(ticketId), staffNames(businessId, List.of(ticket)));
+        }
+        if (!PosDraftConstants.STAGE_IN_SERVICE.equals(line.getLineStage())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Start this service first");
+        }
+        line.setLineStage(PosDraftConstants.LINE_DONE);
+        line.setFinishedAt(Instant.now());
+        lineRepository.saveAndFlush(line);
+        List<PosDraftLine> lines = activeLines(ticketId);
+        boolean allDone = lines.stream().allMatch(l -> PosDraftConstants.LINE_DONE.equals(l.getLineStage()));
+        if (allDone && ticket.getRedoOfSaleId() != null) {
+            // The last service of a free redo: close it the way Done on the ticket does.
+            ticket.setServiceStage(PosDraftConstants.STAGE_IN_SERVICE);
+            draftRepository.saveAndFlush(ticket);
+            return finish(businessId, ticketId);
+        }
+        restage(ticket, lines);
+        PosDraft saved = draftRepository.saveAndFlush(ticket);
+        return toResponse(saved, lines, staffNames(businessId, List.of(saved)));
+    }
+
+    /**
+     * What the visit would pay out if it were paid now: each person's commission on each service
+     * and what is left for the shop. The same calculation the sale then records.
+     */
+    @Transactional(readOnly = true)
+    public zelisline.ub.posdraft.api.dto.ServiceTicketDtos.VisitEarningsResponse earnings(String businessId, String ticketId) {
+        PosDraft ticket = requireTicket(businessId, ticketId);
+        List<PosDraftLine> lines = activeLines(ticketId);
+        Map<String, String> names = staffNames(businessId, List.of(ticket));
+        List<zelisline.ub.posdraft.api.dto.ServiceTicketDtos.EarningsLine> out = new ArrayList<>();
+        Map<String, BigDecimal> perStaff = new java.util.LinkedHashMap<>();
+        BigDecimal total = BigDecimal.ZERO;
+        BigDecimal commission = BigDecimal.ZERO;
+        for (PosDraftLine line : lines) {
+            List<zelisline.ub.posdraft.api.dto.ServiceTicketDtos.EarningsShare> shares = new ArrayList<>();
+            BigDecimal lineCommission = BigDecimal.ZERO;
+            for (var share : staffEarningsService.previewServiceLine(businessId,
+                    new zelisline.ub.serviceops.application.StaffEarningsService.SaleLine(
+                            line.getId(), true, line.getServiceId(), line.getPerformerStaffProfileId(),
+                            line.getLineTotal(), BigDecimal.ZERO, line.getQuantity(),
+                            zelisline.ub.serviceops.domain.ServiceHelpers.decode(line.getServiceHelpers()),
+                            line.getPerformerAmount()))) {
+                shares.add(new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.EarningsShare(
+                        share.staffProfileId(), names.getOrDefault(share.staffProfileId(), "Staff"),
+                        share.commission(), share.rule()));
+                lineCommission = lineCommission.add(share.commission());
+                perStaff.merge(share.staffProfileId(), share.commission(), BigDecimal::add);
+            }
+            out.add(new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.EarningsLine(
+                    line.getId(), line.getItemName(), line.getLineTotal(), shares,
+                    line.getLineTotal().subtract(lineCommission)));
+            total = total.add(line.getLineTotal());
+            commission = commission.add(lineCommission);
+        }
+        List<zelisline.ub.posdraft.api.dto.ServiceTicketDtos.StaffEarning> staff = new ArrayList<>();
+        for (Map.Entry<String, BigDecimal> entry : perStaff.entrySet()) {
+            staff.add(new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.StaffEarning(
+                    entry.getKey(), names.getOrDefault(entry.getKey(), "Staff"), entry.getValue()));
+        }
+        return new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.VisitEarningsResponse(
+                ticket.getId(), total, commission, total.subtract(commission), out, staff);
+    }
+
+    private PosDraftLine requireLine(String ticketId, String lineId) {
+        return lineRepository.findByIdAndDraftId(lineId, ticketId)
+                .filter(l -> !l.isDeleted() && SaleLineKinds.isService(l.getLineKind()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Line not found"));
+    }
+
+    /**
+     * A person does one service at a time. Their row is locked first and the check is a locking
+     * read, so two tills cannot both start them.
+     */
+    private void requireStaffFree(String businessId, String staffProfileId, String exceptLineId) {
+        staffProfileService.lockForLedger(businessId, staffProfileId);
+        for (PosDraftLine busy : lineRepository.findInServiceByPerformer(businessId, staffProfileId)) {
+            if (!busy.getId().equals(exceptLineId) && !busy.getDraftId().equals(draftIdOf(exceptLineId))) {
+                String name = staffProfileService.displayNamesByIds(businessId, List.of(staffProfileId))
+                        .getOrDefault(staffProfileId, "They");
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        name + " is still doing " + busy.getItemName() + "; mark it done first");
+            }
+        }
+    }
+
+    /** Services of the same visit do not block each other in the simple one-person path. */
+    private String draftIdOf(String lineId) {
+        return lineId == null ? null : lineRepository.findById(lineId).map(PosDraftLine::getDraftId).orElse(null);
+    }
+
+    /** The person serving cannot also be listed as helping on the same service. */
+    private static void dropHelper(PosDraftLine line, String performer) {
+        if (!performer.equals(line.getPerformerStaffProfileId())) {
+            // An amount was agreed for the person who led it, not for whoever replaces them.
+            line.setPerformerAmount(null);
+        }
+        var helpers = zelisline.ub.serviceops.domain.ServiceHelpers.decode(line.getServiceHelpers());
+        if (helpers.removeIf(h -> h.staffProfileId().equals(performer))) {
+            line.setServiceHelpers(zelisline.ub.serviceops.domain.ServiceHelpers.encode(helpers));
+        }
+    }
+
+    /**
+     * The visit's stage follows its services: in service while any is under way, ready to pay
+     * once all are done, otherwise waiting (for the first, or between two).
+     */
+    private static void restage(PosDraft ticket, List<PosDraftLine> lines) {
+        boolean any = lines.stream().anyMatch(l -> PosDraftConstants.STAGE_IN_SERVICE.equals(l.getLineStage()));
+        boolean all = !lines.isEmpty()
+                && lines.stream().allMatch(l -> PosDraftConstants.LINE_DONE.equals(l.getLineStage()));
+        if (any) {
+            ticket.setServiceStage(PosDraftConstants.STAGE_IN_SERVICE);
+            if (ticket.getServiceStartedAt() == null) {
+                ticket.setServiceStartedAt(Instant.now());
+            }
+            ticket.setServiceFinishedAt(null);
+        } else if (all) {
+            ticket.setServiceStage(PosDraftConstants.STAGE_READY_TO_PAY);
+            ticket.setServiceFinishedAt(Instant.now());
+        } else {
+            ticket.setServiceStage(PosDraftConstants.STAGE_WAITING);
+            ticket.setStationNo(null);
+        }
+    }
+
+    /**
+     * Sets everyone working on one service in one go: the first person leads, the rest help,
+     * sharing it equally unless shares are given. An amount, where given, is what that person is
+     * paid for this service instead of what their plan gives; together the amounts cannot come to
+     * more than the service costs.
+     */
+    @Transactional
+    public TicketResponse setTeam(
+            String businessId, String ticketId, String lineId,
+            List<zelisline.ub.posdraft.api.dto.ServiceTicketDtos.LineHelper> members) {
+        PosDraft ticket = requireOpen(businessId, ticketId);
+        PosDraftLine line = requireLine(ticketId, lineId);
+        String lead = members.get(0).staffProfileId().trim();
+        if (PosDraftConstants.STAGE_IN_SERVICE.equals(line.getLineStage())
+                && !lead.equals(line.getPerformerStaffProfileId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "This service is in progress; mark it done before changing who leads it");
+        }
+        java.util.Set<String> named = new java.util.HashSet<>();
+        BigDecimal equal = new BigDecimal("100").divide(BigDecimal.valueOf(members.size()), 2, RoundingMode.DOWN);
+        List<zelisline.ub.serviceops.domain.ServiceHelpers.Helper> helpers = new ArrayList<>();
+        BigDecimal shares = BigDecimal.ZERO;
+        BigDecimal amounts = BigDecimal.ZERO;
+        for (int i = 0; i < members.size(); i++) {
+            var member = members.get(i);
+            String staffId = member.staffProfileId().trim();
+            if (!named.add(staffId)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Name each person once");
+            }
+            serviceSaleSupport.resolve(businessId, line.getServiceId(), staffId);
+            if (member.amount() != null) {
+                amounts = amounts.add(member.amount());
+            }
+            if (i > 0) {
+                BigDecimal share = (member.sharePercent() == null ? equal : member.sharePercent())
+                        .setScale(2, RoundingMode.HALF_UP);
+                shares = shares.add(share);
+                helpers.add(new zelisline.ub.serviceops.domain.ServiceHelpers.Helper(staffId, share, member.amount()));
+            }
+        }
+        if (shares.compareTo(new BigDecimal("99")) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "The shares must leave something for the person leading the service");
+        }
+        if (amounts.compareTo(line.getLineTotal()) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Those amounts come to more than " + line.getItemName() + " costs ("
+                            + line.getLineTotal().toPlainString() + ")");
+        }
+        line.setPerformerStaffProfileId(lead);
+        line.setPerformerAmount(members.get(0).amount());
+        line.setServiceHelpers(zelisline.ub.serviceops.domain.ServiceHelpers.encode(helpers));
+        lineRepository.save(line);
+        PosDraft saved = draftRepository.saveAndFlush(ticket);
+        return toResponse(saved, activeLines(ticketId), staffNames(businessId, List.of(saved)));
+    }
+
+    /**
+     * Several people worked on one service (one washes, one cuts, one finishes): names everyone
+     * who shared it with the person serving, and what each gets.
+     *
+     * <p>A helper is paid one of three ways. By a role the owner set beforehand (an after-shave
+     * at 50 shillings, a groomer at 20% of the price): the pay is worked out here from the role,
+     * so anyone at the till may use it. By an amount typed at the till: a commission decision,
+     * allowed only with {@code maySetAmounts}, though an amount already agreed for that person on
+     * this service may be sent back unchanged by anyone. Or by their own plan, on their share of
+     * the service; with no shares given those are split equally. An empty list means the person
+     * serving did it alone.</p>
+     *
+     * <p>A role or a typed amount is paid out of what the person leading earns on the service,
+     * never out of the shop's part: a role's percentage is a percentage of that, and together the
+     * helpers cannot be given more than it. Where the person leading earns no commission (they
+     * are on a salary), a set amount is the shop's to pay, up to the price.</p>
+     */
+    @Transactional
+    public TicketResponse setHelpers(
+            String businessId, String ticketId, String lineId,
+            List<zelisline.ub.posdraft.api.dto.ServiceTicketDtos.LineHelper> asked, boolean maySetAmounts) {
+        PosDraft ticket = requireOpen(businessId, ticketId);
+        PosDraftLine line = lineRepository.findByIdAndDraftId(lineId, ticketId)
+                .filter(l -> !l.isDeleted())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Line not found"));
+        String lead = line.getPerformerStaffProfileId() != null
+                ? line.getPerformerStaffProfileId()
+                : ticket.getRequestedStaffProfileId();
+        java.util.Set<String> named = new java.util.HashSet<>();
+        if (lead != null) {
+            named.add(lead);
+        }
+        Map<String, BigDecimal> agreed = new java.util.HashMap<>();
+        for (var helper : zelisline.ub.serviceops.domain.ServiceHelpers.decode(line.getServiceHelpers())) {
+            if (helper.amount() != null) {
+                agreed.put(helper.staffProfileId(), helper.amount());
+            }
+        }
+        BigDecimal price = line.getLineTotal();
+        // Only those paid by their plan share the price with the person leading.
+        long byPlan = asked.stream()
+                .filter(h -> (h.roleId() == null || h.roleId().isBlank()) && h.amount() == null)
+                .count();
+        BigDecimal equal = new BigDecimal("100").divide(BigDecimal.valueOf(byPlan + 1L), 2, RoundingMode.DOWN);
+        List<zelisline.ub.serviceops.domain.ServiceHelpers.Helper> helpers = new ArrayList<>();
+        BigDecimal total = BigDecimal.ZERO;
+        BigDecimal amounts = line.getPerformerAmount() == null ? BigDecimal.ZERO : line.getPerformerAmount();
+        // What the person leading earns on this service before anyone helps: what helpers share.
+        BigDecimal leadEarns = BigDecimal.ZERO;
+        if (lead != null) {
+            for (var share : staffEarningsService.previewServiceLine(businessId,
+                    new zelisline.ub.serviceops.application.StaffEarningsService.SaleLine(
+                            line.getId(), true, line.getServiceId(), lead, price, BigDecimal.ZERO,
+                            line.getQuantity(), List.of(), line.getPerformerAmount()))) {
+                leadEarns = leadEarns.add(share.commission());
+            }
+        }
+        BigDecimal toHelpers = BigDecimal.ZERO;
+        for (zelisline.ub.posdraft.api.dto.ServiceTicketDtos.LineHelper helper : asked) {
+            String staffId = helper.staffProfileId().trim();
+            if (!named.add(staffId)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Name each person once");
+            }
+            serviceSaleSupport.resolve(businessId, line.getServiceId(), staffId);
+            BigDecimal amount = helper.amount();
+            BigDecimal share = helper.sharePercent() == null ? equal : helper.sharePercent();
+            if (helper.roleId() != null && !helper.roleId().isBlank()) {
+                amount = helperRoleService.require(businessId, helper.roleId()).payFor(leadEarns);
+                share = SET_AMOUNT_SHARE;
+            } else if (amount != null) {
+                BigDecimal before = agreed.get(staffId);
+                if (!maySetAmounts && (before == null || before.compareTo(amount) != 0)) {
+                    throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                            "Only someone who sets commission can type what a helper is paid. Use a helper role instead.");
+                }
+                share = SET_AMOUNT_SHARE;
+            }
+            share = share.setScale(2, RoundingMode.HALF_UP);
+            total = total.add(share);
+            if (amount != null) {
+                amounts = amounts.add(amount);
+                toHelpers = toHelpers.add(amount);
+            }
+            helpers.add(new zelisline.ub.serviceops.domain.ServiceHelpers.Helper(staffId, share, amount));
+        }
+        if (total.compareTo(new BigDecimal("99")) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "The shares must leave something for the person serving");
+        }
+        if (amounts.compareTo(price) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Those amounts come to more than " + line.getItemName() + " costs ("
+                            + price.toPlainString() + ")");
+        }
+        if (line.getPerformerAmount() == null && leadEarns.signum() > 0 && toHelpers.compareTo(leadEarns) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "The helpers would get " + toHelpers.toPlainString() + ", more than the "
+                            + leadEarns.toPlainString() + " earned on " + line.getItemName()
+                            + " by the person leading it");
+        }
+        line.setServiceHelpers(zelisline.ub.serviceops.domain.ServiceHelpers.encode(helpers));
+        lineRepository.save(line);
+        ticket = draftRepository.saveAndFlush(ticket);
+        return toResponse(ticket, activeLines(ticketId), staffNames(businessId, List.of(ticket)));
+    }
+
+    /**
+     * The share recorded for a helper paid a set amount. It only has to be a valid share: such a
+     * helper takes nothing from the price the person leading earns on.
+     */
+    private static final BigDecimal SET_AMOUNT_SHARE = BigDecimal.ONE.setScale(2);
 
     /**
      * The customer sits down: the ticket takes a chair and a staff member. Two customers cannot be
@@ -240,12 +726,29 @@ public class ServiceTicketService {
         if (!draftRepository.findInServiceAtStation(businessId, ticket.getBranchId(), request.stationNo()).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "That chair is taken");
         }
+        // One person, one chair for the whole ticket: the simple path of a small shop. The
+        // person must not be in the middle of another service, and the chair is taken as a resource.
+        requireStaffFree(businessId, performer, null);
+        resourceService.ensureForStations(businessId, ticket.getBranchId());
+        var chair = resourceRepository
+                .findByBusinessIdAndBranchIdAndStationNo(businessId, ticket.getBranchId(), request.stationNo())
+                .map(found -> resourceService.claim(businessId, found.getBranchId(), found.getId(), null, null))
+                .orElse(null);
+        Instant startedNow = Instant.now();
         ticket.setStationNo(request.stationNo());
         ticket.setRequestedStaffProfileId(performer);
         ticket.setServiceStage(PosDraftConstants.STAGE_IN_SERVICE);
-        ticket.setServiceStartedAt(Instant.now());
+        ticket.setServiceStartedAt(startedNow);
         for (PosDraftLine line : lines) {
+            if (PosDraftConstants.LINE_DONE.equals(line.getLineStage())) {
+                // Already done by someone earlier in the visit: theirs stays theirs.
+                continue;
+            }
             line.setPerformerStaffProfileId(performer);
+            line.setLineStage(PosDraftConstants.STAGE_IN_SERVICE);
+            line.setStartedAt(startedNow);
+            line.setFinishedAt(null);
+            line.setResourceId(chair == null ? null : chair.getId());
         }
         lineRepository.saveAll(lines);
         ticket = draftRepository.saveAndFlush(ticket);
@@ -268,6 +771,14 @@ public class ServiceTicketService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Start the ticket first");
         }
         ticket.setServiceFinishedAt(Instant.now());
+        List<PosDraftLine> finishing = activeLines(ticketId);
+        for (PosDraftLine line : finishing) {
+            if (!PosDraftConstants.LINE_DONE.equals(line.getLineStage())) {
+                line.setLineStage(PosDraftConstants.LINE_DONE);
+                line.setFinishedAt(ticket.getServiceFinishedAt());
+            }
+        }
+        lineRepository.saveAll(finishing);
         if (ticket.getRedoOfSaleId() != null) {
             // A redo is not charged: it closes here, with who did it and when, and no sale.
             ticket.setServiceStage(PosDraftConstants.STAGE_REDO_DONE);
@@ -297,6 +808,23 @@ public class ServiceTicketService {
         if (ticket.getStationNo() != null && !draftRepository
                 .findInServiceAtStation(businessId, ticket.getBranchId(), ticket.getStationNo()).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "That chair has been taken by someone else");
+        }
+        // Back in the chair: the last service done is in progress again, if its person and place are free.
+        List<PosDraftLine> reopening = activeLines(ticketId);
+        PosDraftLine last = reopening.stream()
+                .filter(l -> l.getFinishedAt() != null)
+                .max(java.util.Comparator.comparing(PosDraftLine::getFinishedAt))
+                .orElse(null);
+        if (last != null) {
+            if (last.getPerformerStaffProfileId() != null) {
+                requireStaffFree(businessId, last.getPerformerStaffProfileId(), last.getId());
+            }
+            if (last.getResourceId() != null) {
+                resourceService.claim(businessId, ticket.getBranchId(), last.getResourceId(), last.getId(), null);
+            }
+            last.setLineStage(PosDraftConstants.STAGE_IN_SERVICE);
+            last.setFinishedAt(null);
+            lineRepository.save(last);
         }
         ticket.setServiceStage(PosDraftConstants.STAGE_IN_SERVICE);
         ticket.setServiceFinishedAt(null);
@@ -381,12 +909,16 @@ public class ServiceTicketService {
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                         "This customer is booked but has not arrived yet");
             }
-            if (PosDraftConstants.STAGE_WAITING.equals(ticket.getServiceStage())) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT,
-                        "Choose who served this customer before taking payment");
-            }
             if (lines.isEmpty()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This ticket has no services");
+            }
+            // Every service is rung against whoever did it. The person who opened the ticket, or
+            // the one the customer asked for, is not assumed to have done the work.
+            for (PosDraftLine line : lines) {
+                if (line.getPerformerStaffProfileId() == null || line.getPerformerStaffProfileId().isBlank()) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "Choose who did " + line.getItemName() + " before taking payment");
+                }
             }
         }
         // A fixed-price service is sold at today's price. If the catalogue changed since the
@@ -402,7 +934,18 @@ public class ServiceTicketService {
                 changed.add(service.getName());
             }
         }
+        // Products are sold at today's shelf price as well.
+        List<PosDraftLine> products = productLines(ticketId);
+        for (PosDraftLine product : products) {
+            BigDecimal current = currentProductPrice(businessId, ticket.getBranchId(), product.getItemId(), product.getItemName());
+            if (product.getUnitPrice().compareTo(current) != 0) {
+                product.setUnitPrice(current);
+                product.setLineTotal(current.multiply(product.getQuantity()).setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+                changed.add(product.getItemName());
+            }
+        }
         if (!changed.isEmpty()) {
+            lineRepository.saveAll(products);
             lineRepository.saveAll(lines);
             recomputeTotal(ticket, lines);
             draftRepository.saveAndFlush(ticket);
@@ -417,18 +960,41 @@ public class ServiceTicketService {
                     : ticket.getRequestedStaffProfileId();
             saleLines.add(new PostSaleLineRequest(
                     null, line.getQuantity(), line.getUnitPrice(), SaleLineKinds.SERVICE, null, null, null, null,
-                    line.getServiceId(), performer));
+                    line.getServiceId(), performer, null, null,
+                    zelisline.ub.serviceops.domain.ServiceHelpers.decode(line.getServiceHelpers()).stream()
+                            .map(h -> new zelisline.ub.sales.api.dto.PostSaleLineHelper(
+                                    h.staffProfileId(), h.sharePercent(), h.amount()))
+                            .toList(),
+                    line.getPerformerAmount()));
+        }
+        for (PosDraftLine product : products) {
+            saleLines.add(PostSaleLineRequest.catalogItem(product.getItemId(), product.getQuantity(), product.getUnitPrice()));
         }
         // A deposit held for this ticket is moved to the customer's wallet and spent from there,
         // ahead of whatever else they hand over. Anything left over stays in their wallet.
         List<PostSalePaymentRequest> payments = new ArrayList<>();
+        BigDecimal fromWallet = BigDecimal.ZERO;
         if (PosDraftConstants.DEPOSIT_HELD.equals(ticket.getDepositState())) {
-            BigDecimal deposit = ticket.getDepositAmount();
+            fromWallet = fromWallet.add(ticket.getDepositAmount());
             releaseDepositToWallet(businessId, ticket);
             ticket.setDepositState(PosDraftConstants.DEPOSIT_APPLIED);
+        }
+        // A prepaid session works the same way: its value is released to the wallet and spent.
+        String packageId = blankToNull(request.packageId());
+        if (packageId != null && ticket.getRedeemedPackageId() == null) {
+            if (ticket.getCustomerId() == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Choose the customer on the ticket before using their package");
+            }
+            fromWallet = fromWallet.add(servicePackageService.redeemSession(
+                    businessId, packageId, ticket.getCustomerId(),
+                    lines.stream().map(PosDraftLine::getServiceId).toList(), ticket.getBranchId()));
+            ticket.setRedeemedPackageId(packageId);
+        }
+        if (fromWallet.signum() > 0) {
             payments.add(new PostSalePaymentRequest(
                     zelisline.ub.sales.SalesConstants.PAYMENT_METHOD_CUSTOMER_WALLET,
-                    deposit.min(ticket.getGrandTotal()), null));
+                    fromWallet.min(ticket.getGrandTotal()), null));
         }
         if (request.payments() != null) {
             payments.addAll(request.payments());
@@ -446,7 +1012,16 @@ public class ServiceTicketService {
                 null,
                 request.tips());
         SaleCreationOutcome outcome =
-                saleService.createSale(businessId, idempotencyKey, saleRequest, userId, roleId, tillDeviceKey);
+                // Amounts set on the visit were authorised when they were typed, not by whoever takes the money.
+                zelisline.ub.serviceops.application.EarningsApproval.approved(() ->
+                        saleService.createSale(businessId, idempotencyKey, saleRequest, userId, roleId, tillDeviceKey));
+        if (!outcome.createdNew()) {
+            // This key already belongs to another sale. Nothing was rung for this ticket, so it
+            // must not be closed against that sale, and a deposit or session released above must
+            // not stay released: failing here rolls all of it back.
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "This payment was already used for another sale; take payment again");
+        }
         if (ticket.isPending()) {
             ticket.setStatus(PosDraftConstants.STATUS_COMPLETED);
             ticket.setSaleId(outcome.response().id());
@@ -454,6 +1029,16 @@ public class ServiceTicketService {
             if (ticket.getServiceFinishedAt() == null) {
                 ticket.setServiceFinishedAt(Instant.now());
             }
+            // Paid: anything still marked in progress is over, and its chair or bed is free.
+            for (PosDraftLine line : lines) {
+                if (!PosDraftConstants.LINE_DONE.equals(line.getLineStage())) {
+                    line.setLineStage(PosDraftConstants.LINE_DONE);
+                    if (line.getFinishedAt() == null) {
+                        line.setFinishedAt(ticket.getCompletedAt());
+                    }
+                }
+            }
+            lineRepository.saveAll(lines);
             ticket = draftRepository.saveAndFlush(ticket);
         }
         return new PaidTicketResponse(
@@ -533,6 +1118,12 @@ public class ServiceTicketService {
      */
     @Transactional
     public TicketResponse book(String businessId, CreateAppointmentRequest request, String userId) {
+        return book(businessId, request, userId, "STAFF");
+    }
+
+    /** @param source {@code STAFF} at the counter or by phone, {@code ONLINE} from the public booking page */
+    @Transactional
+    public TicketResponse book(String businessId, CreateAppointmentRequest request, String userId, String source) {
         String staffId = request.staffProfileId().trim();
         // The staff row lock is the first statement, so the overlap check below sees every
         // booking that committed before this one got the lock.
@@ -561,11 +1152,11 @@ public class ServiceTicketService {
         ticket.setServiceStage(PosDraftConstants.STAGE_BOOKED);
         ticket.setCreatedBy(userId);
         ticket.setClientDraftId(clientId);
-        ticket.setCustomerId(blankToNull(request.customerId()));
+        ticket.setCustomerId(requireOwnCustomer(businessId, request.customerId()));
         ticket.setRequestedStaffProfileId(staffId);
         ticket.setBookingName(request.name().trim());
         ticket.setBookingPhone(blankToNull(request.phone()));
-        ticket.setBookingSource("STAFF");
+        ticket.setBookingSource(source);
         ticket.setSendReminder(Boolean.TRUE.equals(request.sendReminder()) && blankToNull(request.phone()) != null);
         ticket.setScheduledStart(request.start());
         ticket.setScheduledEnd(request.start());
@@ -584,6 +1175,16 @@ public class ServiceTicketService {
         recomputeTotal(ticket, lines);
         ticket.setScheduledEnd(request.start().plus(plannedMinutes(businessId, lines), java.time.temporal.ChronoUnit.MINUTES));
         requireFree(businessId, staffId, ticket.getScheduledStart(), ticket.getScheduledEnd(), ticket.getId());
+        String resourceId = blankToNull(request.resourceId());
+        if (resourceId != null) {
+            // The place is held as well as the person: a free therapist is no use without a free bed.
+            requireResourceFree(businessId, branchId, resourceId, lines,
+                    ticket.getScheduledStart(), ticket.getScheduledEnd(), ticket.getId());
+            for (PosDraftLine line : lines) {
+                line.setResourceId(resourceId);
+            }
+            lineRepository.saveAll(lines);
+        }
         ticket = draftRepository.saveAndFlush(ticket);
         return toResponse(ticket, lines, staffNames(businessId, List.of(ticket)));
     }
@@ -609,7 +1210,8 @@ public class ServiceTicketService {
         String staffId = blankToNull(request.staffProfileId()) != null
                 ? request.staffProfileId().trim()
                 : peek.getRequestedStaffProfileId();
-        // Lock first; then re-read the booking so the checks below use current data.
+        // Lock the staff row first. The overlap check below is a locking read, and the version
+        // check on the save catches a booking that someone else changed in the meantime.
         staffProfileService.lockForLedger(businessId, staffId);
         PosDraft ticket = requireBooked(businessId, ticketId);
         requireSensibleStart(request.start());
@@ -625,6 +1227,11 @@ public class ServiceTicketService {
         }
         Instant end = request.start().plus(plannedMinutes(businessId, lines), java.time.temporal.ChronoUnit.MINUTES);
         requireFree(businessId, staffId, request.start(), end, ticket.getId());
+        String heldResource = lines.stream().map(PosDraftLine::getResourceId)
+                .filter(java.util.Objects::nonNull).findFirst().orElse(null);
+        if (heldResource != null) {
+            requireResourceFree(businessId, ticket.getBranchId(), heldResource, lines, request.start(), end, ticket.getId());
+        }
         ticket.setScheduledStart(request.start());
         ticket.setScheduledEnd(end);
         // A new time deserves a new reminder.
@@ -678,6 +1285,17 @@ public class ServiceTicketService {
         return toResponse(ticket, activeLines(ticketId), staffNames(businessId, List.of(ticket)));
     }
 
+    /** A ticket may only name a customer of this business; money is later held in their name. */
+    private String requireOwnCustomer(String businessId, String customerId) {
+        String id = blankToNull(customerId);
+        if (id == null) {
+            return null;
+        }
+        customerRepository.findByIdAndBusinessIdAndDeletedAtIsNull(id, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer not found"));
+        return id;
+    }
+
     private PosDraft requireBooked(String businessId, String ticketId) {
         PosDraft ticket = requireOpen(businessId, ticketId);
         if (!PosDraftConstants.STAGE_BOOKED.equals(ticket.getServiceStage())) {
@@ -686,7 +1304,124 @@ public class ServiceTicketService {
         return ticket;
     }
 
+    /** The resource row is locked, then a locking read looks for another booking holding it then. */
+    private void requireResourceFree(
+            String businessId, String branchId, String resourceId, List<PosDraftLine> lines,
+            Instant start, Instant end, String exceptTicketId) {
+        var resource = resourceRepository.findByIdAndBusinessIdForUpdate(resourceId, businessId)
+                .filter(found -> found.getBranchId().equals(branchId))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Resource not found"));
+        if (!resource.isActive()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, resource.getName() + " is not in use");
+        }
+        if (resource.getBlockedUntil() != null && resource.getBlockedUntil().isAfter(start)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, resource.getName() + " is out of use then");
+        }
+        for (PosDraftLine line : lines) {
+            String needs = serviceCatalogService.requireSellable(businessId, line.getServiceId()).getResourceType();
+            if (needs != null && !needs.equals(resource.getResourceType())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, line.getItemName() + " needs a "
+                        + needs.toLowerCase(java.util.Locale.ROOT).replace('_', ' ') + ", and " + resource.getName()
+                        + " is not one");
+            }
+        }
+        // The cleaning time after the booking before is part of what it holds.
+        Instant paddedStart = start.minus(resource.getCleanupMinutes(), java.time.temporal.ChronoUnit.MINUTES);
+        Instant paddedEnd = end.plus(resource.getCleanupMinutes(), java.time.temporal.ChronoUnit.MINUTES);
+        for (PosDraft other : draftRepository.findBookedOverlappingResource(businessId, resourceId, paddedStart, paddedEnd)) {
+            if (!other.getId().equals(exceptTicketId)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, resource.getName() + " is already booked at that time");
+            }
+        }
+    }
+
+    /**
+     * Everything on a branch's calendar in a window: bookings, services under way and done,
+     * staff time off and resources out of use, with the people and places to lay them out by.
+     */
+    @Transactional
+    public zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarResponse calendar(
+            String businessId, String branchId, Instant from, Instant to) {
+        String branch = branchId.trim();
+        var resources = resourceService.list(businessId, branch);
+        List<zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarEntry> entries = new ArrayList<>();
+        java.util.Set<String> ticketIds = new java.util.HashSet<>();
+        for (PosDraft d : draftRepository.findAppointmentsBetween(businessId, branch, from, to)) {
+            boolean booked = PosDraftConstants.STAGE_BOOKED.equals(d.getServiceStage()) && d.isPending();
+            boolean missed = PosDraftConstants.STAGE_NO_SHOW.equals(d.getServiceStage());
+            if (!booked && !missed) {
+                // Arrived: its services show from when they actually start. Cancelled: gone.
+                continue;
+            }
+            List<PosDraftLine> lines = activeLines(d.getId());
+            ticketIds.add(d.getId());
+            entries.add(new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarEntry(
+                    booked ? "BOOKED" : "NO_SHOW", d.getId(), d.getTicketNumber(),
+                    lines.stream().map(PosDraftLine::getItemName).collect(java.util.stream.Collectors.joining(", ")),
+                    d.getBookingName(), d.getRequestedStaffProfileId(),
+                    lines.stream().map(PosDraftLine::getResourceId).filter(java.util.Objects::nonNull).findFirst().orElse(null),
+                    d.getScheduledStart(), d.getScheduledEnd()));
+        }
+        Instant now = Instant.now();
+        Map<String, PosDraft> drafts = new java.util.HashMap<>();
+        List<PosDraftLine> started = lineRepository.findStartedBetween(businessId, branch, from, to);
+        Map<String, Integer> planned = serviceCatalogService.durationsByIds(businessId,
+                started.stream().map(PosDraftLine::getServiceId).filter(java.util.Objects::nonNull).toList());
+        for (PosDraftLine line : started) {
+            PosDraft d = drafts.computeIfAbsent(line.getDraftId(),
+                    id -> draftRepository.findByIdAndBusinessId(id, businessId).orElse(null));
+            if (d == null || PosDraftConstants.STATUS_CANCELLED.equals(d.getStatus())) {
+                continue;
+            }
+            boolean running = PosDraftConstants.STAGE_IN_SERVICE.equals(line.getLineStage());
+            Instant end = line.getFinishedAt() != null ? line.getFinishedAt()
+                    : line.getStartedAt().plus(Math.max(planned.getOrDefault(line.getServiceId(), 0), 5),
+                            java.time.temporal.ChronoUnit.MINUTES);
+            if (running && end.isBefore(now)) {
+                // Running over: it holds its person and place until someone marks it done.
+                end = now;
+            }
+            entries.add(new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarEntry(
+                    running ? "IN_SERVICE" : "DONE", d.getId(), d.getTicketNumber(), line.getItemName(),
+                    d.getBookingName(), line.getPerformerStaffProfileId(), line.getResourceId(),
+                    line.getStartedAt(), end));
+        }
+        Map<String, String> statuses = staffProfileService.floorStatuses(businessId);
+        Map<String, String> names = staffProfileService.displayNamesByIds(businessId, statuses.keySet());
+        List<zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarColumn> staff = new ArrayList<>();
+        for (String id : statuses.keySet()) {
+            staff.add(new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarColumn(id, names.getOrDefault(id, "Staff")));
+        }
+        for (var off : staffProfileService.timeOff(businessId).entrySet()) {
+            for (var period : off.getValue()) {
+                if (period.overlaps(from, to)) {
+                    entries.add(new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarEntry(
+                            "TIME_OFF", null, null, period.reason() == null || period.reason().isBlank() ? "Off" : period.reason(),
+                            null, off.getKey(), null, period.from(), period.to()));
+                }
+            }
+        }
+        List<zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarColumn> places = new ArrayList<>();
+        for (var resource : resources) {
+            if (!resource.active()) {
+                continue;
+            }
+            places.add(new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarColumn(resource.id(), resource.name()));
+            if (resource.blockedUntil() != null && resource.blockedUntil().isAfter(from)) {
+                entries.add(new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarEntry(
+                        "BLOCKED", null, null,
+                        resource.blockedReason() == null ? "Out of use" : resource.blockedReason(), null, null,
+                        resource.id(), now.isAfter(from) ? now : from, resource.blockedUntil()));
+            }
+        }
+        entries.sort(java.util.Comparator.comparing(zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarEntry::start));
+        return new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarResponse(branch, from, to, staff, places, entries);
+    }
+
     private void requireFree(String businessId, String staffId, Instant start, Instant end, String exceptTicketId) {
+        if (staffProfileService.isOff(businessId, staffId, start, end)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "They are off at that time");
+        }
         for (PosDraft other : draftRepository.findBookedOverlapping(businessId, staffId, start, end)) {
             if (!other.getId().equals(exceptTicketId)) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "They are already booked at that time");
@@ -771,15 +1506,23 @@ public class ServiceTicketService {
         return ticket;
     }
 
+    /** The services of a visit. Products bought on it are {@link #productLines}. */
     private List<PosDraftLine> activeLines(String ticketId) {
         return lineRepository.findByDraftIdOrderByLineIndexAsc(ticketId).stream()
-                .filter(line -> !line.isDeleted())
+                .filter(line -> !line.isDeleted() && SaleLineKinds.isService(line.getLineKind()))
                 .toList();
     }
 
-    private static void recomputeTotal(PosDraft ticket, List<PosDraftLine> lines) {
+    private List<PosDraftLine> productLines(String ticketId) {
+        return lineRepository.findByDraftIdOrderByLineIndexAsc(ticketId).stream()
+                .filter(line -> !line.isDeleted() && !SaleLineKinds.isService(line.getLineKind()))
+                .toList();
+    }
+
+    /** The visit's total is its services plus its products, read back from what is stored. */
+    private void recomputeTotal(PosDraft ticket, List<PosDraftLine> ignored) {
         BigDecimal total = BigDecimal.ZERO;
-        for (PosDraftLine line : lines) {
+        for (PosDraftLine line : lineRepository.findByDraftIdOrderByLineIndexAsc(ticket.getId())) {
             if (!line.isDeleted()) {
                 total = total.add(line.getLineTotal());
             }
@@ -789,26 +1532,53 @@ public class ServiceTicketService {
         ticket.setGrandTotal(total);
     }
 
+    /** Names of everyone on these visits: who was asked for, who does each service, who helps. */
     private Map<String, String> staffNames(String businessId, List<PosDraft> tickets) {
-        List<String> ids = tickets.stream()
-                .map(PosDraft::getRequestedStaffProfileId)
-                .filter(id -> id != null && !id.isBlank())
-                .distinct()
-                .toList();
+        java.util.Set<String> ids = new java.util.LinkedHashSet<>();
+        for (PosDraft ticket : tickets) {
+            if (ticket.getRequestedStaffProfileId() != null && !ticket.getRequestedStaffProfileId().isBlank()) {
+                ids.add(ticket.getRequestedStaffProfileId());
+            }
+            for (PosDraftLine line : activeLines(ticket.getId())) {
+                if (line.getPerformerStaffProfileId() != null) {
+                    ids.add(line.getPerformerStaffProfileId());
+                }
+                for (var helper : zelisline.ub.serviceops.domain.ServiceHelpers.decode(line.getServiceHelpers())) {
+                    ids.add(helper.staffProfileId());
+                }
+            }
+        }
         return ids.isEmpty() ? Map.of() : staffProfileService.displayNamesByIds(businessId, ids);
     }
 
-    private static TicketResponse toResponse(PosDraft ticket, List<PosDraftLine> lines, Map<String, String> names) {
+    private TicketResponse toResponse(PosDraft ticket, List<PosDraftLine> lines, Map<String, String> names) {
         return toResponse(ticket, lines, names, null);
     }
 
-    private static TicketResponse toResponse(
+    private TicketResponse toResponse(
             PosDraft ticket, List<PosDraftLine> lines, Map<String, String> names, Integer estimatedWait) {
         List<TicketLineResponse> lineDtos = new ArrayList<>(lines.size());
+        Map<String, String> places = resourceService.namesByIds(ticket.getBusinessId(),
+                lines.stream().map(PosDraftLine::getResourceId).filter(java.util.Objects::nonNull).toList());
+        Map<String, Integer> planned = serviceCatalogService.durationsByIds(ticket.getBusinessId(),
+                lines.stream().map(PosDraftLine::getServiceId).filter(java.util.Objects::nonNull).toList());
         for (PosDraftLine line : lines) {
             if (!line.isDeleted()) {
                 lineDtos.add(new TicketLineResponse(
-                        line.getId(), line.getServiceId(), line.getItemName(), line.getUnitPrice(), line.getLineTotal()));
+                        line.getId(), line.getServiceId(), line.getItemName(), line.getUnitPrice(), line.getLineTotal(),
+                        zelisline.ub.serviceops.domain.ServiceHelpers.decode(line.getServiceHelpers()).stream()
+                                .map(h -> new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.LineHelper(
+                                        h.staffProfileId(), h.sharePercent(), h.amount()))
+                                .toList(),
+                        line.getPerformerStaffProfileId(),
+                        line.getPerformerStaffProfileId() == null ? null : names.get(line.getPerformerStaffProfileId()),
+                        line.getResourceId(),
+                        line.getResourceId() == null ? null : places.get(line.getResourceId()),
+                        line.getLineStage() == null ? PosDraftConstants.STAGE_WAITING : line.getLineStage(),
+                        line.getStartedAt(),
+                        line.getFinishedAt(),
+                        planned.getOrDefault(line.getServiceId(), 0),
+                        line.getPerformerAmount()));
             }
         }
         String staffId = ticket.getRequestedStaffProfileId();
@@ -838,7 +1608,12 @@ public class ServiceTicketService {
                 ticket.getDepositAmount(),
                 ticket.getDepositState(),
                 ticket.getRedoOfSaleId(),
-                ticket.isSendReminder());
+                ticket.isSendReminder(),
+                ticket.getRedeemedPackageId(),
+                productLines(ticket.getId()).stream()
+                        .map(p -> new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.TicketProductResponse(
+                                p.getId(), p.getItemId(), p.getItemName(), p.getQuantity(), p.getUnitPrice(), p.getLineTotal()))
+                        .toList());
     }
 
     private static String blankToNull(String value) {

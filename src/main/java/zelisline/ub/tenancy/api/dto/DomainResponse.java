@@ -8,6 +8,8 @@ public record DomainResponse(
         String businessId,
         String domain,
         boolean primary,
+        /** When true, this host sends visitors to the shop's main address. */
+        boolean redirectToPrimary,
         boolean active,
         String status,
         String source,

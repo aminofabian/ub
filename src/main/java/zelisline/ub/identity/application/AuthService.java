@@ -44,6 +44,7 @@ import zelisline.ub.identity.domain.User;
 import zelisline.ub.identity.domain.UserSession;
 import zelisline.ub.identity.domain.UserStatus;
 import zelisline.ub.identity.repository.PasswordResetTokenRepository;
+import zelisline.ub.identity.repository.PermissionRepository;
 import zelisline.ub.identity.repository.UserRepository;
 import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.platform.application.PlatformAuthSettingsService;
@@ -118,6 +119,7 @@ public class AuthService {
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final TillDeviceService tillDeviceService;
+    private final PermissionRepository permissionRepository;
     private final TillAccessRequestService tillAccessRequestService;
     private final ObjectProvider<zelisline.ub.billing.application.SubscriptionRenewalService> subscriptionRenewalService;
     private final PlatformAuthSettingsService platformAuthSettingsService;
@@ -211,19 +213,16 @@ public class AuthService {
         if (user.getPinHash() == null) {
             throw invalidCredentials();
         }
-        String branchId = resolvePinBranchId(user, request.branchId());
+        boolean worksATill = worksATill(user);
+        String branchId = worksATill ? resolvePinBranchId(user, request.branchId()) : trimToNull(user.getBranchId());
         assertCanAuthenticate(user);
         assertTenantAllowsLogin(user.getBusinessId());
         if (!pinMatches(user.getPinHash(), businessId, request.pin())) {
             recordLoginFailure(user, http, AuditEventTypes.LOGIN_FAILED, "Incorrect PIN");
             throw invalidCredentials();
         }
-        try {
-            tillDeviceService.assertPinLoginAllowed(businessId, branchId, tillDeviceKey);
-        } catch (ResponseStatusException ex) {
-            publishPinLoginDenied(user, http, tillDeviceKey, ex.getReason());
-            notifyTillAccessIfDenied(user, branchId, tillDeviceKey, http);
-            throw ex;
+        if (worksATill) {
+            assertTrustedTill(user, businessId, branchId, tillDeviceKey, http);
         }
         recordLoginSuccess(user);
         LoginResponse response = attachBillingGate(
@@ -269,7 +268,8 @@ public class AuthService {
         if (user.getPinHash() == null) {
             throw invalidCredentials();
         }
-        String branchId = resolvePinBranchId(user, request.branchId());
+        boolean worksATill = worksATill(user);
+        String branchId = worksATill ? resolvePinBranchId(user, request.branchId()) : trimToNull(user.getBranchId());
         assertCanAuthenticate(user);
         assertTenantAllowsLogin(user.getBusinessId());
 
@@ -277,12 +277,8 @@ public class AuthService {
             recordLoginFailure(user, http, AuditEventTypes.LOGIN_FAILED, "Incorrect PIN");
             throw invalidCredentials();
         }
-        try {
-            tillDeviceService.assertPinLoginAllowed(businessId, branchId, tillDeviceKey);
-        } catch (ResponseStatusException ex) {
-            publishPinLoginDenied(user, http, tillDeviceKey, ex.getReason());
-            notifyTillAccessIfDenied(user, branchId, tillDeviceKey, http);
-            throw ex;
+        if (worksATill) {
+            assertTrustedTill(user, businessId, branchId, tillDeviceKey, http);
         }
 
         recordLoginSuccess(user);
@@ -925,6 +921,31 @@ public class AuthService {
      * PIN login is tied to the staff member's home branch. Callers may omit
      * {@code requestedBranchId}; when provided it must match the assigned branch.
      */
+    /**
+     * Whether the trusted-till rule applies to this person (ADR 0017). Someone whose role lets
+     * them do none of the till's work is not signing in to a till: a barber checking their
+     * earnings on their own phone must not be refused, nor the owner asked to register that phone.
+     * A user with no role is treated as till staff, so a gap in the data never loosens the rule.
+     */
+    private boolean worksATill(User user) {
+        String roleId = trimToNull(user.getRoleId());
+        if (roleId == null) {
+            return true;
+        }
+        return TillDeviceService.worksATill(permissionRepository.findPermissionKeysByRoleId(roleId));
+    }
+
+    private void assertTrustedTill(
+            User user, String businessId, String branchId, String tillDeviceKey, HttpServletRequest http) {
+        try {
+            tillDeviceService.assertPinLoginAllowed(businessId, branchId, tillDeviceKey);
+        } catch (ResponseStatusException ex) {
+            publishPinLoginDenied(user, http, tillDeviceKey, ex.getReason());
+            notifyTillAccessIfDenied(user, branchId, tillDeviceKey, http);
+            throw ex;
+        }
+    }
+
     private String resolvePinBranchId(User user, String requestedBranchId) {
         String assigned = trimToNull(user.getBranchId());
         if (assigned == null) {

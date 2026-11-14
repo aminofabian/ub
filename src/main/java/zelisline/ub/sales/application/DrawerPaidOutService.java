@@ -29,6 +29,7 @@ public class DrawerPaidOutService {
     private final OpenShiftResolver openShiftResolver;
     private final ShiftRepository shiftRepository;
     private final CashDrawerLedgerService cashDrawerLedgerService;
+    private final AutoShiftService autoShiftService;
 
     /** @return the id of the shift the cash left */
     @Transactional
@@ -78,6 +79,11 @@ public class DrawerPaidOutService {
         BigDecimal cash = amount.setScale(2, RoundingMode.HALF_UP);
         if (cash.signum() <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Amount must be positive");
+        }
+        // A shop that switched shifts off never opens one by hand: do what a sale does and open
+        // the hidden shift, so its first cash of the day can be a deposit.
+        if (openShiftResolver.findOpen(businessId, branchId, tillDeviceKey).isEmpty()) {
+            autoShiftService.openIfShiftsDisabled(businessId, branchId, tillDeviceKey, userId);
         }
         Shift shift = openShiftResolver.findOpenForUpdate(businessId, branchId, tillDeviceKey)
                 .orElseThrow(() -> new ResponseStatusException(

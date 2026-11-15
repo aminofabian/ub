@@ -417,6 +417,96 @@ public class StaffEarningsService {
         ledgerRepository.flush();
     }
 
+    // ------------------------------------------------------------ moving a service
+
+    /**
+     * A paid service was rung under the wrong person: what the person leading earned on it is
+     * taken back and the right person earns on it instead, by their own plan (or the amount set
+     * at the till, which stays with the line). Helpers and tips are not touched.
+     *
+     * <p>Nothing is edited: the old row is cancelled by a reversal and a new commission row is
+     * written, both dated now. Moving a line that has already been moved to the same person
+     * writes nothing, so a retry is harmless.</p>
+     *
+     * @param line the sale line with the <em>new</em> performer on it
+     */
+    @Transactional
+    public void movePerformer(String businessId, String saleId, SaleLine line, String reason, String userId) {
+        String to = line.performerStaffProfileId();
+        StaffLedgerEntry current = null;
+        for (StaffLedgerEntry row : ledgerRepository.findByBusinessIdAndSaleItemIdOrderByCreatedAtAsc(
+                businessId, line.saleItemId())) {
+            boolean lead = StaffLedgerKinds.COMMISSION.equals(row.getKind())
+                    && StaffLedgerKinds.SOURCE_SERVICE.equals(row.getSource())
+                    && (row.getDedupeKey().startsWith("C:") || row.getDedupeKey().startsWith("CM:"));
+            if (lead && !ledgerRepository.existsByBusinessIdAndDedupeKey(businessId, "MV:" + row.getId())) {
+                current = row;
+            }
+        }
+        if (current != null && current.getStaffProfileId().equals(to)) {
+            return;
+        }
+        // Lock both people in a fixed order, first thing, so two moves cannot deadlock or interleave.
+        List<String> locks = new ArrayList<>(List.of(to));
+        if (current != null) {
+            locks.add(current.getStaffProfileId());
+        }
+        locks.stream().sorted().forEach(id -> staffProfileService.lockForLedger(businessId, id));
+
+        Instant now = Instant.now();
+        String note = reason == null || reason.isBlank() ? "Rung under the wrong person" : reason.trim();
+        note = note.length() > 480 ? note.substring(0, 480) : note;
+        String moveId = UUID.randomUUID().toString();
+        String branchId = current == null ? null : current.getBranchId();
+
+        if (current != null) {
+            BigDecimal remaining = current.getAmount().add(alreadyReversed(businessId, current.getId())).max(ZERO);
+            StaffLedgerEntry back = entry(businessId, branchId, current.getStaffProfileId(),
+                    StaffLedgerKinds.REVERSAL, StaffLedgerKinds.BUCKET_COMMISSION, remaining.negate(),
+                    "MV:" + current.getId(), now, userId);
+            back.setSaleId(saleId);
+            back.setSaleItemId(line.saleItemId());
+            back.setReversesId(current.getId());
+            back.setSource(StaffLedgerKinds.SOURCE_SERVICE_MOVED);
+            back.setBaseAmount(current.getBaseAmount() == null ? null : current.getBaseAmount().negate());
+            back.setReason(note);
+            if (remaining.signum() > 0) {
+                back.setJournalEntryId(postTwoLine(businessId, branchId, JOURNAL_SOURCE_COMMISSION_REVERSAL, moveId,
+                        "Commission reversed: service moved to another person",
+                        LedgerAccountCodes.COMMISSIONS_PAYABLE, LedgerAccountCodes.COMMISSION_EXPENSE, remaining));
+            }
+            saveOnce(back);
+        }
+
+        ServiceShare share = serviceShares(businessId, line, new LinkedHashMap<>()).get(0);
+        StaffLedgerEntry earned = entry(businessId, branchId, to, StaffLedgerKinds.COMMISSION,
+                StaffLedgerKinds.BUCKET_COMMISSION, share.commission(),
+                "CM:" + (current == null ? line.saleItemId() : current.getId()), now, userId);
+        earned.setId(moveId);
+        earned.setBaseAmount(share.base());
+        earned.setRule(share.rule()
+                + (line.helpers() != null && !line.helpers().isEmpty() ? " shared" : ""));
+        earned.setSource(StaffLedgerKinds.SOURCE_SERVICE);
+        earned.setSaleId(saleId);
+        earned.setSaleItemId(line.saleItemId());
+        earned.setReason(note);
+        if (share.commission().signum() > 0) {
+            earned.setJournalEntryId(postTwoLine(businessId, branchId, JOURNAL_SOURCE_COMMISSION, moveId,
+                    "Staff commission: service moved from another person",
+                    LedgerAccountCodes.COMMISSION_EXPENSE, LedgerAccountCodes.COMMISSIONS_PAYABLE,
+                    share.commission()));
+        }
+        saveOnce(earned);
+
+        Map<String, Object> state = new LinkedHashMap<>();
+        state.put("saleId", saleId);
+        state.put("saleItemId", line.saleItemId());
+        state.put("from", current == null ? "" : current.getStaffProfileId());
+        state.put("amount", share.commission().toPlainString());
+        state.put("reason", note);
+        audit(businessId, branchId, userId, "staff.earnings.moved", to, state);
+    }
+
     // -------------------------------------------------------------- adjustments
 
     /** A bonus or a correction. Positive adds to what is owed, negative deducts. A reason is required. */
@@ -648,7 +738,14 @@ public class StaffEarningsService {
                     }
                 }
                 case StaffLedgerKinds.TIP -> acc[1] = acc[1].add(sum);
-                case StaffLedgerKinds.REVERSAL -> acc[2] = acc[2].add(sum);
+                case StaffLedgerKinds.REVERSAL -> {
+                    acc[2] = acc[2].add(sum);
+                    if (StaffLedgerKinds.SOURCE_SERVICE_MOVED.equals(source)) {
+                        // The service went to someone else: it stops counting as this person's.
+                        acc[5] = acc[5].add(money((BigDecimal) r[5]));
+                        acc[6] = acc[6].subtract(BigDecimal.valueOf(((Number) r[6]).longValue()));
+                    }
+                }
                 case StaffLedgerKinds.ADJUSTMENT -> acc[3] = acc[3].add(sum);
                 case StaffLedgerKinds.PAYOUT -> acc[4] = acc[4].add(sum);
                 default -> { }
@@ -666,7 +763,7 @@ public class StaffEarningsService {
             }
             BigDecimal closing = open.add(acc[0]).add(acc[1]).add(acc[2]).add(acc[3]).add(acc[4]);
             rows.add(new StatementRow(plan.staffProfileId(), plan.displayName(), plan.current(),
-                    acc[6].longValue(), acc[5], open, acc[0], acc[1], acc[2], acc[3], acc[4].negate(), closing));
+                    Math.max(0L, acc[6].longValue()), acc[5].max(ZERO), open, acc[0], acc[1], acc[2], acc[3], acc[4].negate(), closing));
         }
         BigDecimal ledgerTotal = money(ledgerRepository.totalOwed(businessId));
         BigDecimal glTotal = ledgerBalanceQuery.creditBalance(businessId, PAYABLE_CODES);
@@ -711,8 +808,15 @@ public class StaffEarningsService {
         return money(each.multiply(quantity)).min(base);
     }
 
-    /** The commission rule for a service line: the service's own override, else the staff plan. */
+    /** The commission rule for a service line: the person's own rate for it, else the service's override, else their plan. */
     private Rule serviceRule(String businessId, String serviceId, StaffCommissionPlan plan) {
+        // This person's own rate for this service beats both the service's rate and their plan.
+        if (plan != null) {
+            var own = zelisline.ub.serviceops.domain.StaffServiceRates.find(plan.serviceRates(), serviceId);
+            if (own.isPresent()) {
+                return new Rule(own.get().type(), own.get().value(), "own");
+            }
+        }
         if (serviceId != null) {
             ServiceOffering service = serviceRepository.findById(serviceId)
                     .filter(s -> businessId.equals(s.getBusinessId()))
@@ -926,6 +1030,10 @@ public class StaffEarningsService {
         return new LedgerEntryResponse(
                 e.getId(), e.getStaffProfileId(), e.getBranchId(), e.getKind(), e.getBucket(), e.getAmount(),
                 e.getBaseAmount(), e.getRule(), e.getSource(), e.getSaleId(), e.getSaleItemId(),
-                e.getReversesId(), e.getPayoutMethod(), e.getReference(), e.getReason(), e.getOccurredAt());
+                e.getReversesId(), e.getPayoutMethod(), e.getReference(), e.getReason(), e.getOccurredAt(),
+                StaffLedgerKinds.COMMISSION.equals(e.getKind())
+                        && StaffLedgerKinds.SOURCE_SERVICE.equals(e.getSource())
+                        && e.getDedupeKey() != null
+                        && (e.getDedupeKey().startsWith("C:") || e.getDedupeKey().startsWith("CM:")));
     }
 }

@@ -54,6 +54,7 @@ public class SaleReceiptService {
     private final BranchRepository branchRepository;
     private final ItemRepository itemRepository;
     private final SaleActorNameService saleActorNameService;
+    private final zelisline.ub.restaurant.application.RestaurantSaleSupport restaurantSaleSupport;
     private final BranchReceiptSettingsService branchReceiptSettingsService;
     private final StorefrontSettingsService storefrontSettingsService;
     private final CustomerRepository customerRepository;
@@ -152,6 +153,11 @@ public class SaleReceiptService {
                 .format(sale.getSoldAt());
 
         String footer = footerNote(sale);
+        // A restaurant sale: the number the kitchen and the counter know the order by.
+        Long orderNumber = restaurantSaleSupport.orderNumberForSale(businessId, sale.getId()).orElse(null);
+        if (orderNumber != null) {
+            footer = "Order " + orderNumber + (footer == null || footer.isBlank() ? "" : "\n" + footer);
+        }
         BranchReceiptSettingsResponse receiptSettings =
                 branchReceiptSettingsService.read(branch.getReceiptSettings());
         String logoUrl = storefrontSettingsService
@@ -266,6 +272,14 @@ public class SaleReceiptService {
             String desc = snapshot != null && !snapshot.isBlank()
                     ? snapshot.trim()
                     : (it != null ? ProductDisplayName.forVariant(it, parentName) : "Item");
+            if (first.isDish() && first.getLineLabel() != null && !first.getLineLabel().isBlank()) {
+                // The label carries what was chosen: "Burger (Extra cheese, Double patty)".
+                desc = first.getLineLabel().trim();
+            }
+            if (first.isDish() && first.getLineNote() != null && !first.getLineNote().isBlank()) {
+                // What the customer asked for, so they can check the kitchen got it.
+                desc = desc + " - " + first.getLineNote().trim();
+            }
             if (first.isService()) {
                 String performer = performerNames.get(first.getPerformerStaffProfileId());
                 if (performer != null && !performer.isBlank()) {

@@ -73,6 +73,19 @@ public class ServicePackagesController {
                 caller.userId(), request.getHeader(TillDeviceService.TILL_DEVICE_HEADER));
     }
 
+    /** Hands back the money for the unused sessions of a package and closes it. */
+    @PostMapping("/{packageId}/refund")
+    @PreAuthorize("hasPermission(null, 'sales.refund.create')")
+    public zelisline.ub.serviceops.api.dto.PackageDtos.RefundedPackageResponse refund(
+            @PathVariable String packageId,
+            @Valid @RequestBody zelisline.ub.serviceops.api.dto.PackageDtos.RefundPackageRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
+        return packageService.refund(TenantRequestIds.resolveBusinessId(request), packageId, body.method(),
+                caller.userId(), request.getHeader(TillDeviceService.TILL_DEVICE_HEADER));
+    }
+
     /** A customer's packages, newest first, used-up and expired ones included. */
     @GetMapping
     @PreAuthorize("hasPermission(null, 'sales.sell')")

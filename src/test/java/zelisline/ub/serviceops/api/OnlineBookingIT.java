@@ -44,7 +44,15 @@ class OnlineBookingIT extends ServiceSaleTestSupport {
 
     @Test
     void bookingIsOffUntilAManagerSetsTheHours() throws Exception {
-        mockMvc.perform(get(base)).andExpect(status().isNotFound());
+        // The shop's page can show what it does before it takes bookings: services, team and
+        // branches, marked as not bookable, with no hours and nothing private. Booking is refused.
+        String closed = mockMvc.perform(get(base)).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        JsonNode shown = objectMapper.readTree(closed);
+        assertThat(shown.get("bookable").asBoolean()).isFalse();
+        assertThat(shown.get("services").get(0).get("id").asText()).isEqualTo(haircut);
+        assertThat(shown.get("branches")).hasSize(1);
+        assertThat(shown.get("branches").get(0).get("hours")).isEmpty();
+        assertThat(closed).doesNotContain("commission").doesNotContain("phone");
         book(at("10:00"), null, "0700990010", UUID.randomUUID().toString(), 404);
         // A seller cannot switch it on.
         mockMvc.perform(as(put("/api/v1/service-booking-hours"), TENANT, cashier, ROLE_CASHIER)
@@ -61,20 +69,23 @@ class OnlineBookingIT extends ServiceSaleTestSupport {
         MvcResult result = mockMvc.perform(get(base)).andExpect(status().isOk()).andReturn();
         String body = result.getResponse().getContentAsString();
         JsonNode info = objectMapper.readTree(body);
+        assertThat(info.get("bookable").asBoolean()).isTrue();
         assertThat(info.get("branches")).hasSize(1);
         assertThat(info.get("services").get(0).get("id").asText()).isEqualTo(haircut);
         assertThat(info.get("staff").get(0).get("name").asText()).isEqualTo("John");
         // Nothing a passer-by should not see.
         assertThat(body).doesNotContain("commission").doesNotContain("phone");
-        // The other business has not switched it on.
+        // The other business has no services to show: it has no page here at all.
         mockMvc.perform(get("/api/v1/public/businesses/"
                         + businessRepository.findById(OTHER).orElseThrow().getSlug() + "/booking"))
                 .andExpect(status().isNotFound());
         mockMvc.perform(get("/api/v1/public/businesses/no-such-shop/booking")).andExpect(status().isNotFound());
 
-        // Switched off again.
+        // Switched off again: the page stays, booking goes.
         setHours("{}");
-        mockMvc.perform(get(base)).andExpect(status().isNotFound());
+        assertThat(objectMapper.readTree(mockMvc.perform(get(base)).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString()).get("bookable").asBoolean()).isFalse();
+        book(at("10:00"), null, "0700990011", UUID.randomUUID().toString(), 404);
     }
 
     @Test
@@ -201,6 +212,39 @@ class OnlineBookingIT extends ServiceSaleTestSupport {
     }
 
     // ------------------------------------------------------------------ helpers
+
+    @Test
+    void aPersonIsOnlyOfferedInsideTheHoursTheyWork() throws Exception {
+        setHours(ALL_WEEK);
+        String day = java.util.List.of("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+                .get(tomorrow.getDayOfWeek().getValue() - 1);
+        String url = "/api/v1/service-team/" + john + "/working-hours";
+        String mornings = "{\"days\":{\"" + day + "\":{\"open\":\"09:00\",\"close\":\"12:00\"}}}";
+
+        // Only a manager of this shop may set them, and the times must make sense.
+        mockMvc.perform(as(put(url), TENANT, cashier, ROLE_CASHIER).content(mornings)).andExpect(status().isForbidden());
+        mockMvc.perform(as(put(url), OTHER, otherOwner, ROLE_OWNER).content(mornings)).andExpect(status().isNotFound());
+        mockMvc.perform(as(put(url), TENANT, owner, ROLE_OWNER)
+                        .content("{\"days\":{\"" + day + "\":{\"open\":\"12:00\",\"close\":\"09:00\"}}}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(as(put(url), TENANT, owner, ROLE_OWNER)
+                        .content("{\"days\":{\"someday\":{\"open\":\"09:00\",\"close\":\"12:00\"}}}"))
+                .andExpect(status().isBadRequest());
+        assertThat(slots(john)).contains(at("08:00"), at("15:00"));
+
+        mockMvc.perform(as(put(url), TENANT, owner, ROLE_OWNER).content(mornings)).andExpect(status().isOk());
+        java.util.List<Instant> offered = slots(john);
+        assertThat(offered).contains(at("09:00")).doesNotContain(at("08:00"), at("12:00"), at("15:00"));
+        assertThat(offered).allMatch(s -> !s.isBefore(at("09:00")) && s.isBefore(at("12:00")));
+        // Asking for a time outside their hours is refused, and so is a day they do not work.
+        book(at("15:00"), john, "0700990077", UUID.randomUUID().toString(), 409);
+        assertThat(slots(john, tomorrow.plusDays(1))).isEmpty();
+        book(at("09:00"), john, "0700990077", UUID.randomUUID().toString(), 201);
+
+        // Cleared: they follow the shop again.
+        mockMvc.perform(as(put(url), TENANT, owner, ROLE_OWNER).content("{\"days\":{}}")).andExpect(status().isOk());
+        assertThat(slots(john)).contains(at("15:00"));
+    }
 
     private JsonNode calendar(LocalDate from, int days, String staffId, int expected) throws Exception {
         var request = get(base + "/days").param("branchId", branchId).param("serviceId", haircut)

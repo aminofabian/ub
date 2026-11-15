@@ -55,6 +55,7 @@ public class ServiceCatalogService {
     private final ServiceOfferingRepository serviceRepository;
     private final ServiceStaffLinkRepository staffLinkRepository;
     private final StaffProfileService staffProfileService;
+    private final zelisline.ub.platform.media.PictureUploads pictureUploads;
 
     // ---------------------------------------------------------------- categories
 
@@ -305,6 +306,32 @@ public class ServiceCatalogService {
         }
     }
 
+    /** Gives a service its picture (JPEG, PNG or WebP), replacing any it had. */
+    @Transactional
+    public ServiceResponse setPicture(String businessId, String id, byte[] bytes, String originalFilename) {
+        ServiceOffering row = requireLive(businessId, id);
+        var stored = pictureUploads.upload(bytes, originalFilename, "ub/" + businessId + "/services/" + row.getId());
+        String old = row.getImagePublicId();
+        row.setImageUrl(stored.secureUrl());
+        row.setImagePublicId(stored.publicId());
+        serviceRepository.save(row);
+        if (old != null && !old.equals(stored.publicId())) {
+            pictureUploads.discard(old);
+        }
+        return getService(businessId, id);
+    }
+
+    @Transactional
+    public ServiceResponse removePicture(String businessId, String id) {
+        ServiceOffering row = requireLive(businessId, id);
+        String old = row.getImagePublicId();
+        row.setImageUrl(null);
+        row.setImagePublicId(null);
+        serviceRepository.save(row);
+        pictureUploads.discard(old);
+        return getService(businessId, id);
+    }
+
     private ServiceOffering requireLive(String businessId, String id) {
         return serviceRepository.findByIdAndBusinessIdAndDeletedAtIsNull(id, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Service not found"));
@@ -446,7 +473,8 @@ public class ServiceCatalogService {
                 row.isActive(),
                 staffProfileIds,
                 version,
-                row.getProductCost()
+                row.getProductCost(),
+                row.getImageUrl()
         );
     }
 

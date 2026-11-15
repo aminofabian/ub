@@ -14,6 +14,8 @@ public record StaffCommissionPlan(
         boolean current,
         String type,
         BigDecimal rate,
-        BigDecimal productRate
+        BigDecimal productRate,
+        /** Their own rates on particular services, as stored (see {@code StaffServiceRates}); may be null. */
+        String serviceRates
 ) {
 }

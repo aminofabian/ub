@@ -17,6 +17,13 @@ public interface ServiceResourceRepository extends JpaRepository<ServiceResource
 
     Optional<ServiceResource> findByIdAndBusinessId(String id, String businessId);
 
+    Optional<ServiceResource> findByQrToken(String qrToken);
+
+    long countByBusinessIdAndResourceTypeAndActiveTrue(String businessId, String resourceType);
+
+    List<ServiceResource> findByBusinessIdAndBranchIdAndResourceTypeOrderBySortOrderAscNameAsc(
+            String businessId, String branchId, String resourceType);
+
     Optional<ServiceResource> findByBusinessIdAndBranchIdAndStationNo(String businessId, String branchId, Integer stationNo);
 
     /** Locked, so two tills starting a service on one chair take turns. */

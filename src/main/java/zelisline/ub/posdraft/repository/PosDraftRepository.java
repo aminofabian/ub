@@ -18,6 +18,60 @@ public interface PosDraftRepository extends JpaRepository<PosDraft, String> {
 
     Optional<PosDraft> findByBusinessIdAndClientDraftId(String businessId, String clientDraftId);
 
+    /** The restaurant order (or other ticket of that kind) a sale settled, if any. */
+    Optional<PosDraft> findFirstByBusinessIdAndSaleIdAndDraftKind(String businessId, String saleId, String draftKind);
+
+    Optional<PosDraft> findByIdAndBusinessIdAndDraftKind(String id, String businessId, String draftKind);
+
+    /** Locked, so two devices changing one order take turns. */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("select d from PosDraft d where d.id = :id and d.businessId = :businessId and d.draftKind = :draftKind")
+    Optional<PosDraft> findByIdAndBusinessIdAndDraftKindForUpdate(
+            @Param("id") String id, @Param("businessId") String businessId, @Param("draftKind") String draftKind);
+
+    /** Tickets of one kind and status at a branch, oldest first: the open orders of a restaurant floor. */
+    List<PosDraft> findByBusinessIdAndBranchIdAndDraftKindAndStatusOrderByCreatedAtAsc(
+            String businessId, String branchId, String draftKind, String status);
+
+    /** Orders booked for a time window at a branch (reservations), soonest first. */
+    @Query("""
+            select d from PosDraft d
+             where d.businessId = :businessId
+               and d.branchId = :branchId
+               and d.draftKind = 'ORDER'
+               and d.status = 'pending'
+               and d.serviceStage = 'BOOKED'
+               and d.scheduledStart < :to
+               and d.scheduledEnd > :from
+             order by d.scheduledStart asc
+            """)
+    List<PosDraft> findOrderBookingsOverlapping(
+            @Param("businessId") String businessId, @Param("branchId") String branchId,
+            @Param("from") java.time.Instant from, @Param("to") java.time.Instant to);
+
+    /**
+     * Delivery orders at a branch that have been paid or otherwise closed but not yet handed to
+     * the customer, newest closing first. Bounded by when they closed, so one nobody ever marked
+     * as delivered does not stay on the floor for good.
+     */
+    @Query("""
+            select d from PosDraft d
+             where d.businessId = :businessId
+               and d.branchId = :branchId
+               and d.draftKind = 'ORDER'
+               and d.status = 'completed'
+               and d.orderChannel = 'DELIVERY'
+               and d.deliveredAt is null
+               and d.completedAt > :since
+             order by d.completedAt desc
+            """)
+    List<PosDraft> findSettledDeliveriesNotDelivered(
+            @Param("businessId") String businessId, @Param("branchId") String branchId,
+            @Param("since") java.time.Instant since);
+
+    List<PosDraft> findByBusinessIdAndIdInAndDraftKind(
+            String businessId, java.util.Collection<String> ids, String draftKind);
+
     @Query("""
             select d from PosDraft d
              where d.businessId = :businessId

@@ -42,6 +42,10 @@ class BranchLocalityLabelsTest {
                         null,
                         null,
                         null,
+                        null,
+                        null,
+                        null,
+                        null,
                         null));
 
         List<String> labels = BranchLocalityLabels.fromOnboardingAndBranches(

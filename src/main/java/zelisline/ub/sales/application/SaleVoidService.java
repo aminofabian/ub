@@ -88,6 +88,7 @@ public class SaleVoidService {
     private final CashDrawerLedgerService cashDrawerLedgerService;
     private final BranchResolutionService branchResolutionService;
     private final zelisline.ub.serviceops.application.StaffEarningsService staffEarningsService;
+    private final zelisline.ub.restaurant.application.RestaurantSaleSupport restaurantSaleSupport;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -174,6 +175,8 @@ public class SaleVoidService {
                 SaleRevenueSplit.serviceTotal(itemRows), tipTotal);
         // Staff give back the commission and tips they earned on this sale.
         staffEarningsService.reverseForSale(businessId, saleId, userId);
+        // Tell the kitchen to stop making anything on this sale it has not finished.
+        restaurantSaleSupport.onSaleVoided(businessId, sale.getBranchId(), saleId, userId);
         loyaltyPointsService.reverseLoyaltyForVoidedSale(
                 businessId,
                 saleId,

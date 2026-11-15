@@ -60,6 +60,21 @@ public class ItemTaxResolver {
         return null;
     }
 
+    /**
+     * A tax rate named directly, for lines that have no catalogue item behind them (a restaurant
+     * dish). Null when the rate is unknown, belongs to another business or is switched off.
+     */
+    @Transactional(readOnly = true)
+    public ResolvedTax resolveRate(String businessId, String taxRateId) {
+        if (taxRateId == null || taxRateId.isBlank()) {
+            return null;
+        }
+        return taxRateRepository.findByIdAndBusinessId(taxRateId.trim(), businessId)
+                .filter(TaxRate::isActive)
+                .map(ItemTaxResolver::toResolved)
+                .orElse(null);
+    }
+
     private static ResolvedTax toResolved(TaxRate taxRate) {
         return new ResolvedTax(
                 taxRate.getId(),

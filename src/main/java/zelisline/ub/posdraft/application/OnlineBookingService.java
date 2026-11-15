@@ -154,8 +154,18 @@ public class OnlineBookingService {
                         parseDays(branch.getBookingHours())));
             }
         }
-        if (branches.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
+        // No branch takes bookings online. The shop's page still shows what it does and where it
+        // is, with no hours to book into; a shop with no services to show stays not found below.
+        boolean bookable = !branches.isEmpty();
+        if (!bookable) {
+            for (Branch branch : branchRepository.findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(business.getId())) {
+                if (branch.isActive()) {
+                    branches.add(new PublicBranch(branch.getId(), branch.getName(), branch.getAddress(), Map.of()));
+                }
+            }
+            if (branches.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
+            }
         }
         List<PublicService> services = new ArrayList<>();
         for (ServiceResponse service : serviceCatalogService
@@ -165,7 +175,8 @@ public class OnlineBookingService {
                 continue;
             }
             services.add(new PublicService(service.id(), service.name(), service.description(),
-                    service.durationMinutes(), service.price(), service.priceIsVariable(), service.staffProfileIds()));
+                    service.durationMinutes(), service.price(), service.priceIsVariable(), service.staffProfileIds(),
+                    service.imageUrl()));
         }
         List<PublicStaff> staff = new ArrayList<>();
         for (StaffCommissionPlan plan : staffProfileService.commissionPlans(business.getId())) {
@@ -173,8 +184,12 @@ public class OnlineBookingService {
                 staff.add(new PublicStaff(plan.staffProfileId(), firstName(plan.displayName())));
             }
         }
+        if (!bookable && services.isEmpty()) {
+            // Nothing to book and nothing to show: this is not a service shop's page.
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
+        }
         return new PublicBookingInfo(business.getName(), zone(business).getId(),
-                business.getCurrency() == null ? "KES" : business.getCurrency(), branches, services, staff);
+                business.getCurrency() == null ? "KES" : business.getCurrency(), branches, services, staff, bookable);
     }
 
     /** Free start times on a day, for one staff member or, with none named, for anyone who does the service. */
@@ -200,7 +215,8 @@ public class OnlineBookingService {
         Instant dayStart = date.atStartOfDay(zone).toInstant();
         Instant dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant();
         List<PosDraft> booked = draftRepository.findBookedBetween(business.getId(), dayStart, dayEnd);
-        return new PublicSlots(date, zone.getId(), freeStarts(service, candidates, hours, date, zone, booked));
+        Away away = away(business.getId());
+        return new PublicSlots(date, zone.getId(), freeStarts(service, candidates, hours, date, zone, booked, away));
     }
 
     /**
@@ -229,6 +245,7 @@ public class OnlineBookingService {
                 ? List.of()
                 : draftRepository.findBookedBetween(business.getId(),
                         readFrom.atStartOfDay(zone).toInstant(), readTo.atStartOfDay(zone).toInstant());
+        Away away = away(business.getId());
         List<PublicDay> out = new ArrayList<>();
         for (int i = 0; i < span; i++) {
             LocalDate date = from.plusDays(i);
@@ -236,7 +253,7 @@ public class OnlineBookingService {
             if (hours == null) {
                 out.add(new PublicDay(date, false, 0));
             } else {
-                int free = candidates.isEmpty() ? 0 : freeStarts(service, candidates, hours, date, zone, booked).size();
+                int free = candidates.isEmpty() ? 0 : freeStarts(service, candidates, hours, date, zone, booked, away).size();
                 out.add(new PublicDay(date, true, free));
             }
         }
@@ -245,7 +262,7 @@ public class OnlineBookingService {
 
     private static List<Instant> freeStarts(
             ServiceResponse service, List<String> candidates, LocalTime[] hours, LocalDate date, ZoneId zone,
-            List<PosDraft> booked) {
+            List<PosDraft> booked, Away away) {
         Instant earliest = Instant.now().plus(LEAD_MINUTES, ChronoUnit.MINUTES);
         List<Instant> starts = new ArrayList<>();
         ZonedDateTime cursor = date.atTime(hours[0]).atZone(zone);
@@ -253,7 +270,7 @@ public class OnlineBookingService {
         while (!cursor.plusMinutes(service.durationMinutes()).isAfter(close)) {
             Instant start = cursor.toInstant();
             Instant end = start.plus(Math.max(service.durationMinutes(), 5), ChronoUnit.MINUTES);
-            if (!start.isBefore(earliest) && anyFree(candidates, booked, start, end)) {
+            if (!start.isBefore(earliest) && anyFree(candidates, booked, away, start, end)) {
                 starts.add(start);
             }
             cursor = cursor.plusMinutes(SLOT_MINUTES);
@@ -363,9 +380,28 @@ public class OnlineBookingService {
         return allowed[0];
     }
 
-    private static boolean anyFree(List<String> staff, List<PosDraft> booked, Instant start, Instant end) {
+    /** When each person cannot be booked whatever the diary says: their time off and their working hours. */
+    private record Away(
+            Map<String, List<zelisline.ub.serviceops.domain.StaffTimeOff.Period>> timeOff,
+            Map<String, String> workingHours) {
+
+        boolean is(String staffId, Instant start, Instant end) {
+            for (var period : timeOff.getOrDefault(staffId, List.of())) {
+                if (period.overlaps(start, end)) {
+                    return true;
+                }
+            }
+            return !zelisline.ub.serviceops.domain.StaffWorkingHours.works(workingHours.get(staffId), start, end);
+        }
+    }
+
+    private Away away(String businessId) {
+        return new Away(staffProfileService.timeOff(businessId), staffProfileService.workingHoursByStaff(businessId));
+    }
+
+    private static boolean anyFree(List<String> staff, List<PosDraft> booked, Away away, Instant start, Instant end) {
         for (String id : staff) {
-            boolean busy = false;
+            boolean busy = away.is(id, start, end);
             for (PosDraft other : booked) {
                 if (id.equals(other.getRequestedStaffProfileId())
                         && other.getScheduledStart().isBefore(end) && other.getScheduledEnd().isAfter(start)) {

@@ -121,6 +121,151 @@ public class InventoryBatchPickerService {
         );
     }
 
+    /** Reference type of stock movements made by a restaurant dish using up its ingredients (ADR 0020). */
+    public static final String REFERENCE_SALE_RECIPE = "sale_recipe";
+    public static final String REFERENCE_SALE_RECIPE_VOID = "sale_recipe_void";
+
+    /**
+     * A restaurant dish using up an ingredient. Unlike a sale pick the item need not be for sale —
+     * rice and cooking oil are stocked, not sold — and a short count never refuses it: what the
+     * batches hold is taken, the rest drives the item's on-hand negative for the next stock count
+     * to put right. A plate must not be unsellable because someone miscounted the rice.
+     *
+     * <p>The item must hold its own stock (not a pack that draws on a parent). The retail pick
+     * path is not touched.
+     *
+     * @return what was taken, with the cost of each part; a part taken beyond what the batches
+     *         held has a null batch id and is costed at the last known cost, or zero if none
+     */
+    @Transactional
+    public List<BatchAllocationLine> pickAndApplyIngredientUse(
+            String businessId,
+            String itemId,
+            String branchId,
+            BigDecimal quantity,
+            String referenceId,
+            String userId
+    ) {
+        return pickAndApplyIngredientUse(businessId, itemId, branchId, quantity, InventoryConstants.MOVEMENT_SALE,
+                REFERENCE_SALE_RECIPE, referenceId, userId, "Used in a dish");
+    }
+
+    /**
+     * The same taking of an ingredient for another reason: food that was cooked and then cancelled
+     * (a wastage movement), or a prepared batch being made (an adjustment). Only movements made
+     * with {@link #REFERENCE_SALE_RECIPE} are put back by {@link #restoreIngredientUse}.
+     */
+    @Transactional
+    public List<BatchAllocationLine> pickAndApplyIngredientUse(
+            String businessId,
+            String itemId,
+            String branchId,
+            BigDecimal quantity,
+            String movementType,
+            String referenceType,
+            String referenceId,
+            String userId,
+            String note
+    ) {
+        requireBranch(businessId, branchId);
+        Item item = requireStockedItem(businessId, itemId);
+        if (!packageVariantStockResolver.stockHolderItemId(item).equals(item.getId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    itemLabel(item) + " is a pack of another product and cannot be used as an ingredient");
+        }
+        BigDecimal qty = quantity.setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        if (qty.signum() <= 0) {
+            return List.of();
+        }
+        entityManager.lock(item, LockModeType.PESSIMISTIC_WRITE);
+        List<InventoryBatch> locked = lockActiveBatchesForPhysicalAdjustmentPool(businessId, branchId, item);
+        List<InventoryBatch> working = new ArrayList<>(locked);
+        List<BatchAllocationLine> batchLines = List.of();
+        BigDecimal unallocated = qty;
+        if (!working.isEmpty()) {
+            BatchAllocationPlanner.sortBatchesForPick(working, item, costMethodForTenant(businessId));
+            BatchAllocationPlanner.AllocationResult allocation =
+                    BatchAllocationPlanner.allocateInOrderAllowShortage(working, qty);
+            batchLines = allocation.lines();
+            unallocated = allocation.unallocated();
+            applyAllocatedDecrements(businessId, branchId, item.getId(), item, locked, batchLines,
+                    movementType, referenceType, referenceId, userId, note);
+        }
+        List<BatchAllocationLine> result = new ArrayList<>(batchLines);
+        if (unallocated.signum() > 0) {
+            InventoryBatch costRef = resolveCostReferenceBatch(businessId, item.getId(), branchId);
+            BigDecimal unitCost = costRef != null && costRef.getUnitCost() != null
+                    ? costRef.getUnitCost()
+                    : (item.getBuyingPrice() != null ? item.getBuyingPrice() : BigDecimal.ZERO);
+            StockMovement sm = new StockMovement();
+            sm.setBusinessId(businessId);
+            sm.setBranchId(branchId);
+            sm.setItemId(item.getId());
+            sm.setMovementType(movementType);
+            sm.setReferenceType(referenceType);
+            sm.setReferenceId(referenceId);
+            sm.setQuantityDelta(unallocated.negate());
+            sm.setUnitCost(unitCost);
+            sm.setNotes(note + ", beyond the counted stock");
+            sm.setCreatedBy(userId);
+            stockMovementRepository.save(sm);
+            result.add(new BatchAllocationLine(null, unallocated, unitCost));
+        }
+        BigDecimal stockBefore = item.getCurrentStock() == null ? BigDecimal.ZERO : item.getCurrentStock();
+        applyStockDelta(item, qty.negate(), true);
+        maybeEnqueueLowStockWebhook(businessId, branchId, item.getId(), item, stockBefore);
+        return result;
+    }
+
+    /**
+     * Puts back what {@link #pickAndApplyIngredientUse} took for a sale that was voided: each
+     * movement made for that sale is mirrored. Safe to call for a sale that used no ingredients,
+     * and it restores nothing twice.
+     */
+    @Transactional
+    public void restoreIngredientUse(String businessId, String branchId, String saleId, String userId) {
+        if (!stockMovementRepository
+                .findByBusinessIdAndReferenceTypeAndReferenceId(businessId, REFERENCE_SALE_RECIPE_VOID, saleId)
+                .isEmpty()) {
+            return;
+        }
+        for (StockMovement used : stockMovementRepository
+                .findByBusinessIdAndReferenceTypeAndReferenceId(businessId, REFERENCE_SALE_RECIPE, saleId)) {
+            BigDecimal back = used.getQuantityDelta().negate().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            if (back.signum() <= 0) {
+                continue;
+            }
+            Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(used.getItemId(), businessId).orElse(null);
+            if (item == null) {
+                continue; // the ingredient was deleted since; there is nothing to put it back into
+            }
+            entityManager.lock(item, LockModeType.PESSIMISTIC_WRITE);
+            if (used.getBatchId() != null) {
+                InventoryBatch batch = inventoryBatchRepository
+                        .findByIdAndBusinessIdForUpdate(used.getBatchId(), businessId).orElse(null);
+                if (batch != null) {
+                    batch.setQuantityRemaining(
+                            batch.getQuantityRemaining().add(back).setScale(QTY_SCALE, RoundingMode.HALF_UP));
+                    inventoryBatchRepository.save(batch);
+                }
+            }
+            StockMovement sm = new StockMovement();
+            sm.setBusinessId(businessId);
+            sm.setBranchId(branchId);
+            sm.setItemId(item.getId());
+            sm.setBatchId(used.getBatchId());
+            sm.setMovementType(InventoryConstants.MOVEMENT_SALE_VOID);
+            sm.setReferenceType(REFERENCE_SALE_RECIPE_VOID);
+            sm.setReferenceId(saleId);
+            sm.setQuantityDelta(back);
+            sm.setUnitCost(used.getUnitCost());
+            sm.setNotes("Sale void: ingredients put back");
+            sm.setCreatedBy(userId);
+            stockMovementRepository.save(sm);
+            applyStockDelta(item, back, true);
+        }
+    }
+
     /**
      * Stock-take / audit write-down: decrements physical on-hand batches including expired lots
      * and closed-supply batches. Sale picks must keep using {@link #pickAndApplyPhysicalDecrement}.

@@ -27,6 +27,10 @@ public record SaleItemResponse(
         /** {@code SERVICE} lines only: who performed the work. */
         String performerStaffProfileId,
         String performerName,
-        Integer serviceMinutes
+        Integer serviceMinutes,
+        /** {@code DISH} lines only: the restaurant menu item sold. What was chosen on it is in {@link #lineLabel}. */
+        String menuItemId,
+        /** {@code DISH} lines only: what the customer asked for ("no onions"). */
+        String lineNote
 ) {
 }

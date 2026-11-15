@@ -55,6 +55,14 @@ public class ServiceOffering {
     @Column(name = "description", length = 1000)
     private String description;
 
+    /** Where the service's picture is served from; null when it has none. */
+    @Column(name = "image_url", length = 2048)
+    private String imageUrl;
+
+    /** The media store's own id for that picture, so it can be removed when replaced. */
+    @Column(name = "image_public_id", length = 512)
+    private String imagePublicId;
+
     @Column(name = "duration_minutes", nullable = false)
     private int durationMinutes;
 

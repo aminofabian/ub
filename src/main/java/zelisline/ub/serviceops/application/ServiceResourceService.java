@@ -38,6 +38,8 @@ import zelisline.ub.tenancy.repository.BranchRepository;
 public class ServiceResourceService {
 
     public static final String TYPE_CHAIR = "CHAIR";
+    /** A restaurant table. Never used by a service, never given a chair number. */
+    public static final String TYPE_TABLE = "TABLE";
     private static final int MAX_RESOURCES = 200;
 
     private final ServiceResourceRepository resourceRepository;
@@ -48,7 +50,11 @@ public class ServiceResourceService {
     /** Resources of a branch with what each is doing now. Creates the numbered chairs if they are missing. */
     @Transactional
     public List<ResourceResponse> list(String businessId, String branchId) {
-        List<ServiceResource> rows = ensureForStations(businessId, branchId);
+        // A restaurant's tables live in the same table but are not places a service is done:
+        // a shop with both a salon floor and a dining room must not see tables among its chairs.
+        List<ServiceResource> rows = ensureForStations(businessId, branchId).stream()
+                .filter(r -> !TYPE_TABLE.equals(r.getResourceType()))
+                .toList();
         Map<String, String> busy = new HashMap<>();
         for (PosDraftLine line : lineRepository.findInServiceAtBranch(businessId, branchId.trim())) {
             if (line.getResourceId() != null) {
@@ -102,7 +108,10 @@ public class ServiceResourceService {
     @Transactional
     public ResourceResponse create(String businessId, CreateResourceRequest request) {
         List<ServiceResource> rows = ensureForStations(businessId, request.branchId());
-        if (rows.size() >= MAX_RESOURCES) {
+        if (TYPE_TABLE.equals(request.resourceType())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Add tables from the restaurant floor");
+        }
+        if (rows.stream().filter(r -> !TYPE_TABLE.equals(r.getResourceType())).count() >= MAX_RESOURCES) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This branch already has " + MAX_RESOURCES + " resources");
         }
         ServiceResource row = new ServiceResource();
@@ -119,7 +128,11 @@ public class ServiceResourceService {
     @Transactional
     public ResourceResponse update(String businessId, String resourceId, UpdateResourceRequest request) {
         ServiceResource row = resourceRepository.findByIdAndBusinessIdForUpdate(resourceId, businessId)
+                .filter(r -> !TYPE_TABLE.equals(r.getResourceType()))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Resource not found"));
+        if (TYPE_TABLE.equals(request.resourceType())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Add tables from the restaurant floor");
+        }
         boolean takingOutOfUse = Boolean.FALSE.equals(request.active())
                 || (request.blockedUntil() != null && request.blockedUntil().isAfter(Instant.now()));
         if (takingOutOfUse && !lineRepository.findInServiceByResource(businessId, row.getId()).isEmpty()) {
@@ -168,6 +181,7 @@ public class ServiceResourceService {
     @Transactional
     public ServiceResource claim(String businessId, String branchId, String resourceId, String forLineId, String serviceId) {
         ServiceResource row = resourceRepository.findByIdAndBusinessIdForUpdate(resourceId, businessId)
+                .filter(r -> !TYPE_TABLE.equals(r.getResourceType()))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Resource not found"));
         if (!row.getBranchId().equals(branchId)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, row.getName() + " is at another branch");
@@ -227,6 +241,113 @@ public class ServiceResourceService {
             }
         }
         return until;
+    }
+
+    // ------------------------------------------------------------------ restaurant tables (ADR 0020)
+
+    /** A table of a restaurant floor. Stored as a resource of type {@code TABLE}; occupancy is the order's business. */
+    public record TableRecord(
+            String id, String branchId, String name, Integer capacity, String area, boolean active, int sortOrder,
+            String qrToken, String businessId) {
+    }
+
+    /**
+     * Gives a table a new QR code, replacing any old one (which stops working), or with
+     * {@code enabled} false takes its code away.
+     */
+    @Transactional
+    public TableRecord setTableQr(String businessId, String tableId, boolean enabled) {
+        ServiceResource row = resourceRepository.findByIdAndBusinessIdForUpdate(tableId, businessId)
+                .filter(r -> TYPE_TABLE.equals(r.getResourceType()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Table not found"));
+        if (enabled) {
+            byte[] bytes = new byte[24];
+            new java.security.SecureRandom().nextBytes(bytes);
+            row.setQrToken(java.util.HexFormat.of().formatHex(bytes));
+        } else {
+            row.setQrToken(null);
+        }
+        resourceRepository.saveAndFlush(row);
+        return toTable(row);
+    }
+
+    /** The table a QR code belongs to, whichever business it is in. The caller checks the business. */
+    @Transactional(readOnly = true)
+    public java.util.Optional<TableRecord> tableByQrToken(String token) {
+        if (token == null || token.length() < 32 || token.length() > 64) {
+            return java.util.Optional.empty();
+        }
+        return resourceRepository.findByQrToken(token)
+                .filter(r -> TYPE_TABLE.equals(r.getResourceType()) && r.isActive())
+                .map(ServiceResourceService::toTable);
+    }
+
+    /** How many tables a business has in use, at all its branches. */
+    @Transactional(readOnly = true)
+    public long countTables(String businessId) {
+        return resourceRepository.countByBusinessIdAndResourceTypeAndActiveTrue(businessId, TYPE_TABLE);
+    }
+
+    /** The tables of a branch. Unlike {@link #list}, this never creates the numbered chairs. */
+    @Transactional(readOnly = true)
+    public List<TableRecord> tables(String businessId, String branchId) {
+        return resourceRepository
+                .findByBusinessIdAndBranchIdAndResourceTypeOrderBySortOrderAscNameAsc(businessId, branchId.trim(), TYPE_TABLE)
+                .stream().map(ServiceResourceService::toTable).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.Optional<TableRecord> table(String businessId, String tableId) {
+        return resourceRepository.findByIdAndBusinessId(tableId, businessId)
+                .filter(r -> TYPE_TABLE.equals(r.getResourceType()))
+                .map(ServiceResourceService::toTable);
+    }
+
+    @Transactional
+    public TableRecord createTable(String businessId, String branchId, String name, Integer capacity, String area) {
+        List<ServiceResource> rows = resourceRepository
+                .findByBusinessIdAndBranchIdAndResourceTypeOrderBySortOrderAscNameAsc(businessId, branchId.trim(), TYPE_TABLE);
+        if (rows.size() >= MAX_RESOURCES) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This branch already has " + MAX_RESOURCES + " tables");
+        }
+        ServiceResource row = new ServiceResource();
+        row.setBusinessId(businessId);
+        row.setBranchId(branchId.trim());
+        row.setName(name.trim());
+        row.setResourceType(TYPE_TABLE);
+        row.setCapacity(capacity);
+        row.setArea(area == null || area.isBlank() ? null : area.trim());
+        row.setSortOrder(rows.stream().mapToInt(ServiceResource::getSortOrder).max().orElse(0) + 1);
+        saveUnique(row);
+        return toTable(row);
+    }
+
+    /** Null leaves a field as it is; a blank area clears it. */
+    @Transactional
+    public TableRecord updateTable(
+            String businessId, String tableId, String name, Integer capacity, String area, Boolean active) {
+        ServiceResource row = resourceRepository.findByIdAndBusinessIdForUpdate(tableId, businessId)
+                .filter(r -> TYPE_TABLE.equals(r.getResourceType()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Table not found"));
+        if (name != null && !name.isBlank()) {
+            row.setName(name.trim());
+        }
+        if (capacity != null) {
+            row.setCapacity(capacity <= 0 ? null : capacity);
+        }
+        if (area != null) {
+            row.setArea(area.isBlank() ? null : area.trim());
+        }
+        if (active != null) {
+            row.setActive(active);
+        }
+        saveUnique(row);
+        return toTable(row);
+    }
+
+    private static TableRecord toTable(ServiceResource row) {
+        return new TableRecord(row.getId(), row.getBranchId(), row.getName(), row.getCapacity(), row.getArea(),
+                row.isActive(), row.getSortOrder(), row.getQrToken(), row.getBusinessId());
     }
 
     private void saveUnique(ServiceResource row) {

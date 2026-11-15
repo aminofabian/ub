@@ -41,6 +41,21 @@ public class SaleTaxService {
         BigDecimal total = BigDecimal.ZERO;
         for (SaleItem row : items) {
             String itemId = row.getItemId();
+            if (row.isDish()) {
+                // A dish has no catalogue item; its rate comes from the menu (set on the row when
+                // it was built). An unknown or switched-off rate leaves the line untaxed.
+                ItemTaxResolver.ResolvedTax dishTax = itemTaxResolver.resolveRate(businessId, row.getTaxRateId());
+                row.setTaxRateId(null);
+                if (dishTax != null) {
+                    BigDecimal dishTaxAmount = extractTax(row.getLineTotal(), dishTax.ratePercent());
+                    row.setTaxRateId(dishTax.taxRateId());
+                    row.setTaxRatePercent(dishTax.ratePercent());
+                    row.setTaxCode(dishTax.taxCode());
+                    row.setTaxAmount(dishTaxAmount);
+                    total = total.add(dishTaxAmount);
+                }
+                continue;
+            }
             if (itemId == null || itemId.isBlank()) {
                 continue;
             }

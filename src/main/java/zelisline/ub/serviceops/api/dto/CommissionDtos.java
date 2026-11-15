@@ -160,7 +160,9 @@ public final class CommissionDtos {
             String payoutMethod,
             String reference,
             String reason,
-            Instant occurredAt
+            Instant occurredAt,
+            /** True for the commission of the person who led a service: the row that can be moved to someone else. */
+            boolean lead
     ) {
     }
 

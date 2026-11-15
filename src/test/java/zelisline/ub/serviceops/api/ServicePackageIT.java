@@ -168,6 +168,42 @@ class ServicePackageIT extends ServiceSaleTestSupport {
 
     // ------------------------------------------------------------------ helpers
 
+    @Test
+    void theUnusedSessionsOfAPackageCanBeHandedBackOnce() throws Exception {
+        offer("{\"sessions\":3,\"price\":1000}");
+        String pkg = sell(TENANT, cashier, ROLE_CASHIER, customer, "r-" + UUID.randomUUID(), 201).get("id").asText();
+        visit(customer, pkg, "[]", 200);
+        assertThat(accountBalance(DEFERRED)).isEqualByComparingTo("666.67");
+        String url = "/api/v1/service-packages/" + pkg + "/refund";
+
+        mockMvc.perform(as(post(url), OTHER, otherOwner, ROLE_OWNER).content("{\"method\":\"cash\"}"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(as(post(url), TENANT, owner, ROLE_OWNER).content("{\"method\":\"card\"}"))
+                .andExpect(status().isBadRequest());
+        // A refused refund changes nothing.
+        assertThat(packageRepository.findById(pkg).orElseThrow().getSessionsRemaining()).isEqualTo(2);
+
+        MvcResult done = mockMvc.perform(as(post(url), TENANT, owner, ROLE_OWNER).content("{\"method\":\"cash\"}"))
+                .andExpect(status().isOk()).andReturn();
+        JsonNode body = objectMapper.readTree(done.getResponse().getContentAsString());
+        assertThat(body.get("refunded").decimalValue()).isEqualByComparingTo("666.67");
+        assertThat(body.get("sessionsRefunded").asInt()).isEqualTo(2);
+        CustomerServicePackage closed = packageRepository.findById(pkg).orElseThrow();
+        assertThat(closed.getSessionsRemaining()).isZero();
+        assertThat(closed.getValueRemaining()).isEqualByComparingTo("0.00");
+        assertThat(accountBalance(DEFERRED)).isEqualByComparingTo("0.00");
+        assertBalanced(journalLineRepository.findAll());
+
+        // Again: nothing more is paid out.
+        MvcResult again = mockMvc.perform(as(post(url), TENANT, owner, ROLE_OWNER).content("{\"method\":\"cash\"}"))
+                .andExpect(status().isOk()).andReturn();
+        assertThat(objectMapper.readTree(again.getResponse().getContentAsString()).get("refunded").decimalValue())
+                .isEqualByComparingTo("0.00");
+        assertThat(accountBalance(DEFERRED)).isEqualByComparingTo("0.00");
+        // And it can no longer pay for a visit.
+        visit(customer, pkg, "[{\"method\":\"cash\",\"amount\":300}]", 409);
+    }
+
     private BigDecimal wallet() {
         return creditAccountRepository.findByCustomerIdAndBusinessId(customer, TENANT).orElseThrow().getWalletBalance();
     }

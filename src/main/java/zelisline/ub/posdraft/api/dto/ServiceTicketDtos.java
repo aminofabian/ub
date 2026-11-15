@@ -57,8 +57,21 @@ public final class ServiceTicketDtos {
     public record CancelTicketRequest(
             @Size(max = 500) String reason,
             /** True when the customer walked away before being served or paying. */
-            Boolean abandoned
+            Boolean abandoned,
+            /**
+             * What happens to a deposit held on the ticket: {@code credit} (the default) keeps it
+             * for the customer's next visit; {@code cash} or {@code mpesa_manual} hands it back now.
+             */
+            @Size(max = 32) String depositBack
     ) {
+        public CancelTicketRequest(String reason, Boolean abandoned) {
+            this(reason, abandoned, null);
+        }
+
+        /** True when the deposit is to leave the shop rather than stay as the customer's credit. */
+        public boolean refundsDeposit() {
+            return depositBack != null && !depositBack.isBlank() && !"credit".equalsIgnoreCase(depositBack.trim());
+        }
     }
 
     public record PayTicketRequest(

@@ -19,11 +19,13 @@ public record ServiceResponse(
         List<String> staffProfileIds,
         long version,
         /** What the product for one service costs the shop; null when it uses none. */
-        BigDecimal productCost
+        BigDecimal productCost,
+        /** Where the service's picture is served from; null when it has none. */
+        String imageUrl
 ) {
     /** The same service without its commission override, for callers who only sell. */
     public ServiceResponse withoutCommission() {
         return new ServiceResponse(id, categoryId, name, description, durationMinutes, price, priceIsVariable,
-                null, null, sortOrder, active, staffProfileIds, version, productCost);
+                null, null, sortOrder, active, staffProfileIds, version, productCost, imageUrl);
     }
 }

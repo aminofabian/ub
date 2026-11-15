@@ -71,4 +71,13 @@ public final class TeamDtos {
             List<MyBooking> bookingsToday
     ) {
     }
+
+    /** Days a person works, by {@code mon}..{@code sun}; a day left out is a day off. */
+    public record WorkingHours(
+            java.util.Map<String, zelisline.ub.serviceops.domain.StaffWorkingHours.Day> days) {
+    }
+
+    /** A person's own rates on particular services. */
+    public record ServiceRates(java.util.List<zelisline.ub.serviceops.domain.StaffServiceRates.Rate> rates) {
+    }
 }

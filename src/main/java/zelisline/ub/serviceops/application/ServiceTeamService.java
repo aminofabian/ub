@@ -59,6 +59,7 @@ public class ServiceTeamService {
     private final StaffEarningsService staffEarningsService;
     private final RequestPermissionService permissionService;
     private final zelisline.ub.identity.repository.UserRepository userRepository;
+    private final zelisline.ub.serviceops.repository.ServiceOfferingRepository serviceOfferingRepository;
 
     /** Adds a team member, with a login when an email and PIN are given. */
     @Transactional
@@ -250,5 +251,21 @@ public class ServiceTeamService {
             return "Customer";
         }
         return name.trim().split("\\s+")[0];
+    }
+
+    /** Replaces a person's own rates on particular services. Every service must be one of this business's. */
+    @Transactional
+    public java.util.List<zelisline.ub.serviceops.domain.StaffServiceRates.Rate> setServiceRates(
+            String businessId, String staffProfileId,
+            java.util.List<zelisline.ub.serviceops.domain.StaffServiceRates.Rate> rates) {
+        if (rates != null) {
+            for (var rate : rates) {
+                if (rate == null || rate.serviceId() == null || serviceOfferingRepository
+                        .findByIdAndBusinessIdAndDeletedAtIsNull(rate.serviceId().trim(), businessId).isEmpty()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Service not found");
+                }
+            }
+        }
+        return staffProfileService.setServiceRates(businessId, staffProfileId, rates);
     }
 }

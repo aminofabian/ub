@@ -53,6 +53,7 @@ public class SalesController {
 
     private final SaleService saleService;
     private final SaleVoidService saleVoidService;
+    private final zelisline.ub.sales.application.SalePerformerService salePerformerService;
     private final SaleRefundService saleRefundService;
     private final SalePaymentAdjustService salePaymentAdjustService;
     private final SaleReceiptService saleReceiptService;
@@ -192,6 +193,21 @@ public class SalesController {
                 body,
                 user.userId()
         );
+    }
+
+    /** A paid service was rung under the wrong person: name the right one and move the earnings. */
+    @PostMapping("/{saleId}/items/{saleItemId}/performer")
+    @PreAuthorize("hasPermission(null, 'commissions.adjust')")
+    public SaleResponse moveServicePerformer(
+            @PathVariable String saleId,
+            @PathVariable String saleItemId,
+            @Valid @RequestBody zelisline.ub.sales.api.dto.MoveServicePerformerRequest body,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.requireHuman(request);
+        return salePerformerService.move(
+                TenantRequestIds.resolveBusinessId(request), saleId, saleItemId,
+                body.staffProfileId(), body.reason(), user.userId());
     }
 
     @PostMapping("/{saleId}/void")

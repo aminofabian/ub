@@ -566,6 +566,110 @@ public class StaffProfileService {
                 .orElse(false);
     }
 
+    /** Whether a window falls outside the days and hours this person works. False when they have none set. */
+    @Transactional(readOnly = true)
+    public boolean isOutsideWorkingHours(
+            String businessId, String staffProfileId, java.time.Instant start, java.time.Instant end) {
+        return staffProfileRepository.findByIdAndBusinessId(staffProfileId, businessId)
+                .map(p -> !zelisline.ub.serviceops.domain.StaffWorkingHours.works(p.getWorkingHours(), start, end))
+                .orElse(false);
+    }
+
+    /** Stored working hours by staff profile id, for current customer-serving staff who have any. */
+    @Transactional(readOnly = true)
+    public Map<String, String> workingHoursByStaff(String businessId) {
+        Map<String, String> out = new LinkedHashMap<>();
+        for (StaffProfile profile : staffProfileRepository.findByBusinessIdOrderByDisplayNameAsc(businessId)) {
+            if (profile.isBookable() && profile.getWorkingHours() != null) {
+                out.put(profile.getId(), profile.getWorkingHours());
+            }
+        }
+        return out;
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, zelisline.ub.serviceops.domain.StaffWorkingHours.Day> workingHours(
+            String businessId, String staffProfileId) {
+        StaffProfile profile = staffProfileRepository.findByIdAndBusinessId(staffProfileId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Staff member not found"));
+        return zelisline.ub.serviceops.domain.StaffWorkingHours.decode(profile.getWorkingHours());
+    }
+
+    /** Sets the days and hours a person works. No days means they work whenever the shop is open. */
+    @Transactional
+    public Map<String, zelisline.ub.serviceops.domain.StaffWorkingHours.Day> setWorkingHours(
+            String businessId, String staffProfileId,
+            Map<String, zelisline.ub.serviceops.domain.StaffWorkingHours.Day> days) {
+        StaffProfile profile = staffProfileRepository.findByIdAndBusinessIdForUpdate(staffProfileId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Staff member not found"));
+        Map<String, zelisline.ub.serviceops.domain.StaffWorkingHours.Day> clean = new LinkedHashMap<>();
+        if (days != null) {
+            for (Map.Entry<String, zelisline.ub.serviceops.domain.StaffWorkingHours.Day> entry : days.entrySet()) {
+                var day = entry.getValue();
+                if (!zelisline.ub.serviceops.domain.StaffWorkingHours.DAY_KEYS.contains(entry.getKey())) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown day: " + entry.getKey());
+                }
+                if (day == null
+                        || !zelisline.ub.serviceops.domain.StaffWorkingHours.isTime(day.open())
+                        || !zelisline.ub.serviceops.domain.StaffWorkingHours.isTime(day.close())) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter times as HH:MM (" + entry.getKey() + ")");
+                }
+                if (!java.time.LocalTime.parse(day.close()).isAfter(java.time.LocalTime.parse(day.open()))) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "The end must be after the start (" + entry.getKey() + ")");
+                }
+                clean.put(entry.getKey(), day);
+            }
+        }
+        profile.setWorkingHours(zelisline.ub.serviceops.domain.StaffWorkingHours.encode(clean));
+        staffProfileRepository.save(profile);
+        return zelisline.ub.serviceops.domain.StaffWorkingHours.decode(profile.getWorkingHours());
+    }
+
+    @Transactional(readOnly = true)
+    public List<zelisline.ub.serviceops.domain.StaffServiceRates.Rate> serviceRates(
+            String businessId, String staffProfileId) {
+        StaffProfile profile = staffProfileRepository.findByIdAndBusinessId(staffProfileId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Staff member not found"));
+        return zelisline.ub.serviceops.domain.StaffServiceRates.decode(profile.getServiceRates());
+    }
+
+    /**
+     * Replaces what this person earns on particular services. The caller has already checked that
+     * each service belongs to the business. Applies to sales from now on.
+     */
+    @Transactional
+    public List<zelisline.ub.serviceops.domain.StaffServiceRates.Rate> setServiceRates(
+            String businessId, String staffProfileId,
+            List<zelisline.ub.serviceops.domain.StaffServiceRates.Rate> rates) {
+        StaffProfile profile = staffProfileRepository.findByIdAndBusinessIdForUpdate(staffProfileId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Staff member not found"));
+        Map<String, zelisline.ub.serviceops.domain.StaffServiceRates.Rate> clean = new LinkedHashMap<>();
+        for (var rate : rates == null ? List.<zelisline.ub.serviceops.domain.StaffServiceRates.Rate>of() : rates) {
+            String type = rate.type() == null ? "" : rate.type().trim().toUpperCase(Locale.ROOT);
+            if (!"PERCENT".equals(type) && !"FIXED".equals(type)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Commission type must be PERCENT or FIXED");
+            }
+            if (rate.value() == null || rate.value().signum() < 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter a rate of zero or more");
+            }
+            if ("PERCENT".equals(type) && rate.value().compareTo(new java.math.BigDecimal("100")) > 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Commission percent cannot be more than 100");
+            }
+            if ("FIXED".equals(type) && rate.value().compareTo(new java.math.BigDecimal("1000000")) > 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That amount is too large");
+            }
+            clean.put(rate.serviceId(), new zelisline.ub.serviceops.domain.StaffServiceRates.Rate(
+                    rate.serviceId(), type, rate.value().setScale(2, java.math.RoundingMode.HALF_UP)));
+        }
+        if (clean.size() > zelisline.ub.serviceops.domain.StaffServiceRates.MAX_RATES) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Too many services with their own rate");
+        }
+        profile.setServiceRates(zelisline.ub.serviceops.domain.StaffServiceRates.encode(List.copyOf(clean.values())));
+        staffProfileRepository.save(profile);
+        return zelisline.ub.serviceops.domain.StaffServiceRates.decode(profile.getServiceRates());
+    }
+
     /** Floor status by staff profile id for current, customer-serving staff ({@code AVAILABLE} when unset). */
     @Transactional(readOnly = true)
     public Map<String, String> floorStatuses(String businessId) {
@@ -671,7 +775,8 @@ public class StaffProfileService {
                 !EmploymentStatus.TERMINATED.equals(profile.getEmploymentStatus()),
                 profile.getCommissionType(),
                 profile.getCommissionRate(),
-                profile.getProductCommissionRate());
+                profile.getProductCommissionRate(),
+                profile.getServiceRates());
     }
 
     /** Display names by staff profile id, for the given ids that belong to this business. */

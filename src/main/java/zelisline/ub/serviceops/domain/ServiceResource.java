@@ -58,6 +58,18 @@ public class ServiceResource {
     @Column(name = "sort_order", nullable = false)
     private int sortOrder;
 
+    /** For a restaurant table: how many it seats. */
+    @Column(name = "capacity")
+    private Integer capacity;
+
+    /** For a restaurant table: the part of the floor it is in ("Terrace"). */
+    @Column(name = "area", length = 60)
+    private String area;
+
+    /** For a restaurant table: the secret in its QR code. Null means customers cannot order from it. */
+    @Column(name = "qr_token", length = 64, unique = true)
+    private String qrToken;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

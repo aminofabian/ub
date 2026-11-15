@@ -93,6 +93,8 @@ public class SaleService {
     private static final int MONEY_SCALE = 2;
     private static final int QTY_SCALE = 4;
     private static final long MAX_CLIENT_SOLD_AT_SKEW_SECONDS = 3600;
+    /** How old a sale's own time must be before it is treated as made offline and replayed. */
+    private static final long SOLD_OFFLINE_AFTER_SECONDS = 120;
     private static final String PRICE_OVERRIDE_PERMISSION = "pricing.sell_price.set";
 
     /** Supported weight units for weighed sale items (v1 = kg only). */
@@ -133,6 +135,7 @@ public class SaleService {
     private final PosReceiptSequenceSettingsService posReceiptSequenceSettingsService;
     private final ProfitPocketSettingsService profitPocketSettingsService;
     private final ServiceSaleSupport serviceSaleSupport;
+    private final zelisline.ub.restaurant.application.RestaurantSaleSupport restaurantSaleSupport;
     private final StaffProfileService staffProfileService;
     private final StaffEarningsService staffEarningsService;
 
@@ -205,7 +208,8 @@ public class SaleService {
         var creditSettingsResolved = businessCreditSettingsService.resolveForBusiness(businessId);
         requireBranch(businessId, req.branchId());
         Map<Integer, EffectiveLinePricing> linePricing =
-                resolveAndValidateSaleLines(businessId, req.branchId(), req.lines(), roleId);
+                resolveAndValidateSaleLines(
+                        businessId, req.branchId(), req.lines(), roleId, wasSoldOffline(req.clientSoldAt()));
         BigDecimal grandTotal = computeCartTotal(req.lines(), linePricing);
         validatePositiveMoney(grandTotal);
         // Tips are collected with the sale but are not part of its total: the customer owes
@@ -301,6 +305,14 @@ public class SaleService {
         // and its earnings both exist or neither does.
         staffEarningsService.recordForSale(
                 businessId, req.branchId(), saleId, userId, earningLines(saleItems), tips, effectiveSoldAt);
+        // A restaurant sale tells the kitchen what to make, in this same transaction: the order
+        // and its kitchen tickets exist exactly when the sale does (ADR 0020).
+        // Settling a bill of an order that already exists (and is already in the kitchen) writes none.
+        if (!OrderSettlement.isActive()) {
+            restaurantSaleSupport.recordOrderForSale(
+                    businessId, req.branchId(), userId, shift.getId(), saleId, customerId, req.lines(), effectiveSoldAt,
+                    wasSoldOffline(req.clientSoldAt()));
+        }
         if ((overpayAlloc.towardWallet().signum() > 0 || overpayAlloc.towardAr().signum() > 0)
                 && customerId != null
                 && !customerId.isBlank()) {
@@ -569,6 +581,22 @@ public class SaleService {
                 .orElseThrow(() -> new IllegalStateException("Sale not found after insert"));
     }
 
+    /** The dish behind a line when a restaurant bill is being settled; null for any other sale. */
+    private static OrderSettlement.FrozenDish frozenDish(int lineIndex) {
+        OrderSettlement.Context context = OrderSettlement.current();
+        return context == null || context.dishesByLineIndex() == null
+                ? null : context.dishesByLineIndex().get(lineIndex);
+    }
+
+    /**
+     * True when the till says the sale was completed a while ago: it sat in the offline outbox
+     * and is being replayed. A sale sent straight away arrives within seconds of its own time.
+     */
+    private static boolean wasSoldOffline(Instant clientSoldAt) {
+        return clientSoldAt != null
+                && Duration.between(clientSoldAt, Instant.now()).getSeconds() > SOLD_OFFLINE_AFTER_SECONDS;
+    }
+
     private static Instant resolveEffectiveSoldAt(Instant clientSoldAt) {
         Instant serverNow = Instant.now();
         if (clientSoldAt == null) {
@@ -662,6 +690,17 @@ public class SaleService {
                 lineIndex++;
                 continue;
             }
+            if (line.isCharge()) {
+                all.add(buildChargeSaleItem(saleId, lineIndex, line));
+                lineIndex++;
+                continue;
+            }
+            if (line.isDish()) {
+                all.add(buildDishSaleItem(businessId, req.branchId(), userId, saleId, lineIndex, line,
+                        wasSoldOffline(req.clientSoldAt())));
+                lineIndex++;
+                continue;
+            }
             BigDecimal qty = line.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
             List<BatchAllocationLine> allocations = inventoryBatchPickerService.pickAndApplyPhysicalDecrement(
                     businessId,
@@ -742,6 +781,158 @@ public class SaleService {
         row.setCostTotal(BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
         row.setProfit(lineTotal);
         return row;
+    }
+
+    /**
+     * A charge on a restaurant bill (service charge, packaging, delivery fee): no item, no stock,
+     * no cost. Its label is what the customer reads on the receipt. Already validated by
+     * {@link #validateChargeSaleLine}.
+     */
+    private static SaleItem buildChargeSaleItem(String saleId, int lineIndex, PostSaleLineRequest line) {
+        BigDecimal qty = line.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal unitPrice = line.unitPrice().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal lineTotal = qty.multiply(unitPrice).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        String label = line.label().trim();
+        SaleItem row = new SaleItem();
+        row.setSaleId(saleId);
+        row.setLineIndex(lineIndex);
+        row.setLineKind(SaleLineKinds.CHARGE);
+        row.setLineLabel(label.length() > 255 ? label.substring(0, 255) : label);
+        row.setDisplayName(label);
+        row.setQuantity(qty);
+        row.setUnitPrice(unitPrice);
+        row.setLineTotal(lineTotal);
+        row.setUnitCost(BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP));
+        row.setCostTotal(BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+        row.setProfit(lineTotal);
+        return row;
+    }
+
+    /**
+     * A charge is never taken from a client: anyone who can sell could otherwise add any amount
+     * under any name. It is accepted only while a restaurant bill is being settled, when the
+     * server itself built the line.
+     */
+    private static void validateChargeSaleLine(int i, PostSaleLineRequest line) {
+        String prefix = "Line " + (i + 1) + ": ";
+        if (!OrderSettlement.isActive()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "a charge can only be added by a restaurant bill");
+        }
+        if (line.itemId() != null && !line.itemId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "a charge cannot name a product");
+        }
+        if (line.label() == null || line.label().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "a charge needs a name");
+        }
+        if (line.quantity() == null || line.quantity().signum() <= 0
+                || line.unitPrice() == null || line.unitPrice().signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "a charge must be more than zero");
+        }
+    }
+
+    /**
+     * A restaurant dish (ADR 0020): no item and no batch of its own. Its name, price and chosen
+     * modifiers are snapshotted from the menu. If the dish has a recipe its ingredients leave the
+     * stock count here and their cost is the line's cost of goods; without one the cost is zero and
+     * the line's profit equals its total, which reports must not read as a real margin.
+     * Already validated by {@link #validateDishSaleLine}.
+     */
+    private SaleItem buildDishSaleItem(
+            String businessId, String branchId, String userId, String saleId, int lineIndex,
+            PostSaleLineRequest line, boolean soldOffline) {
+        OrderSettlement.FrozenDish frozen = frozenDish(lineIndex);
+        // A line of an order being settled is sold as it was ordered: its name, choices and price
+        // were fixed when it went to the kitchen, whatever the menu says today.
+        zelisline.ub.restaurant.application.RestaurantSaleSupport.DishLine dish = frozen != null
+                ? new zelisline.ub.restaurant.application.RestaurantSaleSupport.DishLine(
+                        frozen.menuItemId(), frozen.name(), frozen.unitPrice(), frozen.modifiersJson(),
+                        frozen.taxRateId(), frozen.label())
+                : restaurantSaleSupport.priceDish(businessId, line.menuItemId(), line.modifierOptionIds(), soldOffline);
+        BigDecimal qty = line.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        // A sale made offline keeps the price the customer actually paid (see validateDishSaleLine).
+        BigDecimal unitPrice = (soldOffline && frozen == null ? line.unitPrice() : dish.unitPrice())
+                .setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal lineTotal = qty.multiply(unitPrice).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        SaleItem row = new SaleItem();
+        row.setSaleId(saleId);
+        row.setLineIndex(lineIndex);
+        row.setLineKind(SaleLineKinds.DISH);
+        row.setLineLabel(dish.label());
+        row.setDisplayName(dish.name());
+        row.setMenuItemId(dish.menuItemId());
+        row.setModifiers(dish.modifiersJson());
+        String note = frozen != null ? frozen.note() : line.note();
+        row.setLineNote(zelisline.ub.posdraft.application.OrderTicketService.cleanNote(note));
+        // The dish's own tax rate; SaleTaxService works the amount out from it.
+        row.setTaxRateId(dish.taxRateId());
+        row.setQuantity(qty);
+        row.setUnitPrice(unitPrice);
+        row.setLineTotal(lineTotal);
+        // A dish with a recipe uses up its ingredients here and costs what they cost; one without
+        // costs nothing, and its profit is then only its price (reports say cost is not tracked).
+        BigDecimal costTotal = restaurantSaleSupport.useIngredients(businessId, branchId, saleId, userId, dish, qty)
+                .setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        row.setCostTotal(costTotal);
+        row.setUnitCost(costTotal.divide(qty, QTY_SCALE, RoundingMode.HALF_UP));
+        row.setProfit(lineTotal.subtract(costTotal).setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+        return row;
+    }
+
+    /**
+     * A dish line names a menu item, not a product. The price a client sends must be the price
+     * the menu gives for what was chosen: a stale or tampered price is refused rather than
+     * silently corrected, because the payments were worked out from it.
+     *
+     * <p>The exception is a sale made while the till was offline ({@link #wasSoldOffline}): the
+     * customer has already paid the price the till showed, so that price stands even if the menu
+     * has changed since, and a dish that has since run out is still accepted. Refusing it would
+     * lose a sale that really happened and hold up every queued sale behind it. The line then
+     * differs from the menu price, which is how it can be found afterwards.
+     */
+    private void validateDishSaleLine(String businessId, int i, PostSaleLineRequest line, boolean soldOffline) {
+        String prefix = "Line " + (i + 1) + ": ";
+        if (line.itemId() != null && !line.itemId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "a dish line cannot name a product");
+        }
+        if ((line.serviceId() != null && !line.serviceId().isBlank())
+                || (line.performerStaffProfileId() != null && !line.performerStaffProfileId().isBlank())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    prefix + "only a service line names a service or who performed it");
+        }
+        if (line.quantity() == null || line.quantity().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "quantity must be positive");
+        }
+        if (line.quantity().stripTrailingZeros().scale() > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "a dish is sold in whole numbers");
+        }
+        OrderSettlement.FrozenDish frozen = frozenDish(i);
+        if (frozen != null) {
+            // Priced when it was sent to the kitchen; only the arithmetic is checked here.
+            if (line.unitPrice() == null
+                    || line.unitPrice().setScale(MONEY_SCALE, RoundingMode.HALF_UP)
+                            .compareTo(frozen.unitPrice().setScale(MONEY_SCALE, RoundingMode.HALF_UP)) != 0) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, prefix + "the bill no longer matches the order");
+            }
+            return;
+        }
+        if (OrderSettlement.isActive()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "that dish is not on the order");
+        }
+        zelisline.ub.restaurant.application.RestaurantSaleSupport.DishLine dish;
+        try {
+            dish = restaurantSaleSupport.priceDish(
+                    businessId, line.menuItemId(), line.modifierOptionIds(), soldOffline);
+        } catch (ResponseStatusException ex) {
+            throw new ResponseStatusException(ex.getStatusCode(), prefix + ex.getReason());
+        }
+        if (line.unitPrice() == null || line.unitPrice().signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "unit price must be positive");
+        }
+        if (!soldOffline
+                && line.unitPrice().setScale(MONEY_SCALE, RoundingMode.HALF_UP).compareTo(dish.unitPrice()) != 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    prefix + dish.name() + " is now " + dish.unitPrice().toPlainString() + " — refresh the menu");
+        }
     }
 
     /**
@@ -980,6 +1171,11 @@ public class SaleService {
                 }
             }
         }
+        // On a restaurant bill the tip is for whoever served the order: nobody "performed" a dish.
+        OrderSettlement.Context settlement = OrderSettlement.current();
+        if (settlement != null && settlement.tipRecipients() != null) {
+            performers.addAll(settlement.tipRecipients());
+        }
         for (PostSaleTipRequest tip : req.tips()) {
             String staffId = tip.staffProfileId() == null ? "" : tip.staffProfileId().trim();
             if (!performers.contains(staffId)) {
@@ -1005,7 +1201,8 @@ public class SaleService {
     private static List<StaffEarningsService.SaleLine> earningLines(List<SaleItem> saleItems) {
         List<StaffEarningsService.SaleLine> out = new ArrayList<>(saleItems.size());
         for (SaleItem item : saleItems) {
-            if (item.isAirtime()) {
+            // Nobody earns commission on airtime or on a service charge or delivery fee.
+            if (item.isAirtime() || item.isCharge()) {
                 continue;
             }
             out.add(new StaffEarningsService.SaleLine(
@@ -1060,7 +1257,8 @@ public class SaleService {
             String businessId,
             String branchId,
             List<PostSaleLineRequest> lines,
-            String roleId
+            String roleId,
+            boolean soldOffline
     ) {
         if (lines == null || lines.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Sale must contain at least one line");
@@ -1073,7 +1271,7 @@ public class SaleService {
             }
         }
         List<String> itemIds = lines.stream()
-                .filter(l -> !l.isAirtime() && !l.isService())
+                .filter(l -> !l.isAirtime() && !l.isService() && !l.isDish() && !l.isCharge())
                 .map(PostSaleLineRequest::itemId)
                 .filter(id -> id != null && !id.isBlank())
                 .distinct()
@@ -1102,6 +1300,18 @@ public class SaleService {
             if (line.isService()) {
                 validateServiceSaleLine(businessId, i, line, roleId);
                 continue;
+            }
+            if (line.isDish()) {
+                validateDishSaleLine(businessId, i, line, soldOffline);
+                continue;
+            }
+            if (line.isCharge()) {
+                validateChargeSaleLine(i, line);
+                continue;
+            }
+            if (line.modifierOptionIds() != null && !line.modifierOptionIds().isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Line " + (i + 1) + ": only a dish has modifiers");
             }
             if ((line.serviceId() != null && !line.serviceId().isBlank())
                     || (line.performerStaffProfileId() != null && !line.performerStaffProfileId().isBlank())) {

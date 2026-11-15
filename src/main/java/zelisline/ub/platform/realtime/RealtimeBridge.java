@@ -385,6 +385,35 @@ public class RealtimeBridge {
     }
 
     /**
+     * Restaurant: a kitchen ticket was sent, changed stage or was voided. A nudge to re-read the
+     * kitchen board or the ready list; it carries no order contents. Sent on the {@code pos}
+     * channel, so a kitchen screen whose user cannot subscribe to it falls back to polling.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onKitchenUpdated(KitchenUpdatedEvent event) {
+        var dataMap = new LinkedHashMap<String, String>();
+        dataMap.put("branchId", event.branchId() != null ? event.branchId() : "");
+        String payloadJson = toJson(dataMap);
+        if (payloadJson == null) return;
+        String eventId = UUID.randomUUID().toString();
+        for (String sid : sessionRegistry.findSessionsByBranchOrBusinessWide(
+                event.businessId(), event.branchId(), "pos")) {
+            handler.sendFrame(sid, "kitchen.updated", eventId, "HIGH", Instant.now(), payloadJson);
+        }
+    }
+
+    /** Restaurant: something on the menu ran out or came back. Order screens re-read the menu. */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onMenuUpdated(MenuUpdatedEvent event) {
+        String payloadJson = toJson(new LinkedHashMap<String, String>());
+        if (payloadJson == null) return;
+        String eventId = UUID.randomUUID().toString();
+        for (String sid : sessionRegistry.findSessionsByBranchOrBusinessWide(event.businessId(), null, "pos")) {
+            handler.sendFrame(sid, "menu.updated", eventId, "MEDIUM", Instant.now(), payloadJson);
+        }
+    }
+
+    /**
      * Fan-out supply.posted when a Path B receive or Path A GRN invoice is posted.
      * Invalidates Morning board supply tape + payables pulse.
      */
@@ -874,6 +903,10 @@ public class RealtimeBridge {
             String slipJson) {}
 
     /** Once-per-sale invalidate signal for dashboards (not cashier payment UX). */
+    public record KitchenUpdatedEvent(String businessId, String branchId) {}
+
+    public record MenuUpdatedEvent(String businessId) {}
+
     public record SaleCompletedEvent(
             String businessId, String branchId, String saleId, BigDecimal amount) {}
 

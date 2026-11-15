@@ -197,6 +197,99 @@ class StaffEarningsIT extends ServiceSaleTestSupport {
     }
 
     @Test
+    void aPaidServiceCanBeMovedToThePersonWhoReallyDidIt() throws Exception {
+        String peter = createStaff(TENANT, owner, "Peter Move");
+        setPlan(john, "PERCENT", "40", null);
+        setPlan(peter, "PERCENT", "50", null);
+        JsonNode sale = postSale("mv-" + UUID.randomUUID(), serviceLine(haircut, john, 1, "300"), "300", 201);
+        String saleId = sale.get("id").asText();
+        String itemId = sale.get("items").get(0).get("id").asText();
+        String url = "/api/v1/sales/" + saleId + "/items/" + itemId + "/performer";
+        String body = "{\"staffProfileId\":\"" + peter + "\",\"reason\":\"Wrong name tapped\"}";
+
+        // A cashier cannot move earnings, and neither can another business.
+        mockMvc.perform(as(post(url), TENANT, cashier, ROLE_CASHIER).content(body))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(as(post(url), OTHER, otherOwner, ROLE_OWNER).content(body))
+                .andExpect(status().isNotFound());
+        // Someone who is not on this shop's team is refused.
+        mockMvc.perform(as(post(url), TENANT, owner, ROLE_OWNER)
+                        .content("{\"staffProfileId\":\"" + UUID.randomUUID() + "\"}"))
+                .andExpect(status().isBadRequest());
+        assertThat(staffEarningsService.balance(TENANT, john)).isEqualByComparingTo("120.00");
+
+        MvcResult moved = mockMvc.perform(as(post(url), TENANT, owner, ROLE_OWNER).content(body))
+                .andExpect(status().isOk()).andReturn();
+        assertThat(objectMapper.readTree(moved.getResponse().getContentAsString())
+                .get("items").get(0).get("performerStaffProfileId").asText()).isEqualTo(peter);
+        // Doing it again changes nothing.
+        mockMvc.perform(as(post(url), TENANT, owner, ROLE_OWNER).content(body)).andExpect(status().isOk());
+
+        assertThat(staffEarningsService.balance(TENANT, john)).isEqualByComparingTo("0.00");
+        assertThat(staffEarningsService.balance(TENANT, peter)).isEqualByComparingTo("150.00");
+        JsonNode johnRow = statementRow(john);
+        assertThat(johnRow.get("servicesDone").asLong()).isZero();
+        assertThat(johnRow.get("serviceRevenue").decimalValue()).isEqualByComparingTo("0.00");
+        JsonNode peterRow = statementRow(peter);
+        assertThat(peterRow.get("servicesDone").asLong()).isEqualTo(1);
+        assertThat(peterRow.get("serviceRevenue").decimalValue()).isEqualByComparingTo("300.00");
+        assertThat(staffLedgerEntryRepository.findByBusinessIdAndSaleIdOrderByCreatedAtAsc(TENANT, saleId)).hasSize(3);
+        assertReconciled();
+
+        // And back again: the ledger still agrees with the books.
+        mockMvc.perform(as(post(url), TENANT, owner, ROLE_OWNER)
+                        .content("{\"staffProfileId\":\"" + john + "\"}"))
+                .andExpect(status().isOk());
+        assertThat(staffEarningsService.balance(TENANT, john)).isEqualByComparingTo("120.00");
+        assertThat(staffEarningsService.balance(TENANT, peter)).isEqualByComparingTo("0.00");
+        assertThat(statementRow(john).get("servicesDone").asLong()).isEqualTo(1);
+        assertReconciled();
+
+        // A voided sale has nothing left to move.
+        mockMvc.perform(as(post("/api/v1/sales/{saleId}/void", saleId), TENANT, owner, ROLE_OWNER).content("{}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(as(post(url), TENANT, owner, ROLE_OWNER).content(body)).andExpect(status().isConflict());
+        assertThat(staffEarningsService.balance(TENANT, john)).isEqualByComparingTo("0.00");
+        assertReconciled();
+    }
+
+    @Test
+    void aPersonsOwnRateForAServiceBeatsTheServiceRateAndTheirPlan() throws Exception {
+        setPlan(john, "PERCENT", "40", null);
+        String url = "/api/v1/service-team/" + john + "/service-rates";
+        String own = "{\"rates\":[{\"serviceId\":\"" + haircut + "\",\"type\":\"PERCENT\",\"value\":60}]}";
+
+        mockMvc.perform(as(put(url), TENANT, cashier, ROLE_CASHIER).content(own)).andExpect(status().isForbidden());
+        mockMvc.perform(as(put(url), OTHER, otherOwner, ROLE_OWNER).content(own)).andExpect(status().isBadRequest());
+        mockMvc.perform(as(put(url), TENANT, owner, ROLE_OWNER)
+                        .content("{\"rates\":[{\"serviceId\":\"" + UUID.randomUUID() + "\",\"type\":\"PERCENT\",\"value\":60}]}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(as(put(url), TENANT, owner, ROLE_OWNER)
+                        .content("{\"rates\":[{\"serviceId\":\"" + haircut + "\",\"type\":\"PERCENT\",\"value\":160}]}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(as(put(url), TENANT, owner, ROLE_OWNER).content(own)).andExpect(status().isOk());
+
+        String saleId = postSale("own-" + UUID.randomUUID(), serviceLine(haircut, john, 1, "300"), "300", 201)
+                .get("id").asText();
+        StaffLedgerEntry entry = staffLedgerEntryRepository
+                .findByBusinessIdAndSaleIdOrderByCreatedAtAsc(TENANT, saleId).getFirst();
+        assertThat(entry.getAmount()).isEqualByComparingTo("180.00");
+        assertThat(entry.getRule()).isEqualTo("PERCENT 60.00 (own)");
+
+        // Someone without their own rate still earns by their plan.
+        String peter = createStaff(TENANT, owner, "Peter Plan");
+        setPlan(peter, "PERCENT", "50", null);
+        postSale("own2-" + UUID.randomUUID(), serviceLine(haircut, peter, 1, "300"), "300", 201);
+        assertThat(staffEarningsService.balance(TENANT, peter)).isEqualByComparingTo("150.00");
+
+        // Removed: back to the plan, and what was already earned does not change.
+        mockMvc.perform(as(put(url), TENANT, owner, ROLE_OWNER).content("{\"rates\":[]}")).andExpect(status().isOk());
+        postSale("own3-" + UUID.randomUUID(), serviceLine(haircut, john, 1, "300"), "300", 201);
+        assertThat(staffEarningsService.balance(TENANT, john)).isEqualByComparingTo("300.00");
+        assertReconciled();
+    }
+
+    @Test
     void theSellerEarnsOnProductsAndGivesItBackOnARefund() throws Exception {
         String cashierProfile = staffProfileService.ensureProfile(TENANT, cashier.getId()).getId();
         setPlan(cashierProfile, null, null, "10");

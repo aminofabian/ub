@@ -40,6 +40,10 @@ class SetupProgressServiceTest {
     private ObjectProvider<zelisline.ub.serviceops.application.ServiceSetupFacts> serviceSetupFacts;
     @Mock
     private zelisline.ub.serviceops.application.ServiceSetupFacts serviceFacts;
+    @Mock
+    private ObjectProvider<zelisline.ub.restaurant.application.RestaurantSetupFacts> restaurantSetupFacts;
+    @Mock
+    private zelisline.ub.restaurant.application.RestaurantSetupFacts restaurantFacts;
 
     private SetupProgressService service;
 
@@ -54,7 +58,8 @@ class SetupProgressServiceTest {
                 new SetupProgressSettingsService(new ObjectMapper()),
                 new ObjectMapper(),
                 smsCreditService,
-                serviceSetupFacts);
+                serviceSetupFacts,
+                restaurantSetupFacts);
     }
 
     @Test
@@ -192,6 +197,60 @@ class SetupProgressServiceTest {
     @Test
     void aShopThatAlsoSellsGoodsKeepsTheProductSteps() {
         Business business = business("biz-1", "{\"profile\":{\"storeTypes\":[\"salon\",\"cosmetics\"]}}");
+        when(businessRepository.findByIdAndDeletedAtIsNull("biz-1")).thenReturn(java.util.Optional.of(business));
+        when(gateService.snapshot("biz-1")).thenReturn(snapshot(true, 0, 0, 0, false, false, false));
+        when(opsAlertSettingsService.resolveForBusiness("biz-1")).thenReturn(new BusinessOpsAlertSettings());
+        when(supplierProductRepository.countActiveLinksForBusiness("biz-1")).thenReturn(0L);
+        when(itemRepository.existsActiveVariantByBusinessId("biz-1")).thenReturn(false);
+
+        var response = service.getForBusiness("biz-1");
+
+        assertThat(response.currentStepKey()).isEqualTo("stock_shelf");
+    }
+
+    @Test
+    void aRestaurantIsAskedForItsMenuAndTablesNotForProductsOrASupplier() {
+        Business business = business("biz-1", "{\"profile\":{\"storeTypes\":[\"restaurant\"]}}");
+        when(businessRepository.findByIdAndDeletedAtIsNull("biz-1")).thenReturn(java.util.Optional.of(business));
+        when(gateService.snapshot("biz-1")).thenReturn(snapshot(true, 0, 0, 0, false, false, false));
+        when(opsAlertSettingsService.resolveForBusiness("biz-1")).thenReturn(new BusinessOpsAlertSettings());
+        when(restaurantSetupFacts.getIfAvailable()).thenReturn(restaurantFacts);
+        when(restaurantFacts.facts("biz-1"))
+                .thenReturn(new zelisline.ub.restaurant.application.RestaurantSetupFacts.Facts(0, 0, false));
+
+        var response = service.getForBusiness("biz-1");
+
+        assertThat(response.visible()).isTrue();
+        assertThat(response.currentStepKey()).isEqualTo("food_menu");
+        assertThat(response.steps()).extracting(s -> s.key())
+                .containsExactly("shop_created", "food_menu", "food_tables", "phone_verified", "food_staff",
+                        "first_order", "food_recipes")
+                .doesNotContain("stock_shelf", "supplier_loop", "first_sale");
+    }
+
+    @Test
+    void aCafeIsNotAskedAboutTablesAndCanFinishWithNoProductNoSupplierAndNoRecipe() {
+        Business business = business("biz-1", "{\"onboarding\":{\"answers\":{\"storeTypes\":[\"cafe\",\"fast-food\"]}}}");
+        when(businessRepository.findByIdAndDeletedAtIsNull("biz-1")).thenReturn(java.util.Optional.of(business));
+        // Nothing on a shelf, no supplier: for a product shop this could never be ready.
+        when(gateService.snapshot("biz-1")).thenReturn(snapshot(true, 0, 0, 0, false, true, false));
+        when(opsAlertSettingsService.resolveForBusiness("biz-1")).thenReturn(verifiedPhone());
+        when(restaurantSetupFacts.getIfAvailable()).thenReturn(restaurantFacts);
+        when(restaurantFacts.facts("biz-1"))
+                .thenReturn(new zelisline.ub.restaurant.application.RestaurantSetupFacts.Facts(2, 0, false));
+
+        var response = service.getForBusiness("biz-1");
+
+        assertThat(response.steps()).extracting(s -> s.key()).doesNotContain("food_tables");
+        assertThat(response.shopReady()).isTrue();
+        assertThat(response.visible()).isFalse();
+        // Staff and recipes are extras: leaving them does not hold the shop back.
+        assertThat(response.currentStepKey()).isEqualTo("food_staff");
+    }
+
+    @Test
+    void aShopThatMixesFoodWithRetailKeepsTheProductSteps() {
+        Business business = business("biz-1", "{\"profile\":{\"storeTypes\":[\"cafe\",\"mini-mart\"]}}");
         when(businessRepository.findByIdAndDeletedAtIsNull("biz-1")).thenReturn(java.util.Optional.of(business));
         when(gateService.snapshot("biz-1")).thenReturn(snapshot(true, 0, 0, 0, false, false, false));
         when(opsAlertSettingsService.resolveForBusiness("biz-1")).thenReturn(new BusinessOpsAlertSettings());

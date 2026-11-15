@@ -61,6 +61,14 @@ public class StaffProfile {
     @Column(name = "time_off", length = 2000)
     private String timeOff;
 
+    /** The days and hours this person works (see {@code StaffWorkingHours}); null when they follow the shop. */
+    @Column(name = "working_hours", length = 200)
+    private String workingHours;
+
+    /** What this person earns on particular services (see {@code StaffServiceRates}); null when none. */
+    @Column(name = "service_rates", length = 4000)
+    private String serviceRates;
+
     /** The chair (station, room) this person usually works at, 1-based; {@code null} if none. */
     @Column(name = "usual_station_no")
     private Integer usualStationNo;

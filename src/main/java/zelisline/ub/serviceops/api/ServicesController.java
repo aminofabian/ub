@@ -134,6 +134,30 @@ public class ServicesController {
                 TenantRequestIds.resolveBusinessId(request), id, body.staffProfileIds());
     }
 
+    /** Gives a service its picture (JPEG, PNG or WebP), replacing any it had. */
+    @PostMapping(value = "/{id}/picture", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasPermission(null, 'services.catalog.manage')")
+    public zelisline.ub.serviceops.api.dto.ServiceResponse setPicture(
+            @PathVariable String id,
+            @org.springframework.web.bind.annotation.RequestPart("file") org.springframework.web.multipart.MultipartFile file,
+            HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        final byte[] bytes;
+        try {
+            bytes = file.getBytes();
+        } catch (java.io.IOException e) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.BAD_REQUEST, "Could not read the picture");
+        }
+        return serviceCatalogService.setPicture(TenantRequestIds.resolveBusinessId(request), id, bytes, file.getOriginalFilename());
+    }
+
+    @DeleteMapping("/{id}/picture")
+    @PreAuthorize("hasPermission(null, 'services.catalog.manage')")
+    public zelisline.ub.serviceops.api.dto.ServiceResponse removePicture(@PathVariable String id, HttpServletRequest request) {
+        CurrentTenantUser.require(request);
+        return serviceCatalogService.removePicture(TenantRequestIds.resolveBusinessId(request), id);
+    }
+
     @DeleteMapping("/{id}")
     @PreAuthorize("hasPermission(null, 'services.catalog.manage')")
     @ResponseStatus(HttpStatus.NO_CONTENT)

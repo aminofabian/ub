@@ -835,6 +835,16 @@ public class ServiceTicketService {
     /** Cancels an unpaid ticket, with a reason; {@code abandoned} marks a customer who walked away. */
     @Transactional
     public TicketResponse cancel(String businessId, String ticketId, CancelTicketRequest request, String userId) {
+        return cancel(businessId, ticketId, request, userId, null);
+    }
+
+    /**
+     * @param tillDeviceKey the till the request came from; a deposit handed back in cash leaves
+     *        that till's open drawer
+     */
+    @Transactional
+    public TicketResponse cancel(
+            String businessId, String ticketId, CancelTicketRequest request, String userId, String tillDeviceKey) {
         PosDraft ticket = requireTicket(businessId, ticketId);
         if (PosDraftConstants.STATUS_CANCELLED.equals(ticket.getStatus())) {
             return toResponse(ticket, activeLines(ticketId), staffNames(businessId, List.of(ticket)));
@@ -852,8 +862,19 @@ public class ServiceTicketService {
         String reason = request == null ? null : blankToNull(request.reason());
         ticket.setCancelledReason(reason != null ? reason : (abandoned ? "Customer left" : "Cancelled"));
         String stageWhenCancelled = ticket.getServiceStage();
-        // The shop did not do the work, so a deposit goes back to the customer as credit.
-        releaseDepositToWallet(businessId, ticket);
+        // The shop did not do the work, so a deposit goes back to the customer: as credit for
+        // their next visit unless the till hands it back now.
+        if (request != null && request.refundsDeposit()
+                && PosDraftConstants.DEPOSIT_HELD.equals(ticket.getDepositState())) {
+            heldMoneyService.refund(
+                    businessId, ticket.getBranchId(), zelisline.ub.finance.LedgerAccountCodes.CUSTOMER_DEPOSITS,
+                    zelisline.ub.serviceops.application.HeldMoneyService.SOURCE_DEPOSIT_REFUNDED, ticket.getId(),
+                    ticket.getDepositAmount(), request.depositBack().trim().toLowerCase(java.util.Locale.ROOT),
+                    "Deposit handed back, ticket " + ticket.getTicketNumber(), userId, tillDeviceKey);
+            ticket.setDepositState(PosDraftConstants.DEPOSIT_REFUNDED);
+        } else {
+            releaseDepositToWallet(businessId, ticket);
+        }
         ticket = draftRepository.saveAndFlush(ticket);
         // A cancelled ticket is work that will never be paid for: keep a trace of who did it.
         java.util.Map<String, Object> state = new java.util.LinkedHashMap<>();
@@ -1421,6 +1442,9 @@ public class ServiceTicketService {
     private void requireFree(String businessId, String staffId, Instant start, Instant end, String exceptTicketId) {
         if (staffProfileService.isOff(businessId, staffId, start, end)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "They are off at that time");
+        }
+        if (staffProfileService.isOutsideWorkingHours(businessId, staffId, start, end)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "They do not work at that time");
         }
         for (PosDraft other : draftRepository.findBookedOverlapping(businessId, staffId, start, end)) {
             if (!other.getId().equals(exceptTicketId)) {

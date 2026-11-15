@@ -57,7 +57,9 @@ public final class SaleResponseMapper {
                     si.getPerformerStaffProfileId() == null
                             ? null
                             : performerNames.get(si.getPerformerStaffProfileId()),
-                    si.getServiceMinutes()
+                    si.getServiceMinutes(),
+                    si.getMenuItemId(),
+                    si.getLineNote()
             ));
         }
         List<SalePaymentResponse> paymentDtos = new ArrayList<>();

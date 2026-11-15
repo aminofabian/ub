@@ -14,6 +14,8 @@ public final class StaffLedgerKinds {
 
     public static final String SOURCE_SERVICE = "SERVICE";
     public static final String SOURCE_PRODUCT = "PRODUCT";
+    /** On a reversal: the service was moved to another person, so it no longer counts as theirs. */
+    public static final String SOURCE_SERVICE_MOVED = "SERVICE_MOVED";
 
     public static final String METHOD_DRAWER = "DRAWER";
     public static final String METHOD_MPESA = "MPESA";

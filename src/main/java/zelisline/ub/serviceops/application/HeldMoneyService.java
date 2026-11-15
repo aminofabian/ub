@@ -35,8 +35,10 @@ public class HeldMoneyService {
     public static final String SOURCE_DEPOSIT_TAKEN = "service_deposit";
     public static final String SOURCE_DEPOSIT_RELEASED = "service_deposit_release";
     public static final String SOURCE_DEPOSIT_FORFEITED = "service_deposit_forfeit";
+    public static final String SOURCE_DEPOSIT_REFUNDED = "service_deposit_refund";
     public static final String SOURCE_PACKAGE_SOLD = "service_package";
     public static final String SOURCE_PACKAGE_SESSION = "service_package_session";
+    public static final String SOURCE_PACKAGE_REFUNDED = "service_package_refund";
 
     private static final BigDecimal MAX_AMOUNT = new BigDecimal("1000000");
 
@@ -89,6 +91,30 @@ public class HeldMoneyService {
     ) {
         post(businessId, branchId, sourceType, sourceId, memo,
                 liabilityCode, LedgerAccountCodes.SERVICE_REVENUE, requireAmount(amount));
+    }
+
+    /**
+     * Hands held money back to the customer the way it came in, or the other way. Cash leaves the
+     * open shift's drawer, so the shift still balances; refused when the drawer has too little.
+     *
+     * @param method {@code cash} or {@code mpesa_manual}
+     */
+    @Transactional
+    public void refund(
+            String businessId, String branchId, String liabilityCode, String sourceType, String sourceId,
+            BigDecimal amount, String method, String memo, String userId, String tillDeviceKey
+    ) {
+        BigDecimal money = requireAmount(amount);
+        String credit;
+        if (SalesConstants.PAYMENT_METHOD_CASH.equals(method)) {
+            drawerPaidOutService.payOut(businessId, branchId, tillDeviceKey, money, sourceId, userId);
+            credit = LedgerAccountCodes.OPERATING_CASH;
+        } else if (SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(method)) {
+            credit = LedgerAccountCodes.MPESA_CLEARING;
+        } else {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Give it back in cash or by M-Pesa");
+        }
+        post(businessId, branchId, sourceType, sourceId, memo, liabilityCode, credit, money);
     }
 
     public static BigDecimal requireAmount(BigDecimal amount) {

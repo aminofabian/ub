@@ -49,6 +49,8 @@ public class SetupProgressService {
     private final ObjectProvider<SmsCreditService> smsCreditService;
     /** Absent in a deployment without the service module; a service shop then gets the standard steps. */
     private final ObjectProvider<zelisline.ub.serviceops.application.ServiceSetupFacts> serviceSetupFacts;
+    /** Absent in a deployment without the restaurant module; a food shop then gets the standard steps. */
+    private final ObjectProvider<zelisline.ub.restaurant.application.RestaurantSetupFacts> restaurantSetupFacts;
 
     @Transactional
     public SetupProgressResponse getForBusiness(String businessId) {
@@ -101,6 +103,17 @@ public class SetupProgressService {
             return buildForServiceShop(business, snap, prefs, phoneVerified, serviceFacts.facts(businessId), now, mayGrantReward);
         }
 
+        // A restaurant, café or bar sells from its menu, not a shelf: a sellable product and a linked
+        // supplier may never exist, and its setup would sit at "add your first product" for good.
+        List<String> storeTypes = storeTypesOf(business.getSettings());
+        zelisline.ub.restaurant.application.RestaurantSetupFacts foodFacts =
+                zelisline.ub.tenancy.api.dto.StoreTypeCodes.isFoodOnlyBusiness(storeTypes)
+                        ? restaurantSetupFacts.getIfAvailable() : null;
+        if (foodFacts != null) {
+            return buildForFoodShop(business, snap, prefs, phoneVerified, foodFacts.facts(businessId),
+                    zelisline.ub.tenancy.api.dto.StoreTypeCodes.isTableServiceBusiness(storeTypes), now, mayGrantReward);
+        }
+
         boolean shopCreated = snap.questionnaireDone();
         boolean stocked = snap.sellableSkuCount() > 0;
         boolean supplierDone = snap.supplierCount() > 0 && supplierLinks > 0;
@@ -148,6 +161,46 @@ public class SetupProgressService {
                         facts.onlineBooking() ? 10 : 0, 10, "/services/appointments", null,
                         List.of(sub("hours", "Set your online booking hours", 10, facts.onlineBooking()))));
         boolean shopReady = shopCreated && menuDone && teamDone && phoneVerified && saleDone;
+        return assemble(business, prefs, defs, shopCreated, shopReady, now, mayGrantReward);
+    }
+
+    /**
+     * The steps of a shop that only sells food and drink: its menu, its tables when it seats people,
+     * its phone, the people who serve, a first order, and — as an extra — a recipe so a plate has a cost.
+     */
+    private SetupProgressResponse buildForFoodShop(
+            Business business,
+            MerchantOnboardingGateService.Snapshot snap,
+            SetupProgressSettingsService.SetupProgressPrefs prefs,
+            boolean phoneVerified,
+            zelisline.ub.restaurant.application.RestaurantSetupFacts.Facts facts,
+            boolean tableService,
+            Instant now,
+            boolean mayGrantReward) {
+        boolean shopCreated = snap.questionnaireDone();
+        boolean menuDone = facts.menuItems() > 0;
+        boolean tablesDone = facts.tables() > 0;
+        boolean staffDone = snap.hasInvitedStaff();
+        boolean saleDone = snap.hasCompletedSale();
+        List<StepDef> defs = new ArrayList<>();
+        defs.add(stepShopCreated(shopCreated));
+        defs.add(new StepDef("food_menu", "Put your dishes on the menu", true, menuDone, menuDone ? 10 : 0, 10,
+                "/restaurant/menu", null, List.of(sub("dish", "Add a dish with a price", 10, menuDone))));
+        if (tableService) {
+            defs.add(new StepDef("food_tables", "Add your tables", false, tablesDone, tablesDone ? 8 : 0, 8,
+                    "/restaurant/floor", null, List.of(sub("table", "Add a table", 8, tablesDone))));
+        }
+        defs.add(stepPhoneVerified(phoneVerified));
+        defs.add(new StepDef("food_staff", "Add the people who serve and cook", false, staffDone, staffDone ? 8 : 0, 8,
+                "/users", null, List.of(sub("invite", "Add a waiter, a cook or a cashier", 8, staffDone))));
+        // Its own key: "first_sale" is sent to the product till by the app.
+        defs.add(new StepDef("first_order", "Take your first order", true, saleDone, saleDone ? 15 : 0, 15,
+                tableService ? "/restaurant/floor" : "/restaurant/counter", null,
+                List.of(sub("order", "Ring an order and take payment", 15, saleDone))));
+        defs.add(new StepDef("food_recipes", "Say what a dish is made of", false, facts.anyRecipe(),
+                facts.anyRecipe() ? 8 : 0, 8, "/restaurant/menu", null,
+                List.of(sub("recipe", "Give one dish a recipe, to see what a plate costs", 8, facts.anyRecipe()))));
+        boolean shopReady = shopCreated && menuDone && phoneVerified && saleDone;
         return assemble(business, prefs, defs, shopCreated, shopReady, now, mayGrantReward);
     }
 
@@ -269,6 +322,20 @@ public class SetupProgressService {
             return zelisline.ub.tenancy.api.dto.StoreTypeCodes.isServiceOnlyBusiness(types);
         } catch (Exception ex) {
             return false;
+        }
+    }
+
+    /** The shop formats a business chose, from its profile or, failing that, its setup answers. */
+    private List<String> storeTypesOf(String settingsJson) {
+        if (settingsJson == null || settingsJson.isBlank()) {
+            return List.of();
+        }
+        try {
+            JsonNode root = objectMapper.readTree(settingsJson);
+            List<String> types = storeTypes(root.path("profile"));
+            return types.isEmpty() ? storeTypes(root.path("onboarding").path("answers")) : types;
+        } catch (Exception ex) {
+            return List.of();
         }
     }
 

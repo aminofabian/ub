@@ -70,6 +70,18 @@ public class SaleItem {
     @Column(name = "performer_amount", precision = 14, scale = 2)
     private java.math.BigDecimal performerAmount;
 
+    /** For {@code line_kind = DISH}: the menu item sold (scope RESTAURANT_OPERATIONS §3.2). */
+    @Column(name = "menu_item_id", length = 36)
+    private String menuItemId;
+
+    /** Snapshot of the chosen modifier options (JSON): names and prices as sold. */
+    @Column(name = "modifiers", length = 2000)
+    private String modifiers;
+
+    /** What the customer asked for on this line ("no onions"). */
+    @Column(name = "line_note", length = 255)
+    private String lineNote;
+
     @Column(name = "item_id", length = 36)
     private String itemId;
 
@@ -133,6 +145,14 @@ public class SaleItem {
 
     public boolean isAirtime() {
         return SaleLineKinds.isAirtime(lineKind);
+    }
+
+    public boolean isCharge() {
+        return SaleLineKinds.isCharge(lineKind);
+    }
+
+    public boolean isDish() {
+        return SaleLineKinds.isDish(lineKind);
     }
 
     public boolean isService() {

@@ -55,6 +55,13 @@ public class FeatureFlagService {
     /** Butcher counter POS workspace and weighed-sale features. */
     public static final String FLAG_BUTCHER_POS_ENABLED = "butcher_pos.enabled";
 
+    /**
+     * Restaurant menu, orders and kitchen (ADR 0020). Absent defaults to enabled, so it is a
+     * switch to turn the vertical off for a business, not something every restaurant must set.
+     * Independent of the held-cart flags above.
+     */
+    public static final String FLAG_RESTAURANT_ENABLED = "restaurant.enabled";
+
     /** Allow cashiers (sales.sell) to override shelf prices on POS lines. */
     public static final String FLAG_POS_CASHIER_PRICE_EDIT = "pos.cashier_price_edit";
 

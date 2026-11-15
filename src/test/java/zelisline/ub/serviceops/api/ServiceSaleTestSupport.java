@@ -73,7 +73,7 @@ import zelisline.ub.tenancy.repository.DomainMappingRepository;
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @TestPropertySource(properties = "spring.jpa.hibernate.ddl-auto=create-drop")
-abstract class ServiceSaleTestSupport {
+public abstract class ServiceSaleTestSupport {
 
     protected static final String TENANT = "5a1e0000-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     protected static final String OTHER = "5a1e0000-bbbb-4bbb-8bbb-bbbbbbbbbbbb";

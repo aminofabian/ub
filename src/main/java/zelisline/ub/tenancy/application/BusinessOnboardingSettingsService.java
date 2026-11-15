@@ -1,5 +1,6 @@
 package zelisline.ub.tenancy.application;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -15,6 +16,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.tenancy.api.dto.FoodMenuItemAnswerDto;
 import zelisline.ub.tenancy.api.dto.OnboardingAnswersDto;
 import zelisline.ub.tenancy.api.dto.OnboardingPatchRequest;
 import zelisline.ub.tenancy.api.dto.OnboardingSettingsResponse;
@@ -44,6 +46,10 @@ public class BusinessOnboardingSettingsService {
     private static final String KEY_ACCENT_COLOR = "accentColor";
     private static final String KEY_PRODUCT_SOURCE = "productSource";
     private static final String KEY_OWNER_PHONE = "ownerPhone";
+    private static final String KEY_FOOD_STATIONS = "foodStations";
+    private static final String KEY_FOOD_MENU_ITEMS = "foodMenuItems";
+    private static final String KEY_SELLS_PRODUCTS = "sellsProducts";
+    private static final String KEY_FOOD_TABLE_COUNT = "foodTableCount";
 
     private final ObjectMapper objectMapper;
 
@@ -138,6 +144,10 @@ public class BusinessOnboardingSettingsService {
         List<String> localities = readStringList(answers.path(KEY_BRANCH_LOCALITIES));
         List<String> departments = readStringList(answers.path(KEY_SELECTED_DEPARTMENTS));
         List<String> storeTypes = readStoreTypes(answers);
+        List<String> foodStations = readStringList(answers.path(KEY_FOOD_STATIONS));
+        List<FoodMenuItemAnswerDto> foodMenuItems = readFoodMenuItems(answers.path(KEY_FOOD_MENU_ITEMS));
+        Boolean sellsProducts = booleanOrNull(answers.path(KEY_SELLS_PRODUCTS));
+        Integer foodTableCount = tableCountOrNull(answers.path(KEY_FOOD_TABLE_COUNT));
         if (
                 answers.path(KEY_BRANCH_COUNT).isMissingNode()
                         && localities.isEmpty()
@@ -151,6 +161,10 @@ public class BusinessOnboardingSettingsService {
                         && answers.path(KEY_ACCENT_COLOR).isMissingNode()
                         && answers.path(KEY_PRODUCT_SOURCE).isMissingNode()
                         && answers.path(KEY_OWNER_PHONE).isMissingNode()
+                        && foodStations.isEmpty()
+                        && foodMenuItems.isEmpty()
+                        && sellsProducts == null
+                        && foodTableCount == null
         ) {
             return null;
         }
@@ -167,8 +181,73 @@ public class BusinessOnboardingSettingsService {
                 textOrNull(answers.path(KEY_PRIMARY_COLOR)),
                 textOrNull(answers.path(KEY_ACCENT_COLOR)),
                 textOrNull(answers.path(KEY_PRODUCT_SOURCE)),
-                textOrNull(answers.path(KEY_OWNER_PHONE))
+                textOrNull(answers.path(KEY_OWNER_PHONE)),
+                foodStations.isEmpty() ? null : foodStations,
+                foodMenuItems.isEmpty() ? null : foodMenuItems,
+                sellsProducts,
+                foodTableCount
         );
+    }
+
+    private static List<FoodMenuItemAnswerDto> readFoodMenuItems(JsonNode node) {
+        if (!node.isArray()) {
+            return List.of();
+        }
+        List<FoodMenuItemAnswerDto> out = new ArrayList<>();
+        for (JsonNode item : node) {
+            if (!item.isObject()) {
+                continue;
+            }
+            String name = textOrNull(item.path("name"));
+            if (name == null) {
+                continue;
+            }
+            out.add(new FoodMenuItemAnswerDto(name, decimalOrNull(item.path("price"))));
+        }
+        return out;
+    }
+
+    private static BigDecimal decimalOrNull(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (node.isNumber()) {
+            return node.decimalValue();
+        }
+        if (node.isTextual()) {
+            try {
+                return new BigDecimal(node.asText().trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /** A saved table count, or null when it is absent or not a whole number from 0 to 60. */
+    private static Integer tableCountOrNull(JsonNode node) {
+        if (node == null || !node.isIntegralNumber() || !node.canConvertToInt()) {
+            return null;
+        }
+        int count = node.asInt();
+        return count < 0 || count > 60 ? null : count;
+    }
+
+    private static Boolean booleanOrNull(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (node.isBoolean()) {
+            return node.asBoolean();
+        }
+        String text = node.asText("").trim().toLowerCase();
+        if ("true".equals(text)) {
+            return true;
+        }
+        if ("false".equals(text)) {
+            return false;
+        }
+        return null;
     }
 
     private static List<String> readStoreTypes(JsonNode answers) {
@@ -242,6 +321,29 @@ public class BusinessOnboardingSettingsService {
         }
         if (patch.ownerPhone() != null) {
             answers.put(KEY_OWNER_PHONE, patch.ownerPhone().trim());
+        }
+        if (patch.foodStations() != null) {
+            answers.set(KEY_FOOD_STATIONS, toArray(patch.foodStations()));
+        }
+        if (patch.foodMenuItems() != null) {
+            ArrayNode items = objectMapper.createArrayNode();
+            for (FoodMenuItemAnswerDto item : patch.foodMenuItems()) {
+                if (item == null || item.name() == null || item.name().isBlank()) {
+                    continue;
+                }
+                ObjectNode node = items.addObject();
+                node.put("name", item.name().trim());
+                if (item.price() != null) {
+                    node.put("price", item.price());
+                }
+            }
+            answers.set(KEY_FOOD_MENU_ITEMS, items);
+        }
+        if (patch.sellsProducts() != null) {
+            answers.put(KEY_SELLS_PRODUCTS, patch.sellsProducts());
+        }
+        if (patch.foodTableCount() != null) {
+            answers.put(KEY_FOOD_TABLE_COUNT, patch.foodTableCount());
         }
     }
 

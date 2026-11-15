@@ -43,6 +43,14 @@ public final class PackageDtos {
     ) {
     }
 
+    /** How the money for the unused sessions goes back: {@code cash} or {@code mpesa_manual}. */
+    public record RefundPackageRequest(@NotBlank @Size(max = 32) String method) {
+    }
+
+    /** What was handed back, and the package as it now stands. */
+    public record RefundedPackageResponse(BigDecimal refunded, int sessionsRefunded, CustomerPackageResponse customerPackage) {
+    }
+
     public record CustomerPackageResponse(
             String id,
             String customerId,

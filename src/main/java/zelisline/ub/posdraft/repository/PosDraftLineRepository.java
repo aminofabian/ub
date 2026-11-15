@@ -13,6 +13,10 @@ public interface PosDraftLineRepository extends JpaRepository<PosDraftLine, Stri
 
     Optional<PosDraftLine> findByIdAndDraftId(String id, String draftId);
 
+    Optional<PosDraftLine> findByIdAndBusinessId(String id, String businessId);
+
+    List<PosDraftLine> findByBusinessIdAndIdIn(String businessId, java.util.Collection<String> ids);
+
     int countByDraftIdAndDeletedFalse(String draftId);
 
     /**

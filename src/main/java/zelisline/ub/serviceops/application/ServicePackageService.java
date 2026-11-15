@@ -47,6 +47,8 @@ public class ServicePackageService {
     private final CustomerRepository customerRepository;
     private final BranchRepository branchRepository;
     private final HeldMoneyService heldMoneyService;
+    private final zelisline.ub.audit.application.AuditEventPublisher auditEventPublisher;
+    private final zelisline.ub.audit.application.AuditEventBuilder auditEventBuilder;
 
     // ------------------------------------------------------------------- offers
 
@@ -196,6 +198,52 @@ public class ServicePackageService {
                 WalletTxnTypes.CREDIT_PACKAGE_SESSION,
                 "Package session used: " + row.getServiceName());
         return value;
+    }
+
+    // ------------------------------------------------------------------- refund
+
+    /**
+     * Hands back the money for the sessions a customer has not used and closes the package. The
+     * sessions already used stay as they were. Asking again finds nothing left and pays nothing,
+     * so a retry or a second tap is harmless.
+     *
+     * @param method {@code cash} (out of the open shift's drawer) or {@code mpesa_manual}
+     */
+    @Transactional
+    public zelisline.ub.serviceops.api.dto.PackageDtos.RefundedPackageResponse refund(
+            String businessId, String packageId, String method, String userId, String tillDeviceKey) {
+        CustomerServicePackage row = packageRepository.findByIdAndBusinessIdForUpdate(packageId.trim(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Package not found"));
+        BigDecimal value = row.getValueRemaining() == null
+                ? BigDecimal.ZERO : row.getValueRemaining().setScale(2, RoundingMode.HALF_UP);
+        int sessions = row.getSessionsRemaining();
+        if (value.signum() <= 0 || sessions <= 0) {
+            return new zelisline.ub.serviceops.api.dto.PackageDtos.RefundedPackageResponse(
+                    BigDecimal.ZERO.setScale(2), 0, toResponse(row));
+        }
+        row.setSessionsRemaining(0);
+        row.setValueRemaining(BigDecimal.ZERO.setScale(2));
+        packageRepository.saveAndFlush(row);
+        heldMoneyService.refund(
+                businessId, row.getBranchId(), LedgerAccountCodes.DEFERRED_SERVICE_REVENUE,
+                HeldMoneyService.SOURCE_PACKAGE_REFUNDED, row.getId(), value,
+                method == null ? "" : method.trim().toLowerCase(Locale.ROOT),
+                "Package refunded: " + sessions + " unused x " + row.getServiceName(), userId, tillDeviceKey);
+        java.util.Map<String, Object> state = new java.util.LinkedHashMap<>();
+        state.put("refunded", value.toPlainString());
+        state.put("sessions", sessions);
+        state.put("service", row.getServiceName());
+        auditEventPublisher.publish(auditEventBuilder
+                .builder(zelisline.ub.audit.domain.AuditEventCategory.SALES, "service_package.refunded",
+                        zelisline.ub.audit.domain.AuditEventSeverity.WARN)
+                .businessId(businessId)
+                .branchId(row.getBranchId())
+                .actor(userId, zelisline.ub.audit.domain.AuditEventActorType.USER)
+                .target("customer_service_package", row.getId())
+                .newState(state)
+                .source("dashboard")
+                .build());
+        return new zelisline.ub.serviceops.api.dto.PackageDtos.RefundedPackageResponse(value, sessions, toResponse(row));
     }
 
     private static PackageOfferResponse toOffer(ServiceOffering service) {

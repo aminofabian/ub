@@ -52,3 +52,49 @@
 * **Time off** — dated periods on a staff profile when they cannot be booked (`staff_profiles.time_off`). It stops bookings, not walk-ins.
 * **Calendar entry** — one block on the branch calendar: a booking (from the ticket's scheduled time), a service under way or done (from the line's own start and finish), time off, or a resource out of use.
 
+
+## Restaurant orders and the kitchen (ADR 0020)
+
+* **Menu item** — what is tapped on the order screen (`menu_items`). A **dish** is made to order: own name, price and tax rate, no stock. A **product** menu item points at a catalogue `Item` and is sold through the ordinary retail path at its shelf price.
+* **Dish line** — a `sale_items` row with `line_kind = DISH`: a menu item, a snapshot of the chosen modifiers, an optional note; no item, no batch, no stock movement. Cost of goods is zero until recipes exist, so its `profit` equals its total and is not a margin. Revenue posts to `SALES_REVENUE` (4000); a separate food account is undecided.
+* **Modifier group / option** — a set of choices on a dish with a minimum and maximum, and what each choice adds to the price. `RestaurantSaleSupport.priceDish` is the only place a dish is priced; a client's price is checked against it.
+* **Modifier snapshot** — the chosen options stored with the line as JSON (`sale_items.modifiers`, `pos_draft_lines.modifiers`, `kitchen_ticket_lines.modifiers`). Renaming or removing an option never changes it.
+* **Order** — a `pos_drafts` row of kind `ORDER`; never a separate table and never a held cart (`PosDraftConstants.isCart`). In phase 1a it is written already completed, in the sale's transaction, for a sale with something for a kitchen. Its ticket number is the **order number** called out to the customer. `OrderTicketService` is the only writer.
+* **Kitchen station** — where food or drink is prepared (`kitchen_stations`). A dish goes to its own station, else its heading's, else the one implicit kitchen (station null). A product goes to a kitchen only when a station is named for it.
+* **Kitchen ticket** — what one station was told to make for one order in one send (`kitchen_tickets`, `kitchen_ticket_lines`). Its lines are a snapshot and are never edited. Type `NEW`, or `VOID` when a sale is voided with food still being made.
+* **Kitchen stage** — `NEW → PREPARING → READY → SERVED` (or `VOIDED`), kept on the order line (`pos_draft_lines.line_stage`), not the ticket. A ticket's status (`OPEN` / `READY` / `SERVED` / `VOIDED`) is worked out from its lines. Changing a stage never touches the order row or its version.
+* **Handed over** — the customer has collected the order: every ready line becomes `SERVED`. Refused while the kitchen is still making part of it.
+* **Sold offline** — a sale whose own time is more than two minutes old when it reaches the server. A dish on it keeps the price the customer paid and is accepted even if it has since run out; choices that never fitted the dish are still refused.
+
+## Restaurant: orders paid later, bills and recipes (ADR 0020, phases 1b and 1.5)
+
+* **Open order** — an `ORDER` ticket that is `pending`: a table (`DINE_IN`), a `TAKEAWAY` or a `DELIVERY`. Opened, added to, sent in rounds and settled later. Idempotent on the device's `clientOrderId`. Survives a shift close.
+* **Table** — a `service_resources` row of type `TABLE` with a capacity and an area. It is occupied while an open order points at it; several orders may sit at one table. `ServiceResourceService.tables` never creates the numbered chairs.
+* **Draft line** — a line on an open order that has not been sent (`line_stage = DRAFT`): freely changed or removed. `client_line_id` stops a repeated request adding it twice.
+* **Send / round** — sending turns every draft line into `NEW` (a dish, or a product with a station) or straight to `READY` (a product with none), and writes one kitchen ticket per station with the next `round_no`. Sending twice sends nothing.
+* **Cancelled line** — a sent line is never edited. It is set to `VOIDED` with a reason and who did it (`restaurant.orders.void_sent`); the kitchen gets a `VOID` ticket if it was still making it. A line on a bill cannot be cancelled.
+* **Price fixed when added** — a dish line keeps the price and choices it was rung with; the bill charges them even if the menu has changed or the dish was removed (`OrderSettlement.FrozenDish`). A product line is brought up to today's shelf price when its bill is paid, and the payment is refused once (409) so the customer sees the new figure.
+* **Bill** — some or all of an order's lines settled together (`order_bills`, `order_bill_lines`, by quantity). One bill is one ordinary sale whose idempotency key is `bill-<id>`. Statuses `OPEN`, `PAID`, `COMP` (on the house), `UNPAID` (left without paying), `VOIDED` (its sale was voided). A dish is not shared between bills in parts.
+* **Settled** — an order completes when nothing is unsent, no bill is open and every line that was not cancelled is fully on closed bills. Voiding a paid bill's sale sets the bill `VOIDED` and reopens the order.
+* **Order settlement** — `OrderSettlement.settling(...)` marks a sale as the payment of a bill, for the length of the call: dishes are taken as ordered, no second order is written, and a tip may be for whoever served the order.
+* **Served by** — the staff profile serving the order (`pos_drafts.served_by_staff_profile_id`); defaults to whoever opened it. A tip on a bill goes to them through the staff ledger. Not the cook and not necessarily who takes the money.
+* **Booking (table)** — an open order with `service_stage = BOOKED` and a scheduled start and end. Two bookings cannot hold one table at overlapping times; a walk-in is not stopped. `seat` makes it an ordinary open order.
+* **Recipe** — the stocked ingredients of a dish or of a modifier option (`recipe_lines`), each with a plated quantity and an optional yield percent. Ingredients need not be for sale.
+* **Ingredient use** — when a dish with a recipe is sold, `InventoryBatchPickerService.pickAndApplyIngredientUse` takes its ingredients from the batches (stock movements with `reference_type = sale_recipe`) and their cost becomes the line's cost of goods, posted with the sale. A short count never refuses the sale: the remainder drives on-hand negative, costed at the last known cost. Voiding the sale puts them back (`sale_recipe_void`).
+* **Menu engineering** — among dishes with a recipe: sells at least 70% of an even share, and a plate earns at least the average plate → `STAR`; sells but earns little → `PLOWHORSE`; earns but sells little → `PUZZLE`; neither → `DOG`.
+
+## Restaurant: charges, delivery, batches, timed menus and QR ordering (ADR 0020, amendment 3)
+
+* **Restaurant settings** — one row per business (`restaurant_settings`): service charge percent, pooled tips, packaging charge, usual delivery fee, the minute the business day starts, and whether customers may order from a table's QR code. No row means none of them.
+* **Charge line** — a `sale_items` row with `line_kind = CHARGE`: a service charge, packaging or a delivery fee. No item, no stock, no commission. Only the server adds one, while a bill is being settled (`OrderSettlement`); a client that sends one is refused. Its revenue posts to `SALES_REVENUE`.
+* **Service charge** — a percent of a table bill's lines, to the whole shilling, added when the bill is paid and stored on the bill. Not charged on takeaway or delivery.
+* **Packaging charge / delivery fee** — charged once per takeaway or delivery order, on the first bill that can carry it. A delivery order's own fee beats the usual one.
+* **Pooled tips** — when on, a tip is split equally among every staff profile marked as serving customers; cents left over go to whoever served the order.
+* **Joining orders** — every line of one open order moves to another at the same branch, with its kitchen stage; the kitchen's tickets follow; the emptied order is cancelled with "Joined with order N". Refused if the order has a bill.
+* **Cooked-food wastage** — cancelling a line that was `PREPARING`, `READY` or `SERVED` takes its recipe's ingredients off the count as a wastage movement (`reference_type = order_line_waste`) and posts Dr `INVENTORY_SHRINKAGE` / Cr `INVENTORY`. A line still `NEW` used nothing.
+* **Prepared batch** — a stocked item made in bulk from a recipe (`recipe_lines.produced_item_id`). Making a batch takes the ingredients (`prep_batch` movements) and records a stock increase of the item at the ingredients' cost; the two journals cancel on `OPENING_BALANCE_EQUITY`, so only inventory moves between products.
+* **Serving hours** — a menu item can be served only between two minutes of the Nairobi day (`serve_from_minute`, `serve_to_minute`); outside them it cannot be ordered. An end before the start runs past midnight.
+* **Happy hour** — a dish's price between two minutes on named days (`happy_price`, `happy_from_minute`, `happy_to_minute`, `happy_days`). `MenuClock` decides; the till must charge the price in force when the sale is made. A line on an open order keeps the price it was added at.
+* **Business day** — reports count a day from `day_starts_at_minute`, Nairobi time, to the same minute the next day.
+* **Table QR code** — `service_resources.qr_token`, a 48-character random secret an owner can replace. `PublicTableOrderService` lets a customer who scans it add **unsent** lines to the table's open order; staff must send them. Works only while `qr_ordering` is on, and only under the business's own slug.
+* **Order number on a receipt** — a restaurant sale's receipt footer starts with `Order N`: the counter order it produced or the table order whose bill it paid.

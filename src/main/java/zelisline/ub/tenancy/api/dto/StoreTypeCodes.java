@@ -11,7 +11,27 @@ public final class StoreTypeCodes {
 
     public static final String PATTERN =
             "butchery|mini-mart|full-grocery|fresh-market|mixed-shop|cosmetics|wines-spirits|pharmacy|other"
-                    + "|barbershop|salon|spa|nail-studio|beauty-parlour";
+                    + "|barbershop|salon|spa|nail-studio|beauty-parlour"
+                    + "|restaurant|cafe|fast-food|bar";
+
+    /**
+     * Shop formats that take orders and prepare food or drink (ADR 0020). As with service formats,
+     * a type only picks defaults and wording; no backend behaviour may branch on an individual one.
+     */
+    public static final Set<String> FOOD_TYPES = Set.of("restaurant", "cafe", "fast-food", "bar");
+
+    /** True when any of the business's shop formats is a food format. */
+    public static boolean isFoodBusiness(Collection<String> storeTypes) {
+        if (storeTypes == null) {
+            return false;
+        }
+        for (String raw : storeTypes) {
+            if (raw != null && FOOD_TYPES.contains(raw.trim().toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     /**
      * Shop formats that sell services (ADR 0014). A store type only picks defaults and wording;
@@ -27,6 +47,40 @@ public final class StoreTypeCodes {
         }
         for (String raw : storeTypes) {
             if (raw != null && SERVICE_TYPES.contains(raw.trim().toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Food formats where customers sit and pay after eating; a café or fast-food counter takes payment first. */
+    public static final Set<String> TABLE_SERVICE_TYPES = Set.of("restaurant", "bar");
+
+    /** True when the business has shop formats and every one of them is a food format. */
+    public static boolean isFoodOnlyBusiness(Collection<String> storeTypes) {
+        if (storeTypes == null || storeTypes.isEmpty()) {
+            return false;
+        }
+        boolean any = false;
+        for (String raw : storeTypes) {
+            if (raw == null || raw.isBlank()) {
+                continue;
+            }
+            if (!FOOD_TYPES.contains(raw.trim().toLowerCase(Locale.ROOT))) {
+                return false;
+            }
+            any = true;
+        }
+        return any;
+    }
+
+    /** True for a food-only business with at least one format that seats people at tables. */
+    public static boolean isTableServiceBusiness(Collection<String> storeTypes) {
+        if (!isFoodOnlyBusiness(storeTypes)) {
+            return false;
+        }
+        for (String raw : storeTypes) {
+            if (raw != null && TABLE_SERVICE_TYPES.contains(raw.trim().toLowerCase(Locale.ROOT))) {
                 return true;
             }
         }

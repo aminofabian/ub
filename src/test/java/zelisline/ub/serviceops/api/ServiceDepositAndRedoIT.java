@@ -123,6 +123,26 @@ class ServiceDepositAndRedoIT extends ServiceSaleTestSupport {
         assertThat(accountBalance(DEPOSITS)).isEqualByComparingTo("0.00");
         assertThat(accountBalance(SERVICE_REVENUE)).isEqualByComparingTo("100.00");
         assertBalanced(journalLineRepository.findAll());
+
+        // Handed back in cash instead: nothing is left held and the wallet does not move.
+        String refunded = book(customer);
+        act(refunded, "deposit", "{\"amount\":70,\"method\":\"cash\"}", 200);
+        String back = "{\"reason\":\"Customer called\",\"depositBack\":\"cash\"}";
+        String cancelUrl = "/api/v1/service-tickets/" + refunded + "/cancel";
+        mockMvc.perform(as(post(cancelUrl), TENANT, owner, ROLE_OWNER)
+                        .content("{\"reason\":\"Customer called\",\"depositBack\":\"card\"}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(as(post(cancelUrl), OTHER, otherOwner, ROLE_OWNER).content(back))
+                .andExpect(status().isNotFound());
+        MvcResult done = mockMvc.perform(as(post(cancelUrl), TENANT, owner, ROLE_OWNER).content(back))
+                .andExpect(status().isOk()).andReturn();
+        assertThat(objectMapper.readTree(done.getResponse().getContentAsString()).get("depositState").asText())
+                .isEqualTo("REFUNDED");
+        // Again: nothing more leaves the drawer.
+        mockMvc.perform(as(post(cancelUrl), TENANT, owner, ROLE_OWNER).content(back)).andExpect(status().isOk());
+        assertThat(wallet()).isEqualByComparingTo("200.00");
+        assertThat(accountBalance(DEPOSITS)).isEqualByComparingTo("0.00");
+        assertBalanced(journalLineRepository.findAll());
     }
 
     @Test

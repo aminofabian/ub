@@ -50,7 +50,8 @@ public final class OnlineBookingDtos {
             /** True when the price depends on the work (length of braids); shown as "from". */
             boolean priceIsVariable,
             /** Who can be booked for it; empty means anyone on the staff list. */
-            List<String> staffIds
+            List<String> staffIds,
+            String imageUrl
     ) {
     }
 
@@ -63,7 +64,12 @@ public final class OnlineBookingDtos {
             String currency,
             List<PublicBranch> branches,
             List<PublicService> services,
-            List<PublicStaff> staff
+            List<PublicStaff> staff,
+            /**
+             * False when the shop does not take bookings online: the page then shows the price
+             * list, the team and where to find the shop, and nothing can be booked from it.
+             */
+            boolean bookable
     ) {
     }
 

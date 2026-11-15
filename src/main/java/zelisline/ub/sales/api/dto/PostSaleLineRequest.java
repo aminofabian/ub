@@ -29,8 +29,28 @@ public record PostSaleLineRequest(
          * For {@code kind = SERVICE}: what the performer is paid for this service, in whole
          * shillings, instead of what their plan gives. Needs permission to set commission.
          */
-        BigDecimal performerAmount
+        BigDecimal performerAmount,
+        /**
+         * The restaurant menu item this line was rung from. Required for {@code kind = DISH}; on a
+         * product line it only tells the kitchen where the product is prepared, if anywhere.
+         */
+        String menuItemId,
+        /** For {@code kind = DISH}: the modifier options chosen ("Extra cheese", "Double patty"). */
+        java.util.List<String> modifierOptionIds,
+        /** What the customer asked for on this line ("no onions"); shown to the kitchen. */
+        @jakarta.validation.constraints.Size(max = 255) String note
 ) {
+    /** Shape used before restaurant menus existed; queued sales and internal callers still build it. */
+    public PostSaleLineRequest(
+            String itemId, BigDecimal quantity, BigDecimal unitPrice, String kind, String label,
+            String airtimePhone, String airtimeNetwork, Boolean sellAtRegular, String serviceId,
+            String performerStaffProfileId, String assistantStaffProfileId, BigDecimal assistantSharePercent,
+            java.util.List<PostSaleLineHelper> helpers, BigDecimal performerAmount) {
+        this(itemId, quantity, unitPrice, kind, label, airtimePhone, airtimeNetwork, sellAtRegular,
+                serviceId, performerStaffProfileId, assistantStaffProfileId, assistantSharePercent, helpers,
+                performerAmount, null, null, null);
+    }
+
     public PostSaleLineRequest(
             String itemId, BigDecimal quantity, BigDecimal unitPrice, String kind, String label,
             String airtimePhone, String airtimeNetwork, Boolean sellAtRegular, String serviceId,
@@ -98,5 +118,13 @@ public record PostSaleLineRequest(
 
     public boolean isService() {
         return SaleLineKinds.isService(kind);
+    }
+
+    public boolean isCharge() {
+        return SaleLineKinds.isCharge(kind);
+    }
+
+    public boolean isDish() {
+        return SaleLineKinds.isDish(kind);
     }
 }

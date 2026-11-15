@@ -130,6 +130,9 @@ public class ServiceInsightsService {
             if (!place.isActive() && c[0] == 0) {
                 continue;
             }
+            if (ServiceResourceService.TYPE_TABLE.equals(place.getResourceType())) {
+                continue; // a restaurant table is not a place a service is done
+            }
             rows.add(new zelisline.ub.serviceops.api.dto.CommissionDtos.ChairReportRow(
                     place.getId(), place.getName(), place.getResourceType(), place.isActive(), c[0],
                     visits.getOrDefault(place.getId(), java.util.Set.of()).size(),

@@ -85,9 +85,44 @@ public class PosDraft {
     @Column(name = "completed_at")
     private Instant completedAt;
 
-    /** {@code CART} for a held retail cart, {@code SERVICE} for a walk-in service ticket. */
+    /** {@code CART} for a held retail cart, {@code SERVICE} for a service ticket, {@code ORDER} for a restaurant order. */
     @Column(name = "draft_kind", nullable = false, length = 16)
     private String draftKind = PosDraftConstants.KIND_CART;
+
+    /** For a restaurant order (kind {@code ORDER}): how it was taken, e.g. {@code COUNTER} (ADR 0020). */
+    @Column(name = "order_channel", length = 16)
+    private String orderChannel;
+
+    /** For an order at a table: the table, a {@code service_resources} row of type {@code TABLE}. */
+    @Column(name = "table_resource_id", length = 36)
+    private String tableResourceId;
+
+    @Column(name = "guest_count")
+    private Integer guestCount;
+
+    /** The staff profile serving the order (the waiter). Not necessarily who opened it or who takes the money. */
+    @Column(name = "served_by_staff_profile_id", length = 36)
+    private String servedByStaffProfileId;
+
+    @Column(name = "bill_requested_at")
+    private Instant billRequestedAt;
+
+    /** Where a delivery order goes. Customer data: never logged, never on a kitchen ticket. */
+    @Column(name = "delivery_address", length = 500)
+    private String deliveryAddress;
+
+    /** What this delivery order is charged for delivery; null takes the business's usual fee. */
+    @Column(name = "delivery_fee", precision = 14, scale = 2)
+    private BigDecimal deliveryFee;
+
+    @Column(name = "rider_name", length = 120)
+    private String riderName;
+
+    @Column(name = "dispatched_at")
+    private Instant dispatchedAt;
+
+    @Column(name = "delivered_at")
+    private Instant deliveredAt;
 
     /** Service tickets only: {@code WAITING}, {@code IN_SERVICE}, {@code READY_TO_PAY}, {@code ABANDONED}. */
     @Column(name = "service_stage", length = 16)

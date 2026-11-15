@@ -4,6 +4,9 @@ import java.util.List;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
@@ -26,6 +29,17 @@ public record OnboardingAnswersDto(
         /** How they plan to stock: {@code new}, {@code spreadsheet}, or {@code other_pos}. */
         @Pattern(regexp = "new|spreadsheet|other_pos") String productSource,
         /** Owner shop line (WhatsApp / SMS / till alerts). */
-        @Size(max = 32) String ownerPhone
+        @Size(max = 32) String ownerPhone,
+        /** Food shops only: where food and drink is made (kitchen station names). */
+        @Size(max = 8) List<@Size(max = 80) String> foodStations,
+        /** Food shops only: the first dishes and the prices the owner typed. */
+        @Size(max = 8) List<@Valid FoodMenuItemAnswerDto> foodMenuItems,
+        /** Food shops only: the shop also sells packaged products off the shelf. */
+        Boolean sellsProducts,
+        /**
+         * Food shops with table service only: how many tables to set up at the first branch,
+         * named "Table 1" onwards. Zero means the owner said none; absent means not asked.
+         */
+        @Min(0) @Max(60) Integer foodTableCount
 ) {
 }

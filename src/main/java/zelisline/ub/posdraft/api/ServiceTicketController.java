@@ -219,7 +219,12 @@ public class ServiceTicketController {
                 && !PosDraftConstants.STAGE_BOOKED.equals(ticket.stage())) {
             currentUserPermissions.requireAny("pos.drafts.cancel.any", "services.catalog.manage");
         }
-        return serviceTicketService.cancel(TenantRequestIds.resolveBusinessId(request), id, body, caller.userId());
+        // Handing a deposit back takes money out of the shop, like any refund.
+        if (body != null && body.refundsDeposit()) {
+            currentUserPermissions.requireAny("sales.refund.create");
+        }
+        return serviceTicketService.cancel(TenantRequestIds.resolveBusinessId(request), id, body, caller.userId(),
+                request.getHeader(TillDeviceService.TILL_DEVICE_HEADER));
     }
 
     @PostMapping("/{id}/pay")

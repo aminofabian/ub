@@ -6,6 +6,17 @@ public final class PosDraftConstants {
     public static final String KIND_CART = "CART";
     /** A walk-in service ticket (ADR 0014). */
     public static final String KIND_SERVICE = "SERVICE";
+    /** A restaurant order (ADR 0020). Never a held cart: it must survive a shift close. */
+    public static final String KIND_ORDER = "ORDER";
+
+    /**
+     * True for a held retail cart. Cart behaviour (the cart endpoints, voiding at shift close)
+     * is opt-in by kind, so a kind added later is never treated as a cart by default. A blank
+     * kind is a row from before kinds existed, which was a cart.
+     */
+    public static boolean isCart(String draftKind) {
+        return draftKind == null || draftKind.isBlank() || KIND_CART.equals(draftKind);
+    }
 
     /** An appointment that has not arrived yet. */
     public static final String STAGE_BOOKED = "BOOKED";
@@ -18,6 +29,8 @@ public final class PosDraftConstants {
     public static final String DEPOSIT_APPLIED = "APPLIED";
     public static final String DEPOSIT_CREDITED = "CREDITED";
     public static final String DEPOSIT_FORFEITED = "FORFEITED";
+    /** Handed back to the customer in cash or by M-Pesa when the visit was cancelled. */
+    public static final String DEPOSIT_REFUNDED = "REFUNDED";
     public static final String STAGE_NO_SHOW = "NO_SHOW";
     public static final String STAGE_WAITING = "WAITING";
     public static final String STAGE_IN_SERVICE = "IN_SERVICE";

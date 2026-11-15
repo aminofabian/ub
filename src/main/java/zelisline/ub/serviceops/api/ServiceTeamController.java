@@ -80,6 +80,48 @@ public class ServiceTeamController {
         return staffProfileService.removeTimeOff(TenantRequestIds.resolveBusinessId(request), staffProfileId, from);
     }
 
+    /** The days and hours a person works. No days: they work whenever the shop is open. */
+    @GetMapping("/{staffProfileId}/working-hours")
+    @PreAuthorize("hasPermission(null, 'staff.hr.update') or hasPermission(null, 'sales.sell')")
+    public zelisline.ub.serviceops.api.dto.TeamDtos.WorkingHours workingHours(
+            @PathVariable String staffProfileId, HttpServletRequest request) {
+        CurrentTenantUser.requireHuman(request);
+        return new zelisline.ub.serviceops.api.dto.TeamDtos.WorkingHours(
+                staffProfileService.workingHours(TenantRequestIds.resolveBusinessId(request), staffProfileId));
+    }
+
+    @org.springframework.web.bind.annotation.PutMapping("/{staffProfileId}/working-hours")
+    @PreAuthorize("hasPermission(null, 'staff.hr.update')")
+    public zelisline.ub.serviceops.api.dto.TeamDtos.WorkingHours setWorkingHours(
+            @PathVariable String staffProfileId,
+            @RequestBody zelisline.ub.serviceops.api.dto.TeamDtos.WorkingHours body,
+            HttpServletRequest request) {
+        CurrentTenantUser.requireHuman(request);
+        return new zelisline.ub.serviceops.api.dto.TeamDtos.WorkingHours(staffProfileService.setWorkingHours(
+                TenantRequestIds.resolveBusinessId(request), staffProfileId, body == null ? null : body.days()));
+    }
+
+    /** What a person earns on particular services, where it differs from their plan. */
+    @GetMapping("/{staffProfileId}/service-rates")
+    @PreAuthorize("hasPermission(null, 'commissions.plans.manage') or hasPermission(null, 'commissions.read')")
+    public zelisline.ub.serviceops.api.dto.TeamDtos.ServiceRates serviceRates(
+            @PathVariable String staffProfileId, HttpServletRequest request) {
+        CurrentTenantUser.requireHuman(request);
+        return new zelisline.ub.serviceops.api.dto.TeamDtos.ServiceRates(
+                staffProfileService.serviceRates(TenantRequestIds.resolveBusinessId(request), staffProfileId));
+    }
+
+    @org.springframework.web.bind.annotation.PutMapping("/{staffProfileId}/service-rates")
+    @PreAuthorize("hasPermission(null, 'commissions.plans.manage')")
+    public zelisline.ub.serviceops.api.dto.TeamDtos.ServiceRates setServiceRates(
+            @PathVariable String staffProfileId,
+            @RequestBody zelisline.ub.serviceops.api.dto.TeamDtos.ServiceRates body,
+            HttpServletRequest request) {
+        CurrentTenantUser.requireHuman(request);
+        return new zelisline.ub.serviceops.api.dto.TeamDtos.ServiceRates(serviceTeamService.setServiceRates(
+                TenantRequestIds.resolveBusinessId(request), staffProfileId, body == null ? null : body.rates()));
+    }
+
     /** The caller's own earnings and bookings. Only ever their own. */
     @GetMapping("/me")
     @PreAuthorize("hasPermission(null, 'commissions.read_own') or hasPermission(null, 'commissions.read')")

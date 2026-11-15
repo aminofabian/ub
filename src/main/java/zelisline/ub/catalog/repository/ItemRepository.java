@@ -80,6 +80,28 @@ public interface ItemRepository extends JpaRepository<Item, String> {
             @Param("q") String q,
             Pageable pageable);
 
+    /**
+     * Products the kitchen may ask the store for: stocked, active, and matching a name, brand,
+     * barcode or SKU. Deliberately a narrower answer than the catalogue list — a cook sees what
+     * can be handed out, not prices or margins.
+     */
+    @Query("""
+            select i from Item i
+             where i.businessId = :businessId
+               and i.deletedAt is null
+               and i.stocked = true
+               and i.active = true
+               and (lower(i.name) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.brand, '')) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
+                    or lower(i.sku) like lower(concat('%', :q, '%')))
+             order by i.name asc
+            """)
+    List<Item> searchStockedForKitchen(
+            @Param("businessId") String businessId,
+            @Param("q") String q,
+            Pageable pageable);
+
     boolean existsByBusinessIdAndSkuAndDeletedAtIsNull(String businessId, String sku);
 
     /** Includes soft-deleted rows — SKU unique key is business-wide regardless of deleted_at. */

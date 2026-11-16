@@ -67,6 +67,7 @@ public class RestaurantSaleSupport {
     private final zelisline.ub.restaurant.repository.OrderBillRepository billRepository;
     private final RestaurantGate gate;
     private final ApplicationEventPublisher eventPublisher;
+    private final KitchenPrintService kitchenPrintService;
 
     /** A dish as it is sold: its name, its price with the chosen modifiers, and what was chosen. */
     public record DishLine(
@@ -453,6 +454,7 @@ public class RestaurantSaleSupport {
         ticket.setSentAt(now);
         ticketRepository.save(ticket);
         int index = 0;
+        List<KitchenTicketLine> saved = new ArrayList<>();
         for (OrderTicketService.OrderLine line : lines) {
             KitchenTicketLine row = new KitchenTicketLine();
             row.setBusinessId(businessId);
@@ -463,8 +465,10 @@ public class RestaurantSaleSupport {
             row.setQuantity(line.quantity());
             row.setModifiers(line.modifiers());
             row.setNote(line.note());
-            ticketLineRepository.save(row);
+            saved.add(ticketLineRepository.save(row));
         }
+        // The ticket is now a print job for its station: any device at the branch can print it.
+        kitchenPrintService.enqueue(ticket, saved);
     }
 
     private static String trimNote(String note) {

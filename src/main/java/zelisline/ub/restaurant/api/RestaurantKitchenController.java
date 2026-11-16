@@ -22,12 +22,16 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.KitchenBoardResponse;
+import zelisline.ub.restaurant.api.dto.RestaurantDtos.KitchenPrintJobResponse;
+import zelisline.ub.restaurant.api.dto.RestaurantDtos.KitchenPrintJobsResponse;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.KitchenTicketResponse;
+import zelisline.ub.restaurant.api.dto.RestaurantDtos.UnprintedTicketsResponse;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.KitchenTimesReport;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.MenuSalesReport;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.OrderListResponse;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.OrderSummaryResponse;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.StageRequest;
+import zelisline.ub.restaurant.application.KitchenPrintService;
 import zelisline.ub.restaurant.application.KitchenService;
 import zelisline.ub.restaurant.application.RestaurantReportsService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
@@ -52,6 +56,7 @@ public class RestaurantKitchenController {
             "hasPermission(null, 'restaurant.menu.manage') or hasPermission(null, 'sales.intelligence.read')";
 
     private final KitchenService kitchenService;
+    private final KitchenPrintService kitchenPrintService;
     private final RestaurantReportsService reportsService;
     private final BranchResolutionService branchResolutionService;
 
@@ -132,6 +137,50 @@ public class RestaurantKitchenController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             HttpServletRequest request) {
         return reportsService.kitchenTimes(TenantRequestIds.resolveBusinessId(request), branch(request, branchId), from, to);
+    }
+
+    // ------------------------------------------------------------------ kitchen print queue
+
+    /** Print jobs a device should print now: its station's, and the implicit kitchen's, oldest first. */
+    @GetMapping("/kitchen/print-jobs")
+    @PreAuthorize(KITCHEN_OR_COUNTER)
+    public KitchenPrintJobsResponse printJobs(
+            @RequestParam String branchId, @RequestParam(required = false) String stationId, HttpServletRequest request) {
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return new KitchenPrintJobsResponse(
+                kitchenPrintService.pending(businessId, branch(request, branchId), stationId));
+    }
+
+    /** Claim one job for this device; exactly one device wins, the rest get 404 and leave it. */
+    @PostMapping("/kitchen/print-jobs/{jobId}/claim")
+    @PreAuthorize(KITCHEN_OR_COUNTER)
+    public KitchenPrintJobResponse claimPrintJob(@PathVariable String jobId, HttpServletRequest request) {
+        TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
+        return kitchenPrintService.claim(TenantRequestIds.resolveBusinessId(request), caller.userId(), jobId);
+    }
+
+    /** A device confirms a job's ticket came out of the printer. */
+    @PostMapping("/kitchen/print-jobs/{jobId}/printed")
+    @PreAuthorize(KITCHEN_OR_COUNTER)
+    public void markPrinted(@PathVariable String jobId, HttpServletRequest request) {
+        CurrentTenantUser.requireHuman(request);
+        kitchenPrintService.markPrinted(TenantRequestIds.resolveBusinessId(request), jobId);
+    }
+
+    /** Reprint a ticket from the counter; the new slip is marked a reprint. */
+    @PostMapping("/kitchen/tickets/{ticketId}/reprint")
+    @PreAuthorize(KITCHEN_OR_COUNTER)
+    public KitchenPrintJobResponse reprint(@PathVariable String ticketId, HttpServletRequest request) {
+        CurrentTenantUser.requireHuman(request);
+        return kitchenPrintService.reprint(TenantRequestIds.resolveBusinessId(request), ticketId);
+    }
+
+    /** Tickets the counter should warn have not printed at the kitchen. */
+    @GetMapping("/kitchen/unprinted")
+    @PreAuthorize(COUNTER)
+    public UnprintedTicketsResponse unprinted(@RequestParam String branchId, HttpServletRequest request) {
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return new UnprintedTicketsResponse(kitchenPrintService.unprinted(businessId, branch(request, branchId)));
     }
 
     /** The branch the caller may act on: the one asked for, unless their role ties them to another. */

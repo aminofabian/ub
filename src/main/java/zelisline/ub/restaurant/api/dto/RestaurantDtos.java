@@ -20,7 +20,9 @@ public final class RestaurantDtos {
 
     // ---------------------------------------------------------------- menu (read)
 
-    public record StationResponse(String id, String name, int sortOrder, boolean active) {
+    public record StationResponse(String id, String name, int sortOrder, boolean active,
+            /** The station's own printer: a CUPS/printer name, or a network printer's host and port. All null means none. */
+            String printerName, String printerHost, Integer printerPort) {
     }
 
     public record CategoryResponse(String id, String name, String stationId, int sortOrder, boolean active,
@@ -122,7 +124,15 @@ public final class RestaurantDtos {
             @NotNull @Size(min = 1, max = 30) @Valid List<OptionRequest> options) {
     }
 
-    public record StationRequest(@NotBlank @Size(max = 80) String name, Integer sortOrder, Boolean active) {
+    public record StationRequest(@NotBlank @Size(max = 80) String name, Integer sortOrder, Boolean active,
+            /**
+             * The station's printer. A CUPS/printer name, or a network printer's host and a port
+             * (1..65535). Set a name, or a host and port, not both. {@code clearPrinter} removes it.
+             */
+            @Size(max = 191) String printerName,
+            @Size(max = 191) String printerHost,
+            @Min(1) @Max(65535) Integer printerPort,
+            Boolean clearPrinter) {
     }
 
     // ---------------------------------------------------------------- kitchen and orders
@@ -280,6 +290,28 @@ public final class RestaurantDtos {
     }
 
     public record KitchenBoardResponse(String branchId, Instant asOf, List<KitchenTicketResponse> tickets) {
+    }
+
+    /**
+     * A kitchen ticket waiting to be printed, with the ticket itself and the station's printer (if
+     * it named one) so a device can print without another read. {@code reprint} is true for a
+     * ticket the counter asked to print again.
+     */
+    public record KitchenPrintJobResponse(
+            String id, String ticketId, long orderNumber, String stationId, String stationName,
+            String printerName, String printerHost, Integer printerPort, boolean reprint,
+            KitchenTicketResponse ticket) {
+    }
+
+    /** A kitchen ticket the counter should warn has not printed. */
+    public record UnprintedTicketResponse(
+            String jobId, String ticketId, long orderNumber, String stationId, String ticketType, Instant sentAt) {
+    }
+
+    public record KitchenPrintJobsResponse(List<KitchenPrintJobResponse> jobs) {
+    }
+
+    public record UnprintedTicketsResponse(List<UnprintedTicketResponse> tickets) {
     }
 
     public record StageRequest(@NotBlank String stage) {

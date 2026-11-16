@@ -349,6 +349,87 @@ class RestaurantCounterIT extends ServiceSaleTestSupport {
         assertThat(posDraftRepository.count()).isZero();
     }
 
+    @Test
+    void aStationNamesAPrinterAndAKitchenTicketBecomesAPrintJobPrintedOnce() throws Exception {
+        String grill = ownerPost("/api/v1/restaurant/stations", "{\"name\":\"Grill\"}").get("id").asText();
+        mockMvc.perform(as(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .patch("/api/v1/restaurant/menu/items/" + burger), TENANT, owner, ROLE_OWNER)
+                        .content("{\"stationId\":\"" + grill + "\"}"))
+                .andExpect(status().isOk());
+
+        // A name, or a host and port, not both; and a network printer needs both.
+        getJson(as(put("/api/v1/restaurant/stations/" + grill), TENANT, owner, ROLE_OWNER)
+                .content("{\"name\":\"Grill\",\"printerName\":\"g\",\"printerHost\":\"h\",\"printerPort\":9100}"), 400);
+        getJson(as(put("/api/v1/restaurant/stations/" + grill), TENANT, owner, ROLE_OWNER)
+                .content("{\"name\":\"Grill\",\"printerHost\":\"192.168.1.50\"}"), 400);
+        JsonNode station = getJson(as(put("/api/v1/restaurant/stations/" + grill), TENANT, owner, ROLE_OWNER)
+                .content("{\"name\":\"Grill\",\"printerHost\":\"192.168.1.50\",\"printerPort\":9100}"), 200);
+        assertThat(station.get("printerHost").asText()).isEqualTo("192.168.1.50");
+        assertThat(station.get("printerPort").asInt()).isEqualTo(9100);
+
+        // Ringing a dish for that station queues a print job carrying the ticket and the printer.
+        JsonNode sale = postSale("pj-" + UUID.randomUUID(), dish(burger, 1, "400", single), "400", 201);
+        JsonNode jobs = printJobs(grill);
+        assertThat(jobs.get("jobs")).hasSize(1);
+        JsonNode job = jobs.get("jobs").get(0);
+        assertThat(job.get("printerHost").asText()).isEqualTo("192.168.1.50");
+        assertThat(job.get("printerPort").asInt()).isEqualTo(9100);
+        assertThat(job.get("reprint").asBoolean()).isFalse();
+        assertThat(job.get("ticket").get("lines").get(0).get("name").asText()).isEqualTo("Burger");
+        String jobId = job.get("id").asText();
+        String ticketId = job.get("ticketId").asText();
+
+        // Exactly one device wins the claim; a second claim finds nothing.
+        getJson(as(post("/api/v1/restaurant/kitchen/print-jobs/" + jobId + "/claim"), TENANT, cashier, ROLE_CASHIER), 200);
+        getJson(as(post("/api/v1/restaurant/kitchen/print-jobs/" + jobId + "/claim"), TENANT, cook, ROLE_KITCHEN), 404);
+        // A claimed job is no longer pending.
+        assertThat(printJobs(grill).get("jobs")).isEmpty();
+
+        // Marking it printed is idempotent and keeps it off the counter's warning.
+        mockMvc.perform(as(post("/api/v1/restaurant/kitchen/print-jobs/" + jobId + "/printed"), TENANT, cashier, ROLE_CASHIER))
+                .andExpect(status().isOk());
+        mockMvc.perform(as(post("/api/v1/restaurant/kitchen/print-jobs/" + jobId + "/printed"), TENANT, cashier, ROLE_CASHIER))
+                .andExpect(status().isOk());
+        assertThat(unprinted().get("tickets")).isEmpty();
+
+        // The counter can reprint; the new job is marked a reprint and is claimable afresh.
+        JsonNode reprint = getJson(as(post("/api/v1/restaurant/kitchen/tickets/" + ticketId + "/reprint"),
+                TENANT, cashier, ROLE_CASHIER), 200);
+        assertThat(reprint.get("reprint").asBoolean()).isTrue();
+        assertThat(reprint.get("ticketId").asText()).isEqualTo(ticketId);
+        assertThat(printJobs(grill).get("jobs")).hasSize(1);
+        assertThat(sale.get("id")).isNotNull();
+    }
+
+    @Test
+    void anotherBusinessNeitherSeesNorClaimsThisOnesPrintJobs() throws Exception {
+        postSale("pt-" + UUID.randomUUID(), dish(burger, 1, "400", single), "400", 201);
+        String jobId = printJobs(null).get("jobs").get(0).get("id").asText();
+
+        // The other business's owner, holding the same permissions, sees no jobs on their branch
+        // and cannot claim this business's job.
+        assertThat(getJson(as(get("/api/v1/restaurant/kitchen/print-jobs").param("branchId", branchId),
+                OTHER, otherOwner, ROLE_OWNER), 200).get("jobs")).isEmpty();
+        getJson(as(post("/api/v1/restaurant/kitchen/print-jobs/" + jobId + "/claim"), OTHER, otherOwner, ROLE_OWNER), 404);
+        getJson(as(post("/api/v1/restaurant/kitchen/tickets/"
+                + printJobs(null).get("jobs").get(0).get("ticketId").asText() + "/reprint"),
+                OTHER, otherOwner, ROLE_OWNER), 404);
+    }
+
+    private JsonNode printJobs(String stationId) throws Exception {
+        MockHttpServletRequestBuilder request =
+                get("/api/v1/restaurant/kitchen/print-jobs").param("branchId", branchId);
+        if (stationId != null) {
+            request = request.param("stationId", stationId);
+        }
+        return getJson(as(request, TENANT, cashier, ROLE_CASHIER), 200);
+    }
+
+    private JsonNode unprinted() throws Exception {
+        return getJson(as(get("/api/v1/restaurant/kitchen/unprinted").param("branchId", branchId),
+                TENANT, cashier, ROLE_CASHIER), 200);
+    }
+
     // ------------------------------------------------------------------ kitchen progress
 
     @Test

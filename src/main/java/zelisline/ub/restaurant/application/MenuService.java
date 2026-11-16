@@ -180,6 +180,41 @@ public class MenuService {
         if (req.active() != null) {
             station.setActive(req.active());
         }
+        applyPrinter(station, req);
+    }
+
+    private static void applyPrinter(KitchenStation station, StationRequest req) {
+        if (Boolean.TRUE.equals(req.clearPrinter())) {
+            station.setPrinterName(null);
+            station.setPrinterHost(null);
+            station.setPrinterPort(null);
+            return;
+        }
+        String name = blankToNull(req.printerName());
+        String host = blankToNull(req.printerHost());
+        Integer port = req.printerPort();
+        if (name == null && host == null && port == null) {
+            return; // nothing about the printer was sent: leave it as it is.
+        }
+        if (name != null && (host != null || port != null)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "A station's printer is a name, or a host and port, not both");
+        }
+        if (name == null && (host == null || port == null)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "A network printer needs a host and a port");
+        }
+        station.setPrinterName(name);
+        station.setPrinterHost(host);
+        station.setPrinterPort(name != null ? null : port);
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     // ------------------------------------------------------------------ categories
@@ -627,7 +662,8 @@ public class MenuService {
     }
 
     private static StationResponse toResponse(KitchenStation s) {
-        return new StationResponse(s.getId(), s.getName(), s.getSortOrder(), s.isActive());
+        return new StationResponse(s.getId(), s.getName(), s.getSortOrder(), s.isActive(),
+                s.getPrinterName(), s.getPrinterHost(), s.getPrinterPort());
     }
 
     private static CategoryResponse toResponse(MenuCategory c) {

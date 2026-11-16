@@ -35,6 +35,21 @@ public class KitchenStation {
     @Column(name = "active", nullable = false)
     private boolean active = true;
 
+    /**
+     * The printer this station's tickets go to, so any device at the branch — not just the one
+     * that rang the sale — can print them. A CUPS/printer name, or a network printer's host and
+     * port (raw ESC/POS, usually 9100). All null means the station has no printer of its own and
+     * a kitchen screen prints its tickets on whatever printer that device is set up with.
+     */
+    @Column(name = "printer_name", length = 191)
+    private String printerName;
+
+    @Column(name = "printer_host", length = 191)
+    private String printerHost;
+
+    @Column(name = "printer_port")
+    private Integer printerPort;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

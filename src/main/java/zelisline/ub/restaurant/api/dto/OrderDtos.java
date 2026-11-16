@@ -186,7 +186,13 @@ public final class OrderDtos {
     public record BillRequestedRequest(@NotNull Boolean requested) {
     }
 
-    public record CancelOrderRequest(@Size(max = 255) String reason) {
+    public record CancelOrderRequest(@Size(max = 255) String reason,
+            /** When the booking has a held deposit: hand it back ({@code cash}/{@code mpesa_manual} in {@code depositBack}), else it becomes the customer's credit. */
+            Boolean refundsDeposit, String depositBack) {
+
+        public boolean refundsDepositOrFalse() {
+            return Boolean.TRUE.equals(refundsDeposit);
+        }
     }
 
     /**
@@ -231,7 +237,22 @@ public final class OrderDtos {
             /** A delivery order's fee (its own, else the usual one), rider and progress. */
             BigDecimal deliveryFee, String riderName, Instant dispatchedAt, Instant deliveredAt,
             /** {@code STAFF}, or {@code QR} when a customer started it from a table's QR code. */
-            String source) {
+            String source,
+            /** A deposit held against a booking: its amount, and its state ({@code HELD}, {@code APPLIED}, {@code CREDITED}, {@code FORFEITED}, {@code REFUNDED}), or null when none. */
+            BigDecimal depositAmount, String depositState) {
+    }
+
+    public record DepositRequest(
+            @NotNull @DecimalMin("0.01") BigDecimal amount,
+            /** {@code cash} or {@code mpesa_manual}. */
+            @NotBlank String method) {
+    }
+
+    public record NoShowRequest(Boolean keepDepositAsCredit) {
+
+        public boolean keepAsCredit() {
+            return Boolean.TRUE.equals(keepDepositAsCredit);
+        }
     }
 
     // ---------------------------------------------------------------- bills

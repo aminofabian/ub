@@ -28,7 +28,9 @@ import zelisline.ub.restaurant.domain.OrderBillLine;
 import zelisline.ub.restaurant.repository.MenuItemRepository;
 import zelisline.ub.restaurant.repository.OrderBillLineRepository;
 import zelisline.ub.restaurant.repository.OrderBillRepository;
+import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.api.dto.PostSaleLineRequest;
+import zelisline.ub.sales.api.dto.PostSalePaymentRequest;
 import zelisline.ub.sales.api.dto.PostSaleRequest;
 import zelisline.ub.sales.api.dto.PostSaleTipRequest;
 import zelisline.ub.sales.application.OrderSettlement;
@@ -240,11 +242,34 @@ public class BillService {
         Map<String, BigDecimal> tipShares = tipShares(businessId, order, settings, forStaff, chargeToStaff);
         List<PostSaleTipRequest> tips = tipShares.isEmpty() ? null : tipShares.entrySet().stream()
                 .map(e -> new PostSaleTipRequest(e.getKey(), e.getValue())).toList();
-        PostSaleRequest saleRequest = new PostSaleRequest(order.branchId(), saleLines, request.payments(),
+        // A deposit held for this booking is spent before whatever else the customer hands over: it
+        // is moved to their wallet and paid in as a wallet tender, capped at what this sale comes to
+        // (lines, charges and tip). It reduces what they pay, never the revenue, tax or tip. Done
+        // inside this transaction under the order lock, so a sale that fails rolls the deposit back.
+        // This runs only after the reprice check above has thrown (the one exception this method does
+        // not roll back for), so the deposit is never released on a priced-out bill. The customer is
+        // always set here (a held deposit requires one), so any over-tender becomes their wallet credit.
+        List<PostSalePaymentRequest> payments = new ArrayList<>(request.payments());
+        if (order.hasHeldDeposit()) {
+            BigDecimal saleTotal = linesTotal
+                    .add(chargeToStaff ? BigDecimal.ZERO : charges.serviceCharge())
+                    .add(charges.packagingCharge()).add(charges.deliveryFee()).add(forStaff);
+            BigDecimal fromDeposit = order.depositAmount().min(saleTotal);
+            if (fromDeposit.signum() > 0) {
+                orderTicketService.applyDepositToWallet(businessId, orderId);
+                payments.add(0, new PostSalePaymentRequest(SalesConstants.PAYMENT_METHOD_CUSTOMER_WALLET, fromDeposit, null));
+            }
+        }
+        PostSaleRequest saleRequest = new PostSaleRequest(order.branchId(), saleLines, payments,
                 request.clientSoldAt(), order.customerId(), request.cashReceived(), null, tips);
         OrderSettlement.Context context = new OrderSettlement.Context(orderId, dishes, tipShares.keySet());
         SaleCreationOutcome outcome = OrderSettlement.settling(context,
                 () -> saleService.createSale(businessId, "bill-" + billId, saleRequest, userId, roleId, tillDeviceKey));
+        if (!outcome.createdNew()) {
+            // A replay reaching here (not caught by the bill-PAID guard above) would have released
+            // the deposit without a new sale. Roll back so the deposit stays held for the real pay.
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This bill was already being paid; try again");
+        }
         Instant now = Instant.now();
         bill.setStatus(OrderBill.PAID);
         bill.setServiceCharge(charges.serviceCharge());

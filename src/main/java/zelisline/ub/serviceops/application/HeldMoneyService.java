@@ -83,14 +83,18 @@ public class HeldMoneyService {
                 liabilityCode, LedgerAccountCodes.CUSTOMER_WALLET_LIABILITY, money);
     }
 
-    /** The business keeps held money it no longer owes back (a deposit after a no-show). */
+    /**
+     * The business keeps held money it no longer owes back (a deposit after a no-show). The kept
+     * money is income to the account the caller names: service revenue for a salon, sales revenue
+     * for a restaurant.
+     */
     @Transactional
     public void forfeit(
             String businessId, String branchId, String liabilityCode, String sourceType, String sourceId,
-            BigDecimal amount, String memo
+            BigDecimal amount, String revenueCode, String memo
     ) {
         post(businessId, branchId, sourceType, sourceId, memo,
-                liabilityCode, LedgerAccountCodes.SERVICE_REVENUE, requireAmount(amount));
+                liabilityCode, revenueCode, requireAmount(amount));
     }
 
     /**

@@ -69,6 +69,7 @@ public class OrderTicketService {
     private final PosDraftRepository draftRepository;
     private final PosDraftLineRepository lineRepository;
     private final BranchPosSequenceAllocator sequenceAllocator;
+    private final zelisline.ub.serviceops.application.HeldMoneyService heldMoneyService;
 
     /** A line of a new order. {@code toKitchen} false is something handed over at the counter (a bottled soda). */
     public record NewLine(
@@ -112,7 +113,8 @@ public class OrderTicketService {
             String servedByStaffProfileId, String customerId, String customerName, String customerPhone,
             String deliveryAddress, Instant billRequestedAt, Instant scheduledStart, Instant scheduledEnd,
             String createdBy, long version, BigDecimal deliveryFee, String riderName, Instant dispatchedAt,
-            Instant deliveredAt, String source) {
+            Instant deliveredAt, String source,
+            BigDecimal depositAmount, String depositState, String depositMethod) {
 
         public boolean isOpen() {
             return PosDraftConstants.STATUS_PENDING.equals(status);
@@ -120,6 +122,10 @@ public class OrderTicketService {
 
         public boolean isBooked() {
             return ORDER_BOOKED.equals(bookingStage);
+        }
+
+        public boolean hasHeldDeposit() {
+            return PosDraftConstants.DEPOSIT_HELD.equals(depositState);
         }
     }
 
@@ -590,10 +596,13 @@ public class OrderTicketService {
 
     /**
      * Cancels an order nothing was made for: a booking that will not come, or a table that sat
-     * down and left. Refused once anything has been sent and not cancelled.
+     * down and left. Refused once anything has been sent and not cancelled. A held deposit goes
+     * back to the customer — handed back in cash or by M-Pesa when {@code refundsDeposit} is set,
+     * otherwise kept as credit in their wallet.
      */
     @Transactional
-    public Order cancel(String businessId, String orderId, String reason, String userId, Instant now) {
+    public Order cancel(String businessId, String orderId, String reason, String userId, Instant now,
+            boolean refundsDeposit, String depositBack, String tillDeviceKey) {
         PosDraft order = requireOpen(lockRow(businessId, orderId));
         for (PosDraftLine row : lineRepository.findByDraftIdOrderByLineIndexAsc(order.getId())) {
             if (!STAGE_DRAFT.equals(row.getLineStage()) && !STAGE_VOIDED.equals(row.getLineStage())) {
@@ -605,7 +614,130 @@ public class OrderTicketService {
         order.setCancelledAt(now);
         order.setCancelledBy(userId);
         order.setCancelledReason(trim(reason, 255));
+        if (PosDraftConstants.DEPOSIT_HELD.equals(order.getDepositState())) {
+            if (refundsDeposit) {
+                heldMoneyService.refund(businessId, order.getBranchId(),
+                        zelisline.ub.finance.LedgerAccountCodes.CUSTOMER_DEPOSITS,
+                        zelisline.ub.serviceops.application.HeldMoneyService.SOURCE_DEPOSIT_REFUNDED, order.getId(),
+                        order.getDepositAmount(), depositBack, depositMemo("handed back", order), userId, tillDeviceKey);
+                order.setDepositState(PosDraftConstants.DEPOSIT_REFUNDED);
+            } else {
+                releaseDepositToWallet(businessId, order);
+            }
+        }
         return touch(order);
+    }
+
+    /**
+     * Keep an earlier call working: cancel with no deposit decision. A held deposit becomes the
+     * customer's wallet credit, the safe default (nothing is handed back without a decision).
+     */
+    @Transactional
+    public Order cancel(String businessId, String orderId, String reason, String userId, Instant now) {
+        return cancel(businessId, orderId, reason, userId, now, false, null, null);
+    }
+
+    /**
+     * Money taken in advance against a booking: cash goes into the drawer, M-Pesa into the clearing
+     * account, both against the customer-deposits liability (ADR 0015). Held in the customer's name,
+     * so the booking must name one. Taking it twice is refused; taking the same amount again is a
+     * no-op, so a replayed request does not charge twice.
+     */
+    @Transactional
+    public Order takeDeposit(String businessId, String orderId, BigDecimal amount, String method, String userId,
+            String tillDeviceKey) {
+        PosDraft order = requireOpen(lockRow(businessId, orderId));
+        BigDecimal money = zelisline.ub.serviceops.application.HeldMoneyService.requireAmount(amount);
+        if (order.getDepositState() != null) {
+            if (PosDraftConstants.DEPOSIT_HELD.equals(order.getDepositState())
+                    && money.compareTo(order.getDepositAmount()) == 0) {
+                return toOrder(order); // the same deposit, asked for again
+            }
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This booking already has a deposit");
+        }
+        if (order.getCustomerId() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "A deposit is held in the customer's name; name the customer first");
+        }
+        String payMethod = method == null ? "" : method.trim().toLowerCase(java.util.Locale.ROOT);
+        heldMoneyService.receive(businessId, order.getBranchId(),
+                zelisline.ub.finance.LedgerAccountCodes.CUSTOMER_DEPOSITS,
+                zelisline.ub.serviceops.application.HeldMoneyService.SOURCE_DEPOSIT_TAKEN, order.getId(), money,
+                payMethod, depositMemo("taken", order), userId, tillDeviceKey);
+        order.setDepositAmount(money);
+        order.setDepositMethod(payMethod);
+        order.setDepositState(PosDraftConstants.DEPOSIT_HELD);
+        return touch(order);
+    }
+
+    /**
+     * A booking whose guests never came. The table was held and lost, so the shop keeps the deposit
+     * as income by default; or, if staff choose, it becomes the customer's wallet credit. Only a
+     * booking that has not been seated can be a no-show.
+     */
+    @Transactional
+    public Order noShow(String businessId, String orderId, String userId, boolean keepAsCredit, Instant now) {
+        PosDraft order = requireOpen(lockRow(businessId, orderId));
+        if (!ORDER_BOOKED.equals(order.getServiceStage())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Only a booking whose guests have not arrived can be a no-show");
+        }
+        order.setStatus(PosDraftConstants.STATUS_CANCELLED);
+        order.setCancelledAt(now);
+        order.setCancelledBy(userId);
+        order.setCancelledReason("Did not turn up");
+        if (PosDraftConstants.DEPOSIT_HELD.equals(order.getDepositState())) {
+            if (keepAsCredit) {
+                releaseDepositToWallet(businessId, order);
+            } else {
+                heldMoneyService.forfeit(businessId, order.getBranchId(),
+                        zelisline.ub.finance.LedgerAccountCodes.CUSTOMER_DEPOSITS,
+                        zelisline.ub.serviceops.application.HeldMoneyService.SOURCE_DEPOSIT_FORFEITED, order.getId(),
+                        order.getDepositAmount(), zelisline.ub.finance.LedgerAccountCodes.SALES_REVENUE,
+                        depositMemo("kept after no-show", order));
+                order.setDepositState(PosDraftConstants.DEPOSIT_FORFEITED);
+            }
+        }
+        return touch(order);
+    }
+
+    /**
+     * A held deposit becomes the customer's wallet credit, where the booking's bill (or the
+     * customer, later) spends it. Does nothing when there is no held deposit. The caller saves
+     * the row.
+     */
+    public void releaseDepositToWallet(String businessId, PosDraft order) {
+        if (!PosDraftConstants.DEPOSIT_HELD.equals(order.getDepositState())) {
+            return;
+        }
+        heldMoneyService.releaseToWallet(businessId, order.getBranchId(),
+                zelisline.ub.finance.LedgerAccountCodes.CUSTOMER_DEPOSITS,
+                zelisline.ub.serviceops.application.HeldMoneyService.SOURCE_DEPOSIT_RELEASED, order.getId(),
+                order.getCustomerId(), order.getDepositAmount(),
+                zelisline.ub.credits.WalletTxnTypes.CREDIT_DEPOSIT_RELEASE, depositMemo("released", order));
+        order.setDepositState(PosDraftConstants.DEPOSIT_CREDITED);
+    }
+
+    /**
+     * The booking's bill is being paid: move a held deposit into the customer's wallet so the sale
+     * can be paid from it, and mark it applied. Returns what moved to the wallet, or zero. The
+     * caller is inside the order's lock and saves the row.
+     */
+    @Transactional
+    public BigDecimal applyDepositToWallet(String businessId, String orderId) {
+        PosDraft order = lockRow(businessId, orderId);
+        if (!PosDraftConstants.DEPOSIT_HELD.equals(order.getDepositState())) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal amount = order.getDepositAmount();
+        releaseDepositToWallet(businessId, order);
+        order.setDepositState(PosDraftConstants.DEPOSIT_APPLIED);
+        draftRepository.saveAndFlush(order);
+        return amount;
+    }
+
+    private static String depositMemo(String what, PosDraft order) {
+        return "Deposit " + what + ", booking " + order.getTicketNumber();
     }
 
     // ------------------------------------------------------------------ reads shared by both shapes
@@ -820,7 +952,8 @@ public class OrderTicketService {
                 order.getBookingPhone(), order.getDeliveryAddress(), order.getBillRequestedAt(),
                 order.getScheduledStart(), order.getScheduledEnd(), order.getCreatedBy(), order.getVersion(),
                 order.getDeliveryFee(), order.getRiderName(), order.getDispatchedAt(), order.getDeliveredAt(),
-                order.getBookingSource());
+                order.getBookingSource(),
+                order.getDepositAmount(), order.getDepositState(), order.getDepositMethod());
     }
 
     private static OrderLine toLine(PosDraftLine row) {

@@ -58,6 +58,7 @@ public class DineInService {
     private final RestaurantSaleSupport saleSupport;
     private final ServiceResourceService resourceService;
     private final StaffProfileService staffProfileService;
+    private final zelisline.ub.credits.application.CustomerDirectoryService customerDirectoryService;
     private final MenuItemRepository menuItemRepository;
     private final MenuCategoryRepository categoryRepository;
     private final ItemRepository itemRepository;
@@ -407,14 +408,71 @@ public class DineInService {
     }
 
     @Transactional
-    public OrderResponse cancel(String businessId, String orderId, String reason, String userId) {
+    public OrderResponse cancel(String businessId, String orderId, String reason, String userId,
+            boolean refundsDeposit, String depositBack, String tillDeviceKey) {
         gate.requireEnabled(businessId);
         orderTicketService.lock(businessId, orderId);
         if (billRepository.findByBusinessIdAndOrderIdOrderByBillNoAsc(businessId, orderId).stream()
                 .anyMatch(OrderBill::holdsItsLines)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "This order has a bill; it cannot be cancelled");
         }
-        return toResponse(businessId, orderTicketService.cancel(businessId, orderId, reason, userId, Instant.now()));
+        return toResponse(businessId, orderTicketService.cancel(businessId, orderId, reason, userId, Instant.now(),
+                refundsDeposit, depositBack, tillDeviceKey));
+    }
+
+    /**
+     * Money taken in advance against a booking. It is held in the customer's name, so the booking
+     * must name a customer: when it has only a name and phone, a customer is found by that phone or
+     * made from the name and phone, and kept on the booking.
+     */
+    @Transactional
+    public OrderResponse takeDeposit(String businessId, String orderId, BigDecimal amount, String method,
+            String userId, String tillDeviceKey) {
+        gate.requireEnabled(businessId);
+        OrderTicketService.Order order = orderTicketService.lock(businessId, orderId);
+        if (order.customerId() == null) {
+            String customerId = ensureCustomerForDeposit(businessId, order, userId);
+            orderTicketService.setDetails(businessId, orderId, null, null, customerId, null, null, null);
+        }
+        return toResponse(businessId,
+                orderTicketService.takeDeposit(businessId, orderId, amount, method, userId, tillDeviceKey));
+    }
+
+    /** A booking whose guests never arrived; the deposit is kept as income, or as the customer's credit. */
+    @Transactional
+    public OrderResponse noShow(String businessId, String orderId, String userId, boolean keepAsCredit) {
+        gate.requireEnabled(businessId);
+        orderTicketService.lock(businessId, orderId);
+        if (billRepository.findByBusinessIdAndOrderIdOrderByBillNoAsc(businessId, orderId).stream()
+                .anyMatch(OrderBill::holdsItsLines)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This booking has a bill; it is not a no-show");
+        }
+        return toResponse(businessId, orderTicketService.noShow(businessId, orderId, userId, keepAsCredit, Instant.now()));
+    }
+
+    /**
+     * The customer a deposit is held for: found by the booking's phone (an existing customer), or
+     * made from the booking's name and phone when none is on file yet.
+     */
+    private String ensureCustomerForDeposit(String businessId, OrderTicketService.Order order, String userId) {
+        String phone = blankToNull(order.customerPhone());
+        if (phone == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "A deposit needs the customer's phone number; add it to the booking first");
+        }
+        zelisline.ub.credits.application.CustomerDirectoryService.PhoneMatch match =
+                customerDirectoryService.findByPhone(businessId, phone);
+        if (match.ambiguous()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "That phone matches more than one customer; choose the customer the deposit is for");
+        }
+        if (match.customerId() != null) {
+            return match.customerId();
+        }
+        String name = blankToNull(order.customerName());
+        return customerDirectoryService.create(businessId, new zelisline.ub.credits.api.dto.CreateCustomerRequest(
+                name != null ? name : phone, null, null, null,
+                java.util.List.of(new zelisline.ub.credits.api.dto.CustomerPhoneDraft(phone, true)), null)).id();
     }
 
     // ------------------------------------------------------------------ shared with BillService
@@ -525,7 +583,8 @@ public class DineInService {
                 unbilled.setScale(2, RoundingMode.HALF_UP), lines, billResponses,
                 OrderTicketService.CHANNEL_DELIVERY.equals(order.channel())
                         ? (order.deliveryFee() != null ? order.deliveryFee() : settings.getDeliveryFee()) : null,
-                order.riderName(), order.dispatchedAt(), order.deliveredAt(), order.source());
+                order.riderName(), order.dispatchedAt(), order.deliveredAt(), order.source(),
+                order.depositAmount(), order.depositState());
     }
 
     /** What a quantity of a line costs. */

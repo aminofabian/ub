@@ -25,6 +25,8 @@ import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.restaurant.api.dto.OrderDtos.AddLinesRequest;
 import zelisline.ub.restaurant.api.dto.OrderDtos.BillRequestedRequest;
 import zelisline.ub.restaurant.api.dto.OrderDtos.CancelOrderRequest;
+import zelisline.ub.restaurant.api.dto.OrderDtos.DepositRequest;
+import zelisline.ub.restaurant.api.dto.OrderDtos.NoShowRequest;
 import zelisline.ub.restaurant.api.dto.OrderDtos.ChangeLineRequest;
 import zelisline.ub.restaurant.api.dto.OrderDtos.CloseBillRequest;
 import zelisline.ub.restaurant.api.dto.OrderDtos.CreateBillRequest;
@@ -241,8 +243,35 @@ public class RestaurantOrdersController {
             @PathVariable String orderId, @Valid @RequestBody(required = false) CancelOrderRequest body,
             HttpServletRequest request) {
         TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
+        // Handing a deposit back dispenses money, so it needs the till permission, like taking one.
+        // Cancelling without a refund (the deposit falls to the customer's credit) needs only SERVE.
+        if (body != null && body.refundsDepositOrFalse()) {
+            currentUserPermissions.require("sales.sell");
+        }
         return dineInService.cancel(orderBranchChecked(request, orderId), orderId,
-                body == null ? null : body.reason(), caller.userId());
+                body == null ? null : body.reason(), caller.userId(),
+                body != null && body.refundsDepositOrFalse(), body == null ? null : body.depositBack(),
+                request.getHeader(TillDeviceService.TILL_DEVICE_HEADER));
+    }
+
+    /** Takes a deposit against a booking: cash into the drawer or an M-Pesa code, held in the customer's name. */
+    @PostMapping("/open-orders/{orderId}/deposit")
+    @PreAuthorize(TAKE_MONEY)
+    public OrderResponse takeDeposit(
+            @PathVariable String orderId, @Valid @RequestBody DepositRequest body, HttpServletRequest request) {
+        TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
+        return dineInService.takeDeposit(orderBranchChecked(request, orderId), orderId, body.amount(), body.method(),
+                caller.userId(), request.getHeader(TillDeviceService.TILL_DEVICE_HEADER));
+    }
+
+    /** A booking whose guests never arrived. The deposit is kept as income, or made the customer's credit. */
+    @PostMapping("/open-orders/{orderId}/no-show")
+    @PreAuthorize(SERVE)
+    public OrderResponse noShow(
+            @PathVariable String orderId, @RequestBody(required = false) NoShowRequest body, HttpServletRequest request) {
+        TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
+        return dineInService.noShow(orderBranchChecked(request, orderId), orderId, caller.userId(),
+                body != null && body.keepAsCredit());
     }
 
     // ------------------------------------------------------------------ bills

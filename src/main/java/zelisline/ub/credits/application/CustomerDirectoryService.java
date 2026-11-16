@@ -179,6 +179,35 @@ public class CustomerDirectoryService {
         return rows.getFirst().getId();
     }
 
+    /** The result of looking a customer up by phone: none on file, exactly one, or several. */
+    public record PhoneMatch(String customerId, boolean ambiguous) {
+        public static final PhoneMatch NONE = new PhoneMatch(null, false);
+
+        public boolean isNone() {
+            return customerId == null && !ambiguous;
+        }
+    }
+
+    /**
+     * Look an active customer up by phone: {@code NONE} when the number is blank or no one has it, one
+     * id when exactly one does, or {@code ambiguous} when several do (the caller decides rather than
+     * guess which). Unlike {@link #resolveCustomerIdOrThrow} this never throws, so it is safe to call
+     * inside a wider transaction without marking it rollback-only.
+     */
+    @Transactional(readOnly = true)
+    public PhoneMatch findByPhone(String businessId, String phone) {
+        String normalized = CustomerPhoneNormalizer.normalize(phone == null ? "" : phone.trim());
+        if (normalized.isEmpty()) {
+            return PhoneMatch.NONE;
+        }
+        List<Customer> rows = customerRepository
+                .findByBusinessIdAndPhoneNormalized(businessId, normalized, PageRequest.of(0, 2)).getContent();
+        if (rows.isEmpty()) {
+            return PhoneMatch.NONE;
+        }
+        return rows.size() == 1 ? new PhoneMatch(rows.getFirst().getId(), false) : new PhoneMatch(null, true);
+    }
+
     @Transactional
     public CustomerResponse create(String businessId, CreateCustomerRequest request) {
         return create(businessId, request, null);

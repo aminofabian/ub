@@ -567,6 +567,90 @@ class RestaurantDineInIT extends ServiceSaleTestSupport {
         assertThat(ticketRepository.count()).isEqualTo(1);
     }
 
+    // ------------------------------------------------------------------ booking deposits
+
+    @Test
+    void aDepositIsTakenAppliedToTheBillRefundedAndKeptOnANoShow() throws Exception {
+        // A deposit needs the customer's phone; without one it is refused.
+        String noPhone = book(table2, "Anon", null, 100000);
+        cashierPost("/open-orders/" + noPhone + "/deposit", "{\"amount\":500,\"method\":\"mpesa_manual\"}", 400);
+
+        // Taken by M-Pesa: held in the (found or created) customer's name. Ledger: Dr M-Pesa, Cr deposits.
+        String booking = book(table1, "Kevin", "0711000111", 7200);
+        JsonNode held = cashierPost("/open-orders/" + booking + "/deposit", "{\"amount\":500,\"method\":\"mpesa_manual\"}", 200);
+        assertThat(held.get("depositState").asText()).isEqualTo("HELD");
+        assertThat(held.get("depositAmount").decimalValue()).isEqualByComparingTo("500");
+        assertThat(held.get("customerId").isNull()).isFalse();
+        assertThat(accountBalance(LedgerAccountCodes.CUSTOMER_DEPOSITS)).isEqualByComparingTo("500.00");
+
+        // The same deposit asked for again changes nothing; a different amount is refused.
+        cashierPost("/open-orders/" + booking + "/deposit", "{\"amount\":500,\"method\":\"mpesa_manual\"}", 200);
+        cashierPost("/open-orders/" + booking + "/deposit", "{\"amount\":700,\"method\":\"mpesa_manual\"}", 409);
+        assertThat(accountBalance(LedgerAccountCodes.CUSTOMER_DEPOSITS)).isEqualByComparingTo("500.00");
+
+        // Seat the booking, ring a 550 dish, and pay 550: the 500 deposit covers all but 50. Revenue
+        // is the full 550; the customer hands over only 50 in cash.
+        waiterPost("/open-orders/" + booking + "/seat", "", 200);
+        waiterPost("/open-orders/" + booking + "/lines", "{\"lines\":[" + line("a", burger, 1, dbl) + "]}", 200);
+        waiterPost("/open-orders/" + booking + "/send", "", 200);
+        String billId = waiterPost("/open-orders/" + booking + "/bills", "", 201).get("bills").get(0).get("id").asText();
+        JsonNode paid = cashierPost("/open-orders/" + booking + "/bills/" + billId + "/pay",
+                "{\"payments\":[{\"method\":\"cash\",\"amount\":50}]}", 200);
+        assertThat(paid.get("depositState").asText()).isEqualTo("APPLIED");
+        List<JournalLine> all = journalLineRepository.findAll();
+        // The sale still recognises the full 550 of revenue; the deposit funded 500 of it.
+        assertThat(credit(all, LedgerAccountCodes.SALES_REVENUE)).isEqualByComparingTo("550.00");
+        assertThat(accountBalance(LedgerAccountCodes.CUSTOMER_DEPOSITS)).isEqualByComparingTo("0.00");
+
+        // A no-show forfeits the deposit to sales revenue (not service revenue).
+        String noShow = book(table2, "Asha", "0711000222", 3600);
+        cashierPost("/open-orders/" + noShow + "/deposit", "{\"amount\":300,\"method\":\"mpesa_manual\"}", 200);
+        BigDecimal revenueBefore = accountBalance(LedgerAccountCodes.SALES_REVENUE);
+        JsonNode goneAway = waiterPost("/open-orders/" + noShow + "/no-show", "{\"keepDepositAsCredit\":false}", 200);
+        assertThat(goneAway.get("depositState").asText()).isEqualTo("FORFEITED");
+        assertThat(goneAway.get("status").asText()).isEqualTo("cancelled");
+        assertThat(accountBalance(LedgerAccountCodes.SALES_REVENUE).subtract(revenueBefore))
+                .isEqualByComparingTo("300.00");
+
+        // A cancelled booking hands the deposit back. Handing money back needs the till permission:
+        // a waiter (orders.write only) is refused; the cashier (sales.sell) does it.
+        String toRefund = book(table2, "Bea", "0711000333", 9000);
+        cashierPost("/open-orders/" + toRefund + "/deposit", "{\"amount\":200,\"method\":\"mpesa_manual\"}", 200);
+        waiterPost("/open-orders/" + toRefund + "/cancel",
+                "{\"reason\":\"Changed plans\",\"refundsDeposit\":true,\"depositBack\":\"mpesa_manual\"}", 403);
+        JsonNode refunded = cashierPost("/open-orders/" + toRefund + "/cancel",
+                "{\"reason\":\"Changed plans\",\"refundsDeposit\":true,\"depositBack\":\"mpesa_manual\"}", 200);
+        assertThat(refunded.get("depositState").asText()).isEqualTo("REFUNDED");
+
+        // A no-show that keeps the deposit makes it the customer's wallet credit.
+        String toCredit = book(table2, "Dan", "0711000444", 12600);
+        cashierPost("/open-orders/" + toCredit + "/deposit", "{\"amount\":150,\"method\":\"mpesa_manual\"}", 200);
+        JsonNode credited = waiterPost("/open-orders/" + toCredit + "/no-show", "{\"keepDepositAsCredit\":true}", 200);
+        assertThat(credited.get("depositState").asText()).isEqualTo("CREDITED");
+        assertThat(accountBalance(LedgerAccountCodes.CUSTOMER_WALLET_LIABILITY)).isEqualByComparingTo("150.00");
+    }
+
+    @Test
+    void anotherBusinessCannotTakeOrDisposeOfThisOnesDeposit() throws Exception {
+        String booking = book(table1, "Kevin", "0711000555", 3600);
+        cashierPost("/open-orders/" + booking + "/deposit", "{\"amount\":400,\"method\":\"mpesa_manual\"}", 200);
+        // The other business's owner, with the same permissions, cannot touch this booking.
+        send(as(post("/api/v1/restaurant/open-orders/" + booking + "/deposit"), OTHER, otherOwner, ROLE_OWNER),
+                "{\"amount\":400,\"method\":\"mpesa_manual\"}", 404);
+        send(as(post("/api/v1/restaurant/open-orders/" + booking + "/no-show"), OTHER, otherOwner, ROLE_OWNER),
+                "{\"keepDepositAsCredit\":false}", 404);
+    }
+
+    private String book(String tableId, String name, String phone, long secondsAhead) throws Exception {
+        Instant start = Instant.now().plusSeconds(secondsAhead);
+        String body = "{\"branchId\":\"" + branchId + "\",\"channel\":\"DINE_IN\",\"tableId\":\"" + tableId
+                + "\",\"guestCount\":2,\"customerName\":\"" + name + "\""
+                + (phone == null ? "" : ",\"customerPhone\":\"" + phone + "\"")
+                + ",\"scheduledStart\":\"" + start + "\",\"scheduledEnd\":\"" + start.plusSeconds(5400)
+                + "\",\"clientOrderId\":\"" + UUID.randomUUID() + "\"}";
+        return waiterPost("/open-orders", body, 201).get("id").asText();
+    }
+
     // ------------------------------------------------------------------ another business, another role
 
     @Test

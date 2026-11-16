@@ -1298,6 +1298,7 @@ public class ServiceTicketService {
                         businessId, ticket.getBranchId(), zelisline.ub.finance.LedgerAccountCodes.CUSTOMER_DEPOSITS,
                         zelisline.ub.serviceops.application.HeldMoneyService.SOURCE_DEPOSIT_FORFEITED,
                         ticket.getId(), ticket.getDepositAmount(),
+                        zelisline.ub.finance.LedgerAccountCodes.SERVICE_REVENUE,
                         "Deposit kept after no-show, ticket " + ticket.getTicketNumber());
                 ticket.setDepositState(PosDraftConstants.DEPOSIT_FORFEITED);
             }

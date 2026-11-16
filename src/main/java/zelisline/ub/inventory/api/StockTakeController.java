@@ -411,6 +411,33 @@ public class StockTakeController {
         );
     }
 
+    /**
+     * The bar usage report (ADR 0024): where each bottle's stock went over a day at one branch —
+     * poured, sold whole, wasted — read from the stock-movement ledger, with what the books say is
+     * left. A branch-locked counter is pinned to their own branch. {@code date} defaults to today.
+     */
+    @GetMapping("/bar-usage")
+    @PreAuthorize("hasPermission(null, 'stocktake.read')")
+    public zelisline.ub.inventory.api.dto.BarUsageResponse getBarUsage(
+        @RequestParam String branchId,
+        @RequestParam(required = false) @DateTimeFormat(
+            iso = DateTimeFormat.ISO.DATE
+        ) LocalDate date,
+        HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String effectiveBranchId = branchResolutionService.requireBranchForLockedRole(
+            principal.roleId(),
+            principal.branchId(),
+            branchId
+        );
+        return stockTakeService.getBarUsageReport(
+            TenantRequestIds.resolveBusinessId(request),
+            effectiveBranchId,
+            date
+        );
+    }
+
     // ── Adjustment requests ───────────────────────────────────────────
 
     @PostMapping(

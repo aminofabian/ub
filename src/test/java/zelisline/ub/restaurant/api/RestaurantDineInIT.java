@@ -706,6 +706,41 @@ class RestaurantDineInIT extends ServiceSaleTestSupport {
         assertThat(same.get("tableName").asText()).isEqualTo("Table 1");
     }
 
+    @Test
+    void aBarTabOpensUnderANameWithNoTableAndRunsLikeAnyOpenOrder() throws Exception {
+        // A dine-in order with no table but a name is a tab (ADR 0024): it opens, takes rounds, and
+        // appears off the floor, distinct from takeaway and delivery.
+        JsonNode tab = waiterPost("/open-orders",
+                "{\"branchId\":\"" + branchId + "\",\"channel\":\"DINE_IN\",\"customerName\":\"Table by the window\","
+                        + "\"clientOrderId\":\"" + UUID.randomUUID() + "\"}", 201);
+        String tabId = tab.get("id").asText();
+        assertThat(tab.get("channel").asText()).isEqualTo("DINE_IN");
+        assertThat(tab.get("tableId").isNull()).isTrue();
+        assertThat(tab.get("customerName").asText()).isEqualTo("Table by the window");
+
+        waiterPost("/open-orders/" + tabId + "/lines", "{\"lines\":[" + line("t1", burger, 1, single) + "]}", 200);
+        waiterPost("/open-orders/" + tabId + "/send", "", 200);
+
+        // The tab is off the floor: in otherOrders, DINE_IN, no table, not booked.
+        JsonNode floor = getJson(as(get("/api/v1/restaurant/floor").param("branchId", branchId),
+                TENANT, waiter, ROLE_WAITER), 200);
+        JsonNode card = null;
+        for (JsonNode o : floor.get("otherOrders")) {
+            if (o.get("orderId").asText().equals(tabId)) {
+                card = o;
+            }
+        }
+        assertThat(card).isNotNull();
+        assertThat(card.get("channel").asText()).isEqualTo("DINE_IN");
+        assertThat(card.get("tableId").isNull()).isTrue();
+        assertThat(card.get("booked").asBoolean()).isFalse();
+        assertThat(card.get("customerName").asText()).isEqualTo("Table by the window");
+
+        // A dine-in with no table, no name and no booking is still refused.
+        waiterPost("/open-orders", "{\"branchId\":\"" + branchId + "\",\"channel\":\"DINE_IN\","
+                + "\"clientOrderId\":\"" + UUID.randomUUID() + "\"}", 400);
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private void setShelfPrice(String amount) {

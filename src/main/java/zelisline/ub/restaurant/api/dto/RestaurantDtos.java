@@ -124,6 +124,53 @@ public final class RestaurantDtos {
             @NotNull @Size(min = 1, max = 30) @Valid List<OptionRequest> options) {
     }
 
+    // ---------------------------------------------------------------- bar measures
+
+    /**
+     * One pour off a bottle: a tot, a single, a double, a glass. The quantity taken from the bottle
+     * is worked out from the pour and bottle sizes — the owner never hand-computes 30/750.
+     *
+     * @param label        what the customer sees ("Single", "Double", "125 ml glass")
+     * @param pourMl       how much liquid this pour is, in the same unit as {@code bottleMl}
+     * @param priceDelta   what this pour adds to the drink's base price; null means nothing
+     * @param preselected  true to make this the default pour on the drink
+     */
+    public record MeasurePour(
+            @NotBlank @Size(max = 120) String label,
+            @NotNull @DecimalMin("0.0001") BigDecimal pourMl,
+            @DecimalMin(value = "0.00") BigDecimal priceDelta,
+            Boolean preselected) {
+    }
+
+    /**
+     * Sets up the pour measures of one bottle. It builds a "choose one" modifier group whose options
+     * are the pours, each with its own recipe taking its fraction of the one stocked bottle, so ringing
+     * a double depletes the bottle by {@code pourMl / bottleMl}. Re-running with the same group name
+     * replaces the pours. A bottle is a stocked product; the drink that carries the group is optional.
+     *
+     * @param bottleItemId   the stocked product the pours come out of (the bottle)
+     * @param bottleMl       the whole bottle's size, in the bottle's own stock unit
+     * @param groupName      the modifier group's name; null means "Measure"
+     * @param dishMenuItemId a dish to attach the group to, so it is pourable at once; null to attach later
+     * @param pours          the pours, 1 to 20
+     */
+    public record MeasuresRequest(
+            @NotBlank String bottleItemId,
+            @NotNull @DecimalMin("0.0001") BigDecimal bottleMl,
+            @Size(max = 120) String groupName,
+            String dishMenuItemId,
+            @NotNull @Size(min = 1, max = 20) @Valid List<MeasurePour> pours) {
+    }
+
+    /** One generated pour: the option that rings it and the bottle fraction its recipe takes. */
+    public record MeasurePourResult(String optionId, String label, BigDecimal quantity, BigDecimal priceDelta) {
+    }
+
+    /** The modifier group the measures helper built (or replaced) and the pours on it. */
+    public record MeasuresResponse(String groupId, String bottleItemId, BigDecimal bottleMl,
+            List<MeasurePourResult> pours) {
+    }
+
     public record StationRequest(@NotBlank @Size(max = 80) String name, Integer sortOrder, Boolean active,
             /**
              * The station's printer. A CUPS/printer name, or a network printer's host and a port

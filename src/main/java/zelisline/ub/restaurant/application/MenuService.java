@@ -505,6 +505,47 @@ public class MenuService {
                 .orElseThrow(() -> notFound("Menu item"));
     }
 
+    /** The live options of one modifier group, in order; empty when the group is unknown. */
+    @Transactional(readOnly = true)
+    public List<OptionResponse> groupOptions(String businessId, String groupId) {
+        if (groupId == null || groupId.isBlank()) {
+            return List.of();
+        }
+        List<OptionResponse> out = new ArrayList<>();
+        for (ModifierOption option : optionRepository
+                .findByBusinessIdAndGroupIdAndDeletedAtIsNullOrderBySortOrderAscNameAsc(businessId, groupId.trim())) {
+            out.add(toResponse(option));
+        }
+        return out;
+    }
+
+    /**
+     * Adds one modifier group to a dish without disturbing the groups it already has, at the end of
+     * the order. Idempotent: a group already on the dish is left where it is. Used by the measures
+     * helper to hang a bottle's pours on a drink. Only a dish has modifiers.
+     */
+    @Transactional
+    public void attachGroup(String businessId, String menuItemId, String groupId) {
+        gate.requireEnabled(businessId);
+        MenuItem item = requireMenuItem(businessId, menuItemId);
+        if (!KIND_DISH.equals(item.getKind())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only a dish has modifiers");
+        }
+        ModifierGroup group = requireGroup(businessId, groupId);
+        List<MenuItemModifierGroup> links =
+                linkRepository.findByBusinessIdAndMenuItemIdOrderBySortOrderAsc(businessId, item.getId());
+        if (links.stream().anyMatch(l -> l.getGroupId().equals(group.getId()))) {
+            return;
+        }
+        int order = links.stream().mapToInt(MenuItemModifierGroup::getSortOrder).max().orElse(-1) + 1;
+        MenuItemModifierGroup link = new MenuItemModifierGroup();
+        link.setBusinessId(businessId);
+        link.setMenuItemId(item.getId());
+        link.setGroupId(group.getId());
+        link.setSortOrder(order);
+        linkRepository.save(link);
+    }
+
     private MenuItemResponse single(String businessId, MenuItem item) {
         List<String> groupIds = linkRepository.findByBusinessIdAndMenuItemIdOrderBySortOrderAsc(businessId, item.getId())
                 .stream().map(MenuItemModifierGroup::getGroupId).toList();

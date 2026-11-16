@@ -51,6 +51,7 @@ public class RestaurantMenuController {
     private final MenuService menuService;
     private final zelisline.ub.restaurant.application.RestaurantSettingsService settingsService;
     private final zelisline.ub.restaurant.application.RecipeService recipeService;
+    private final zelisline.ub.restaurant.application.MeasuresService measuresService;
     private final BranchResolutionService branchResolutionService;
 
     /** The whole menu. With {@code branchId}, products carry their shelf price at that branch. */
@@ -237,6 +238,21 @@ public class RestaurantMenuController {
     public void deleteGroup(@PathVariable String id, HttpServletRequest request) {
         CurrentTenantUser.requireHuman(request);
         menuService.deleteGroup(TenantRequestIds.resolveBusinessId(request), id);
+    }
+
+    /**
+     * Sets up a bottle's pour measures: builds a "choose one" modifier group whose options are the
+     * pours (tot, single, double, glass), each taking its fraction of the bottle off the stock count
+     * when sold. Re-running with the same group name replaces the pours. When a dish is named, the
+     * group is hung on it too. The owner never computes 30/750.
+     */
+    @PostMapping("/menu/measures")
+    @PreAuthorize(MANAGE)
+    public zelisline.ub.restaurant.api.dto.RestaurantDtos.MeasuresResponse measures(
+            @Valid @RequestBody zelisline.ub.restaurant.api.dto.RestaurantDtos.MeasuresRequest body,
+            HttpServletRequest request) {
+        CurrentTenantUser.requireHuman(request);
+        return measuresService.generate(TenantRequestIds.resolveBusinessId(request), body);
     }
 
     /** What a dish is made of, with what it costs at today's buying prices. */

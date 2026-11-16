@@ -151,8 +151,11 @@ public class DineInService {
         gate.requireEnabled(businessId);
         String channel = request.channel().trim().toUpperCase(java.util.Locale.ROOT);
         String tableId = blankToNull(request.tableId());
-        if (OrderTicketService.CHANNEL_DINE_IN.equals(channel) && tableId == null && request.scheduledStart() == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose the table");
+        // A dine-in order needs a table, unless it is a booking for later or a named tab (a bar runs
+        // tabs under a name with no table; it can be seated at a table later with move).
+        if (OrderTicketService.CHANNEL_DINE_IN.equals(channel) && tableId == null
+                && request.scheduledStart() == null && blankToNull(request.customerName()) == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a table, or name the tab");
         }
         if (tableId != null) {
             requireTable(businessId, branchId, tableId);

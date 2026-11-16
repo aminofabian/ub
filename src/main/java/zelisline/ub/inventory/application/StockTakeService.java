@@ -28,6 +28,10 @@ import zelisline.ub.catalog.repository.AisleRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.inventory.InventoryConstants;
 import zelisline.ub.inventory.api.dto.ApproveStockAdjustmentRequest;
+import zelisline.ub.inventory.api.dto.BarUsageLine;
+import zelisline.ub.inventory.api.dto.BarUsageResponse;
+import zelisline.ub.purchasing.PurchasingConstants;
+import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.inventory.api.dto.CreateItemWithStocktakeLineRequest;
 import zelisline.ub.inventory.api.dto.PatchStockTakeCountsRequest;
 import zelisline.ub.inventory.api.dto.PostStartStockTakeSessionRequest;
@@ -73,6 +77,7 @@ public class StockTakeService {
     private final ItemCatalogService itemCatalogService;
     private final PackageVariantStockResolver packageVariantStockResolver;
     private final SalesIntelligenceService salesIntelligenceService;
+    private final zelisline.ub.purchasing.repository.StockMovementRepository stockMovementRepository;
 
     // ── Session lifecycle ──────────────────────────────────────────────
 
@@ -1097,6 +1102,103 @@ public class StockTakeService {
             evening,
             soldByItem
         );
+    }
+
+    // ── Bar usage report (ADR 0024) ────────────────────────────────────
+
+    private static final java.time.ZoneId NAIROBI = java.time.ZoneId.of("Africa/Nairobi");
+    private static final java.util.Set<String> BAR_USAGE_REF_TYPES = java.util.Set.of(
+            InventoryBatchPickerService.REFERENCE_SALE_RECIPE,
+            InventoryBatchPickerService.REFERENCE_SALE_RECIPE_VOID);
+
+    /**
+     * Where each bottle's stock went over a day at one branch, and the variance against a physical
+     * count. Unlike the morning/evening reconciliation, this reads the stock-movement ledger, so a
+     * bottle depleted only by pours (which are never sale lines) is still accounted for. The three
+     * buckets — poured, sold whole, wasted — are read from movement provenance; what is left on the
+     * books (`systemOnHand`) already reflects every pour, so a single count gives the variance.
+     *
+     * <p>The window is the Nairobi calendar day of {@code date}. Items are the branch's stocked
+     * products; a bottle with no movement still appears so it can be counted.
+     */
+    @Transactional(readOnly = true)
+    public BarUsageResponse getBarUsageReport(String businessId, String branchId, LocalDate date) {
+        requireBranch(businessId, branchId);
+        LocalDate day = date != null ? date : LocalDate.now(NAIROBI);
+        Instant from = day.atStartOfDay(NAIROBI).toInstant();
+        Instant to = day.plusDays(1).atStartOfDay(NAIROBI).toInstant();
+
+        List<String> itemIds = itemRepository.findStockedItemIdsByBusinessId(businessId);
+        if (itemIds.isEmpty()) {
+            return new BarUsageResponse(branchId, from, to, 0, 0, List.of());
+        }
+
+        // Net movement per item, split into pours / direct sales / waste / other, from the ledger.
+        Map<String, BigDecimal> poured = new HashMap<>();
+        Map<String, BigDecimal> directSold = new HashMap<>();
+        Map<String, BigDecimal> wasted = new HashMap<>();
+        Map<String, BigDecimal> net = new HashMap<>();
+        for (Object[] row : stockMovementRepository.sumDeltaByItemMovementAndReference(
+                businessId, branchId, from, to, itemIds)) {
+            String itemId = (String) row[0];
+            String movementType = (String) row[1];
+            String referenceType = (String) row[2];
+            BigDecimal delta = toBigDecimal(row[3]);
+            net.merge(itemId, delta, BigDecimal::add);
+            if (PurchasingConstants.MOVEMENT_WASTAGE.equals(movementType)) {
+                // Waste spans cooked-line (order_line_waste) and standalone wastage (ref_operation),
+                // which share no reference type — the movement type is the reliable discriminator.
+                wasted.merge(itemId, delta.negate(), BigDecimal::add);
+            } else if (BAR_USAGE_REF_TYPES.contains(referenceType)) {
+                poured.merge(itemId, delta.negate(), BigDecimal::add);
+            } else if (SalesConstants.STOCK_REFERENCE_TYPE_SALE.equals(referenceType)
+                    || SalesConstants.STOCK_REFERENCE_TYPE_SALE_VOID.equals(referenceType)
+                    || SalesConstants.STOCK_REFERENCE_TYPE_SALE_REFUND.equals(referenceType)) {
+                directSold.merge(itemId, delta.negate(), BigDecimal::add);
+            }
+        }
+
+        Map<String, BigDecimal> onHand = loadOnHandByItem(businessId, branchId);
+        Map<String, Item> itemsById = itemRepository
+                .findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)
+                .stream().collect(Collectors.toMap(Item::getId, i -> i));
+
+        List<BarUsageLine> lines = new ArrayList<>();
+        int withMovement = 0;
+        for (String itemId : itemIds) {
+            Item item = itemsById.get(itemId);
+            if (item == null) {
+                continue;
+            }
+            BigDecimal pour = scaled(poured.get(itemId));
+            BigDecimal sold = scaled(directSold.get(itemId));
+            BigDecimal waste = scaled(wasted.get(itemId));
+            BigDecimal netMove = scaled(net.get(itemId));
+            BigDecimal system = onHand.getOrDefault(itemId, BigDecimal.ZERO)
+                    .setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            // Opening = what is left now minus the window's net change (net is signed; outflows negative).
+            BigDecimal opening = system.subtract(netMove).setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            // Movement the three named buckets did not explain (deliveries in, transfers, adjustments).
+            BigDecimal explained = pour.add(sold).add(waste).negate();
+            BigDecimal other = netMove.subtract(explained).setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            boolean moved = netMove.signum() != 0 || pour.signum() != 0 || sold.signum() != 0 || waste.signum() != 0;
+            if (moved || system.signum() != 0) {
+                if (moved) {
+                    withMovement++;
+                }
+                lines.add(new BarUsageLine(itemId, item.getName(), item.getSku(),
+                        opening, pour, sold, waste, other, system, null, null));
+            }
+        }
+        // Bottles that moved first, then the rest, each by name.
+        lines.sort(java.util.Comparator
+                .comparing((BarUsageLine l) -> l.poured().add(l.directSold()).add(l.wasted()).signum() == 0)
+                .thenComparing(BarUsageLine::name, String.CASE_INSENSITIVE_ORDER));
+        return new BarUsageResponse(branchId, from, to, lines.size(), withMovement, lines);
+    }
+
+    private static BigDecimal scaled(BigDecimal v) {
+        return (v == null ? BigDecimal.ZERO : v).setScale(QTY_SCALE, RoundingMode.HALF_UP);
     }
 
     private ReconciliationResponse buildReconciliationResponse(

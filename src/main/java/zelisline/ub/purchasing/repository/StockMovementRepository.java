@@ -65,6 +65,33 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, St
             @Param("movementType") String movementType
     );
 
+    /**
+     * How much stock left (or came back) per item over a window at one branch, grouped by
+     * {@code (itemId, movementType, referenceType)} — the raw material of the bar usage report
+     * (ADR 0024). {@code quantityDelta} is signed: a pour or sale is negative, a void or refund
+     * positive. The caller classifies the buckets: pours are {@code referenceType} {@code sale_recipe}
+     * / {@code sale_recipe_void}; direct sales are {@code sale} / {@code sale_void} / {@code sale_refund};
+     * waste is {@code movementType = 'wastage'} (both cooked-line and standalone, which do not share a
+     * reference type). Scoped by {@code businessId}; {@code [from, to)} is half-open.
+     */
+    @Query("""
+            SELECT m.itemId, m.movementType, m.referenceType, COALESCE(SUM(m.quantityDelta), 0)
+              FROM StockMovement m
+             WHERE m.businessId = :businessId
+               AND m.branchId = :branchId
+               AND m.createdAt >= :from
+               AND m.createdAt < :to
+               AND m.itemId IN :itemIds
+             GROUP BY m.itemId, m.movementType, m.referenceType
+            """)
+    List<Object[]> sumDeltaByItemMovementAndReference(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("from") Instant from,
+            @Param("to") Instant to,
+            @Param("itemIds") Collection<String> itemIds
+    );
+
     List<StockMovement> findByBatchId(String batchId);
 
     List<StockMovement> findByBusinessIdAndItemIdOrderByCreatedAtDesc(

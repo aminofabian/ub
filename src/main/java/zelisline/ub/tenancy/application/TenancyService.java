@@ -1148,7 +1148,11 @@ public class TenancyService {
             posReceiptSequenceSettingsService.readNextReceiptNo(business.getSettings()),
             resolveOwnerPhone(owner, onboarding),
             owner == null ? null : blankToNull(owner.name()),
-            owner == null ? null : blankToNull(owner.email())
+            owner == null ? null : blankToNull(owner.email()),
+            business.getTenantStatus() == null ? "ACTIVE" : business.getTenantStatus().name(),
+            business.getSubscriptionBillingStatus() == null
+                ? "ACTIVE"
+                : business.getSubscriptionBillingStatus().name()
         );
     }
 

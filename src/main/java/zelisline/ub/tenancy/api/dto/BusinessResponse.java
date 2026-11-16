@@ -44,6 +44,15 @@ public record BusinessResponse(
         /** Display name of the oldest owner user, if any. */
         String ownerName,
         /** Email of the oldest owner user, if any. */
-        String ownerEmail
+        String ownerEmail,
+        /**
+         * Storefront access gate ({@code ACTIVE}, {@code SUSPENDED}, {@code INACTIVE}).
+         * {@code SUSPENDED} is the billing hold that pauses sign-in and the shop.
+         */
+        String tenantStatus,
+        /**
+         * Subscription billing lifecycle ({@code ACTIVE}, {@code GRACE}, {@code SUSPENDED}).
+         */
+        String subscriptionBillingStatus
 ) {
 }

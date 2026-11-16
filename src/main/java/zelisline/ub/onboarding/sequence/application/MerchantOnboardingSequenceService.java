@@ -64,6 +64,7 @@ public class MerchantOnboardingSequenceService {
     private final MerchantOnboardingMessageRenderer messageRenderer;
     private final MerchantOnboardingMuteToken muteToken;
     private final PlatformCampaignEmailRenderer campaignEmailRenderer;
+    private final zelisline.ub.platform.application.PlatformBrandingSettingsService platformBrandingService;
     private final BusinessRepository businessRepository;
     private final UserRepository userRepository;
     private final NotificationService outboundMail;
@@ -74,8 +75,11 @@ public class MerchantOnboardingSequenceService {
     private final SupportService supportService;
     private final ObjectMapper objectMapper;
 
-    @Value("${app.public.api-base-url:http://localhost:5050}")
-    private String apiBaseUrl;
+    // Branded, public-facing API origin for email links (e.g. https://api.kiosk.ke).
+    // Deliberately NOT app.public.api-base-url, which in prod is the raw infra host
+    // (kiosk.zelisline.com) and must never appear in customer-facing mail.
+    @Value("${app.public.api-url:https://api.kiosk.ke}")
+    private String publicApiUrl;
 
     /**
      * Enroll a tenant operator after welcome. Marks M0 as already sent (welcome path).
@@ -566,14 +570,18 @@ public class MerchantOnboardingSequenceService {
                 muteUrl);
         String ctaUrl = shopUrl.replaceAll("/$", "") + rendered.ctaPath();
         String html = campaignEmailRenderer.renderHtml(
-                rendered.subject(),
-                rendered.innerBodyHtml() != null
-                        ? rendered.innerBodyHtml()
-                        : MerchantOnboardingMessageRenderer.toHtmlParagraphs(rendered.plainBody()),
-                rendered.ctaLabel(),
-                ctaUrl,
-                shopUrl,
-                rendered.previewText());
+                new PlatformCampaignEmailRenderer.Content(
+                        rendered.subject(),
+                        rendered.innerBodyHtml() != null
+                                ? rendered.innerBodyHtml()
+                                : MerchantOnboardingMessageRenderer.toHtmlParagraphs(rendered.plainBody()),
+                        rendered.ctaLabel(),
+                        ctaUrl,
+                        shopUrl,
+                        rendered.previewText(),
+                        platformBrandingService.emailLogoUrl(),
+                        muteUrl,
+                        "Getting started"));
         try {
             outboundMail.sendPlatformCampaignEmail(
                     user.getEmail(),
@@ -813,9 +821,9 @@ public class MerchantOnboardingSequenceService {
 
     private String muteLink(String businessId) {
         String token = muteToken.issue(businessId, Instant.now().plus(Duration.ofDays(30)));
-        String base = apiBaseUrl == null || apiBaseUrl.isBlank()
+        String base = publicApiUrl == null || publicApiUrl.isBlank()
                 ? "https://api.kiosk.ke"
-                : apiBaseUrl.trim().replaceAll("/$", "");
+                : publicApiUrl.trim().replaceAll("/$", "");
         return base + "/api/v1/public/onboarding-sequence/mute?token=" + token;
     }
 

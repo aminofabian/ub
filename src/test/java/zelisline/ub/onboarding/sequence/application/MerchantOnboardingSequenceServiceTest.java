@@ -63,6 +63,8 @@ class MerchantOnboardingSequenceServiceTest {
     @Mock
     private PlatformCampaignEmailRenderer campaignEmailRenderer;
     @Mock
+    private zelisline.ub.platform.application.PlatformBrandingSettingsService platformBrandingService;
+    @Mock
     private BusinessRepository businessRepository;
     @Mock
     private UserRepository userRepository;
@@ -181,7 +183,8 @@ class MerchantOnboardingSequenceServiceTest {
         when(gateService.m1DueAt(any(), any())).thenReturn(Instant.now().minus(Duration.ofHours(1)));
         when(audienceService.shopOrigin("biz-1")).thenReturn("https://njerifresh.kiosk.ke");
         when(muteToken.issue(anyString(), any())).thenReturn("mute-token");
-        when(campaignEmailRenderer.renderHtml(any(), any(), any(), any(), any(), any()))
+        when(campaignEmailRenderer.renderHtml(
+                any(PlatformCampaignEmailRenderer.Content.class)))
                 .thenReturn("<html>ok</html>");
         when(messageRenderer.render(any(MerchantOnboardingStep.class), any(), any(), any(), any()))
                 .thenReturn(msg());

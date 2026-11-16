@@ -156,6 +156,26 @@ class MerchantOnboardingMessageRendererTest {
     }
 
     @Test
+    void muteUrlGoesToFooterLinkNotBodyText() {
+        var msg = renderer().render(
+                MerchantOnboardingStep.M1_FILL_SHELF,
+                "Jane",
+                "Njeri Fresh Mart",
+                "https://njerifresh.kiosk.ke",
+                null,
+                "https://api.kiosk.ke/api/v1/public/onboarding-sequence/mute?token=abc");
+        // HTML: a quiet "Mute these tips" link, not a raw URL pasted into the body.
+        assertThat(msg.htmlBody())
+                .contains("Mute these tips")
+                .contains("https://api.kiosk.ke/api/v1/public/onboarding-sequence/mute?token=abc");
+        assertThat(msg.innerBodyHtml())
+                .doesNotContain("Mute these tips")
+                .doesNotContain("onboarding-sequence/mute");
+        // Plain text still carries a short mute line for text-only clients.
+        assertThat(msg.plainBody()).contains("Mute these tips:");
+    }
+
+    @Test
     void weekCheckinUsesAsanteWhenThereWereSales() {
         var snap = new MerchantOnboardingGateService.Snapshot(
                 12, 10, 2, 5, true, true, false, true, "completed", null, false, false, false,

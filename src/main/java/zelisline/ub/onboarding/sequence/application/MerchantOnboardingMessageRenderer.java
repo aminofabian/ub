@@ -355,21 +355,29 @@ public class MerchantOnboardingMessageRenderer {
         if (muteUrl == null || muteUrl.isBlank()) {
             return base;
         }
+        // Plain-text clients get a short footer line. HTML clients get a quiet
+        // "Mute these tips" link in the shell footer (not a naked URL in the
+        // body), rendered via PlatformCampaignEmailRenderer.Content below and,
+        // for the actually-sent mail, by the sequence service with the absolute
+        // CTA URL. innerBodyHtml stays clean so no raw link leaks into the body.
         String mutedPlain = base.plainBody() + "\n\nMute these tips: " + muteUrl;
-        String mutedInner = base.innerBodyHtml()
-                + toHtmlParagraphs("Mute these tips: " + muteUrl);
+        String html = campaignEmailRenderer.renderHtml(
+                new PlatformCampaignEmailRenderer.Content(
+                        base.subject(),
+                        base.innerBodyHtml(),
+                        base.ctaLabel(),
+                        base.ctaPath(),
+                        help,
+                        base.previewText(),
+                        null,
+                        muteUrl,
+                        "Getting started"));
         return new RenderedMessage(
                 base.subject(),
                 base.previewText(),
                 mutedPlain,
-                campaignEmailRenderer.renderHtml(
-                        base.subject(),
-                        mutedInner,
-                        base.ctaLabel(),
-                        base.ctaPath(),
-                        help,
-                        base.previewText()),
-                mutedInner,
+                html,
+                base.innerBodyHtml(),
                 base.ctaLabel(),
                 base.ctaPath(),
                 base.inAppTitle(),

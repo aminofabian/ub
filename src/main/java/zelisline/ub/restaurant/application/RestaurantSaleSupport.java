@@ -371,9 +371,16 @@ public class RestaurantSaleSupport {
         recipeService.restoreForVoidedSale(businessId, branchId, saleId, userId);
         // The sale of a bill on a table's order: the food stays as it is, but the bill is no longer
         // paid, so its lines are unsettled again and the order is open again.
-        zelisline.ub.restaurant.domain.OrderBill bill = billRepository.findFirstByBusinessIdAndSaleId(businessId, saleId)
+        zelisline.ub.restaurant.domain.OrderBill found = billRepository.findFirstByBusinessIdAndSaleId(businessId, saleId)
                 .orElse(null);
-        if (bill != null) {
+        if (found != null) {
+            // Take the order's row lock before touching the bill, so this void serialises with any
+            // concurrent pay() or split on the same order (both lock the order first). Flipping the
+            // bill's status changes whether its lines count as billed, so it must not happen while
+            // another request is reading that to build a new bill. Re-read the bill under the lock.
+            orderTicketService.lock(businessId, found.getOrderId());
+            zelisline.ub.restaurant.domain.OrderBill bill =
+                    billRepository.findFirstByBusinessIdAndSaleId(businessId, saleId).orElse(found);
             if (zelisline.ub.restaurant.domain.OrderBill.PAID.equals(bill.getStatus())) {
                 bill.setStatus(zelisline.ub.restaurant.domain.OrderBill.VOIDED);
                 bill.setReason("Sale voided");

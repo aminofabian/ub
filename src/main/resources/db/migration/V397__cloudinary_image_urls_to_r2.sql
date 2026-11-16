@@ -8,11 +8,21 @@
 -- whole cloud, so every pre-switch image is broken on storefronts and in the
 -- POS while post-switch (R2) images load.
 --
--- Rule applied to every affected column (verified against the live bucket):
+-- Rule applied to every affected column (verified against the live bucket for
+-- image/upload; raw/ and video/ upload paths get the same rewrite — they were
+-- unreachable on Cloudinary anyway, so the worst case is unchanged):
 --   https://res.cloudinary.com/dzlv4lat4/image/upload/[e_trim/...]v123/<key>
 --   -> <r2_public_base_url>/<key>
 -- Transform segments and the version are dropped; the key and extension are
--- kept unchanged. `cloudinary_public_id` / `*_public_id` columns are left as
+-- kept unchanged. Columns: item_images (secure_url, s3_key, cloud_url),
+-- items.image_key, category_images (secure_url, s3_key), categories
+-- (image_key, icon), global_product_images / global_products /
+-- global_categories / menu_items / services (image_url),
+-- support_messages.attachment_url, platform_branding_settings.email_logo_url,
+-- staff_profiles.photo_url, and the branding JSON in businesses.settings.
+-- Left alone on purpose: expenses.receipt_s3_key (mostly public ids),
+-- platform_payment_gateways.logo_url, email campaign / support message bodies,
+-- users.settings, audit and sync snapshots (historical). `cloudinary_public_id` / `*_public_id` columns are left as
 -- they are: deletes still resolve them (R2LegacyObjectRemover matches
 -- `<publicId>.*`), and `provider` already means "cloud-hosted" for R2 rows too.
 --
@@ -88,6 +98,31 @@ UPDATE category_images
    AND s3_key REGEXP @strip;
 
 -- ---------------------------------------------------------------------------
+-- Cover thumbnails on the parent rows. items.image_key holds the cover photo's
+-- secure_url and is preferred over the gallery by the POS item list and the
+-- storefront grid (ItemCatalogService.resolveListThumbnail,
+-- PublicStorefrontCatalogService.thumbnailFromItem); categories.image_key and
+-- categories.icon (custom tile URL) likewise.
+-- ---------------------------------------------------------------------------
+UPDATE items
+   SET image_key = REGEXP_REPLACE(image_key, @strip, @r2_prefix)
+ WHERE @r2_base IS NOT NULL
+   AND image_key LIKE @cld_like
+   AND image_key REGEXP @strip;
+
+UPDATE categories
+   SET image_key = REGEXP_REPLACE(image_key, @strip, @r2_prefix)
+ WHERE @r2_base IS NOT NULL
+   AND image_key LIKE @cld_like
+   AND image_key REGEXP @strip;
+
+UPDATE categories
+   SET icon = REGEXP_REPLACE(icon, @strip, @r2_prefix)
+ WHERE @r2_base IS NOT NULL
+   AND icon LIKE @cld_like
+   AND icon REGEXP @strip;
+
+-- ---------------------------------------------------------------------------
 -- Global catalogue
 -- ---------------------------------------------------------------------------
 UPDATE global_product_images
@@ -117,7 +152,8 @@ UPDATE menu_items
    AND image_url LIKE @cld_like
    AND image_url REGEXP @strip;
 
-UPDATE service_offerings
+-- ServiceOffering maps to table `services` (V366, image_url added in V390).
+UPDATE services
    SET image_url = REGEXP_REPLACE(image_url, @strip, @r2_prefix)
  WHERE @r2_base IS NOT NULL
    AND image_url LIKE @cld_like

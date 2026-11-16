@@ -21,11 +21,13 @@ public record ServiceResponse(
         /** What the product for one service costs the shop; null when it uses none. */
         BigDecimal productCost,
         /** Where the service's picture is served from; null when it has none. */
-        String imageUrl
+        String imageUrl,
+        /** What the customer can choose on it: one-of groups and extras. Empty for a plain service. */
+        List<zelisline.ub.serviceops.domain.ServiceOptions.Group> options
 ) {
     /** The same service without its commission override, for callers who only sell. */
     public ServiceResponse withoutCommission() {
         return new ServiceResponse(id, categoryId, name, description, durationMinutes, price, priceIsVariable,
-                null, null, sortOrder, active, staffProfileIds, version, productCost, imageUrl);
+                null, null, sortOrder, active, staffProfileIds, version, productCost, imageUrl, options);
     }
 }

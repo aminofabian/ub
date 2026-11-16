@@ -42,6 +42,7 @@ import zelisline.ub.sales.application.SaleService;
 import zelisline.ub.sales.domain.SaleLineKinds;
 import zelisline.ub.serviceops.application.ServiceCatalogService;
 import zelisline.ub.serviceops.domain.ServiceOffering;
+import zelisline.ub.serviceops.domain.ServiceOptions;
 import zelisline.ub.tenancy.application.BranchStationService;
 import zelisline.ub.tenancy.repository.BranchRepository;
 
@@ -191,6 +192,66 @@ public class ServiceTicketService {
         lineRepository.save(line);
         List<PosDraftLine> active = activeLines(ticketId);
         recomputeTotal(ticket, active);
+        ticket = draftRepository.saveAndFlush(ticket);
+        return toResponse(ticket, active, staffNames(businessId, List.of(ticket)));
+    }
+
+    /**
+     * Says what the customer chose on one service of a visit (length, extras), replacing any
+     * earlier choice. The price follows; on a booking the planned end follows too, and the change
+     * is refused when the longer visit would run into the person's or the place's next booking.
+     */
+    @Transactional
+    public TicketResponse setLineOptions(String businessId, String ticketId, String lineId, List<String> optionIds) {
+        PosDraft peek = requireTicket(businessId, ticketId);
+        boolean booked = PosDraftConstants.STAGE_BOOKED.equals(peek.getServiceStage())
+                && peek.getRequestedStaffProfileId() != null && peek.getScheduledStart() != null;
+        if (booked) {
+            // Same order as booking and moving: the staff row first, then the overlap check.
+            staffProfileService.lockForLedger(businessId, peek.getRequestedStaffProfileId());
+        }
+        PosDraft ticket = requireOpen(businessId, ticketId);
+        PosDraftLine line = requireLine(ticketId, lineId);
+        ServiceOffering service = serviceCatalogService.requireSellable(businessId, line.getServiceId());
+        List<ServiceOptions.Chosen> chosen = chosenOrRefuse(service, optionIds);
+        // A price agreed at the till stays as agreed; only what the options add changes.
+        BigDecimal base = service.isPriceIsVariable()
+                ? line.getUnitPrice().subtract(ServiceOptions.extraPrice(ServiceOptions.decodeChosen(line.getModifiers())))
+                : service.getPrice();
+        if (base == null || base.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter the price for " + service.getName());
+        }
+        applyOptions(line, base, chosen);
+        // Amounts typed for the people on this service were checked against the old price.
+        BigDecimal setForStaff = line.getPerformerAmount() == null ? BigDecimal.ZERO : line.getPerformerAmount();
+        for (var helper : zelisline.ub.serviceops.domain.ServiceHelpers.decode(line.getServiceHelpers())) {
+            if (helper.amount() != null) {
+                setForStaff = setForStaff.add(helper.amount());
+            }
+        }
+        if (setForStaff.compareTo(line.getLineTotal()) > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "The amounts set for staff on " + line.getItemName() + " come to more than it would now cost ("
+                            + line.getLineTotal().toPlainString() + "); change those amounts first");
+        }
+        lineRepository.save(line);
+        List<PosDraftLine> active = activeLines(ticketId);
+        recomputeTotal(ticket, active);
+        if (booked) {
+            Instant end = ticket.getScheduledStart()
+                    .plus(plannedMinutes(businessId, active), java.time.temporal.ChronoUnit.MINUTES);
+            // Only a longer visit can run into something; a shorter or same-length one is never refused.
+            if (ticket.getScheduledEnd() == null || end.isAfter(ticket.getScheduledEnd())) {
+                requireFree(businessId, ticket.getRequestedStaffProfileId(), ticket.getScheduledStart(), end, ticket.getId());
+                String heldResource = active.stream().map(PosDraftLine::getResourceId)
+                        .filter(java.util.Objects::nonNull).findFirst().orElse(null);
+                if (heldResource != null) {
+                    requireResourceFree(businessId, ticket.getBranchId(), heldResource, active,
+                            ticket.getScheduledStart(), end, ticket.getId());
+                }
+            }
+            ticket.setScheduledEnd(end);
+        }
         ticket = draftRepository.saveAndFlush(ticket);
         return toResponse(ticket, active, staffNames(businessId, List.of(ticket)));
     }
@@ -948,10 +1009,22 @@ public class ServiceTicketService {
         List<String> changed = new ArrayList<>();
         for (PosDraftLine line : lines) {
             ServiceOffering service = serviceCatalogService.requireSellable(businessId, line.getServiceId());
-            BigDecimal current = service.getPrice().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-            if (!service.isPriceIsVariable() && line.getUnitPrice().compareTo(current) != 0) {
-                line.setUnitPrice(current);
-                line.setLineTotal(current.multiply(line.getQuantity()).setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+            // What was chosen is priced as the service lists it today; an option the shop has
+            // since removed drops off, and the changed total is shown before any money is taken.
+            List<ServiceOptions.Group> offered = ServiceOptions.decode(service.getOptionsJson());
+            List<ServiceOptions.Chosen> before = ServiceOptions.decodeChosen(line.getModifiers());
+            List<ServiceOptions.Chosen> chosen = ServiceOptions.chooseStillOffered(offered, ServiceOptions.ids(before));
+            String missing = ServiceOptions.firstMissing(offered, chosen);
+            if (missing != null) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Choose " + missing + " for " + service.getName() + " before taking payment");
+            }
+            BigDecimal base = service.isPriceIsVariable()
+                    ? line.getUnitPrice().subtract(ServiceOptions.extraPrice(before))
+                    : service.getPrice();
+            BigDecimal was = line.getUnitPrice();
+            applyOptions(line, base, chosen);
+            if (was.compareTo(line.getUnitPrice()) != 0) {
                 changed.add(service.getName());
             }
         }
@@ -979,6 +1052,7 @@ public class ServiceTicketService {
             String performer = line.getPerformerStaffProfileId() != null
                     ? line.getPerformerStaffProfileId()
                     : ticket.getRequestedStaffProfileId();
+            List<String> optionIds = ServiceOptions.ids(ServiceOptions.decodeChosen(line.getModifiers()));
             saleLines.add(new PostSaleLineRequest(
                     null, line.getQuantity(), line.getUnitPrice(), SaleLineKinds.SERVICE, null, null, null, null,
                     line.getServiceId(), performer, null, null,
@@ -986,7 +1060,7 @@ public class ServiceTicketService {
                             .map(h -> new zelisline.ub.sales.api.dto.PostSaleLineHelper(
                                     h.staffProfileId(), h.sharePercent(), h.amount()))
                             .toList(),
-                    line.getPerformerAmount()));
+                    line.getPerformerAmount(), null, optionIds.isEmpty() ? null : optionIds, null));
         }
         for (PosDraftLine product : products) {
             saleLines.add(PostSaleLineRequest.catalogItem(product.getItemId(), product.getQuantity(), product.getUnitPrice()));
@@ -1397,7 +1471,7 @@ public class ServiceTicketService {
             }
             boolean running = PosDraftConstants.STAGE_IN_SERVICE.equals(line.getLineStage());
             Instant end = line.getFinishedAt() != null ? line.getFinishedAt()
-                    : line.getStartedAt().plus(Math.max(planned.getOrDefault(line.getServiceId(), 0), 5),
+                    : line.getStartedAt().plus(Math.max(lineMinutes(line, planned), 5),
                             java.time.temporal.ChronoUnit.MINUTES);
             if (running && end.isBefore(now)) {
                 // Running over: it holds its person and place until someone marks it done.
@@ -1469,7 +1543,7 @@ public class ServiceTicketService {
                 businessId, lines.stream().map(PosDraftLine::getServiceId).toList());
         long total = 0;
         for (PosDraftLine line : lines) {
-            total += minutes.getOrDefault(line.getServiceId(), 0);
+            total += lineMinutes(line, minutes);
         }
         return Math.max(total, 5);
     }
@@ -1495,7 +1569,6 @@ public class ServiceTicketService {
         if (price == null || price.signum() <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter the price for " + service.getName());
         }
-        BigDecimal unitPrice = price.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         PosDraftLine line = new PosDraftLine();
         line.setDraftId(ticket.getId());
         line.setBusinessId(businessId);
@@ -1504,10 +1577,34 @@ public class ServiceTicketService {
         line.setServiceId(service.getId());
         line.setItemName(service.getName().length() > 500 ? service.getName().substring(0, 500) : service.getName());
         line.setQuantity(BigDecimal.ONE);
-        line.setUnitPrice(unitPrice);
         line.setDiscountAmount(BigDecimal.ZERO);
-        line.setLineTotal(unitPrice);
+        applyOptions(line, price, chosenOrRefuse(service, input.optionIds()));
         return line;
+    }
+
+    private static List<ServiceOptions.Chosen> chosenOrRefuse(ServiceOffering service, List<String> optionIds) {
+        try {
+            return ServiceOptions.choose(ServiceOptions.decode(service.getOptionsJson()), optionIds);
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
+    }
+
+    /** A line costs its service's price plus what the chosen options add; the choice is kept on the line. */
+    private static void applyOptions(PosDraftLine line, BigDecimal basePrice, List<ServiceOptions.Chosen> chosen) {
+        BigDecimal unitPrice = basePrice.add(ServiceOptions.extraPrice(chosen)).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        try {
+            line.setModifiers(ServiceOptions.encodeChosen(chosen));
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
+        line.setUnitPrice(unitPrice);
+        line.setLineTotal(unitPrice.multiply(line.getQuantity()).setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+    }
+
+    /** Planned minutes of one line: the service's own time plus what its chosen options add. */
+    private static int lineMinutes(PosDraftLine line, Map<String, Integer> byService) {
+        return byService.getOrDefault(line.getServiceId(), 0) + ServiceOptions.extraMinutes(line.getModifiers());
     }
 
     private void requireBookable(String businessId, String staffProfileId) {
@@ -1602,8 +1699,12 @@ public class ServiceTicketService {
                         line.getLineStage() == null ? PosDraftConstants.STAGE_WAITING : line.getLineStage(),
                         line.getStartedAt(),
                         line.getFinishedAt(),
-                        planned.getOrDefault(line.getServiceId(), 0),
-                        line.getPerformerAmount()));
+                        lineMinutes(line, planned),
+                        line.getPerformerAmount(),
+                        ServiceOptions.decodeChosen(line.getModifiers()).stream()
+                                .map(c -> new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.LineOption(
+                                        c.optionId(), c.group(), c.option(), c.priceDelta(), c.extraMinutes()))
+                                .toList()));
             }
         }
         String staffId = ticket.getRequestedStaffProfileId();

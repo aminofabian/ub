@@ -26,8 +26,21 @@ public final class ServiceTicketDtos {
     public record TicketLineInput(
             @NotBlank @Size(max = 36) String serviceId,
             /** Price for a variable-price service; ignored for a fixed-price one. */
-            @DecimalMin("0") @Digits(integer = 12, fraction = 2) BigDecimal unitPrice
+            @DecimalMin("0") @Digits(integer = 12, fraction = 2) BigDecimal unitPrice,
+            /** What the customer chose on it (length, extras); may be left for later. */
+            @Size(max = 10) List<@Size(max = 12) String> optionIds
     ) {
+        public TicketLineInput(String serviceId, BigDecimal unitPrice) {
+            this(serviceId, unitPrice, null);
+        }
+    }
+
+    /** Replaces what was chosen on one service of a visit. An empty list clears it. */
+    public record LineOptionsRequest(@NotNull @Size(max = 10) List<@Size(max = 12) String> optionIds) {
+    }
+
+    /** One option as it was chosen on a line. */
+    public record LineOption(String optionId, String group, String name, BigDecimal priceDelta, int extraMinutes) {
     }
 
     public record CreateServiceTicketRequest(
@@ -108,10 +121,12 @@ public final class ServiceTicketDtos {
             String stage,
             Instant startedAt,
             Instant finishedAt,
-            /** Planned minutes, from the service. */
+            /** Planned minutes: the service's own time plus what the chosen options add. */
             int plannedMinutes,
             /** What the person leading it is paid for this service when set at the till; null means by their plan. */
-            BigDecimal performerAmount
+            BigDecimal performerAmount,
+            /** What was chosen on it; the unit price already includes these. */
+            List<LineOption> options
     ) {
     }
 

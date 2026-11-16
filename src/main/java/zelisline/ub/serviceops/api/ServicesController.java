@@ -122,6 +122,18 @@ public class ServicesController {
         return serviceConsumablesService.set(TenantRequestIds.resolveBusinessId(request), id, body.items());
     }
 
+    /** What a customer can choose on the service: one-of groups (length) and extras. */
+    @PutMapping("/{id}/options")
+    @PreAuthorize("hasPermission(null, 'services.catalog.manage')")
+    public ServiceResponse setOptions(
+            @PathVariable String id,
+            @Valid @RequestBody zelisline.ub.serviceops.api.dto.ServiceOptionDtos.SetOptionsRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return serviceCatalogService.setOptions(TenantRequestIds.resolveBusinessId(request), id, body.groups());
+    }
+
     @PutMapping("/{id}/staff")
     @PreAuthorize("hasPermission(null, 'services.catalog.manage')")
     public ServiceResponse setStaff(

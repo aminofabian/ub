@@ -272,7 +272,8 @@ public class SaleReceiptService {
             String desc = snapshot != null && !snapshot.isBlank()
                     ? snapshot.trim()
                     : (it != null ? ProductDisplayName.forVariant(it, parentName) : "Item");
-            if (first.isDish() && first.getLineLabel() != null && !first.getLineLabel().isBlank()) {
+            if ((first.isDish() || (first.isService() && first.getModifiers() != null))
+                    && first.getLineLabel() != null && !first.getLineLabel().isBlank()) {
                 // The label carries what was chosen: "Burger (Extra cheese, Double patty)".
                 desc = first.getLineLabel().trim();
             }

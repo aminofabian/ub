@@ -34,7 +34,9 @@ public class ServiceSaleSupport {
             BigDecimal price,
             boolean priceIsVariable,
             String commissionType,
-            BigDecimal commissionValue
+            BigDecimal commissionValue,
+            /** What a customer can choose on it; empty for a plain service. */
+            List<zelisline.ub.serviceops.domain.ServiceOptions.Group> options
     ) {
     }
 
@@ -72,6 +74,7 @@ public class ServiceSaleSupport {
                 service.getPrice(),
                 service.isPriceIsVariable(),
                 service.getCommissionType(),
-                service.getCommissionValue());
+                service.getCommissionValue(),
+                zelisline.ub.serviceops.domain.ServiceOptions.decode(service.getOptionsJson()));
     }
 }

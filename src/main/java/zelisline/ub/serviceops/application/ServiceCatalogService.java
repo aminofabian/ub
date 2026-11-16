@@ -247,6 +247,56 @@ public class ServiceCatalogService {
      * Soft delete. The name is released for reuse; past sales keep their own snapshot of the
      * service name, so nothing historical changes.
      */
+    /**
+     * Replaces what a customer can choose on a service. An option sent with the id it already has
+     * keeps it, so visits that are still open go on pointing at the same option; a new one is
+     * given an id here. An empty list makes it a plain service again.
+     */
+    @Transactional
+    public ServiceResponse setOptions(
+            String businessId, String id, List<zelisline.ub.serviceops.api.dto.ServiceOptionDtos.GroupInput> groups) {
+        ServiceOffering row = requireLive(businessId, id);
+        java.util.Set<String> used = new java.util.HashSet<>();
+        java.util.Set<String> groupNames = new java.util.HashSet<>();
+        List<zelisline.ub.serviceops.domain.ServiceOptions.Group> out = new ArrayList<>();
+        for (zelisline.ub.serviceops.api.dto.ServiceOptionDtos.GroupInput group : groups) {
+            String groupName = group.name().trim();
+            if (!groupNames.add(groupName.toLowerCase(Locale.ROOT))) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "\"" + groupName + "\" is listed twice");
+            }
+            java.util.Set<String> optionNames = new java.util.HashSet<>();
+            List<zelisline.ub.serviceops.domain.ServiceOptions.Option> options = new ArrayList<>();
+            for (zelisline.ub.serviceops.api.dto.ServiceOptionDtos.OptionInput option : group.options()) {
+                String optionName = option.name().trim();
+                if (!optionNames.add(optionName.toLowerCase(Locale.ROOT))) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "\"" + optionName + "\" is listed twice under " + groupName);
+                }
+                options.add(new zelisline.ub.serviceops.domain.ServiceOptions.Option(
+                        optionId(option.id(), used), optionName,
+                        option.priceDelta() == null ? money(BigDecimal.ZERO) : money(option.priceDelta()),
+                        option.extraMinutes() == null ? 0 : option.extraMinutes()));
+            }
+            out.add(new zelisline.ub.serviceops.domain.ServiceOptions.Group(
+                    optionId(group.id(), used), groupName, Boolean.TRUE.equals(group.required()),
+                    Boolean.TRUE.equals(group.multiple()), options));
+        }
+        row.setOptionsJson(zelisline.ub.serviceops.domain.ServiceOptions.encode(out));
+        saveService(row);
+        return getService(businessId, id);
+    }
+
+    /** Keeps an id the client sent back, unless it is malformed or already used; otherwise a new short one. */
+    private static String optionId(String sent, java.util.Set<String> used) {
+        String id = sent == null ? "" : sent.trim();
+        if (!id.matches("[A-Za-z0-9]{1,12}") || !used.add(id)) {
+            do {
+                id = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+            } while (!used.add(id));
+        }
+        return id;
+    }
+
     @Transactional
     public void deleteService(String businessId, String id) {
         ServiceOffering row = requireLive(businessId, id);
@@ -474,7 +524,8 @@ public class ServiceCatalogService {
                 staffProfileIds,
                 version,
                 row.getProductCost(),
-                row.getImageUrl()
+                row.getImageUrl(),
+                zelisline.ub.serviceops.domain.ServiceOptions.decode(row.getOptionsJson())
         );
     }
 

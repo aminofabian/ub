@@ -114,6 +114,13 @@ public class ServiceOffering {
     @Column(name = "consumables_json", length = 4000)
     private String consumablesJson;
 
+    /**
+     * What a customer can choose on this service (length, style, extras), as JSON; see
+     * {@link ServiceOptions}. Null when the service is sold as it is.
+     */
+    @Column(name = "options_json", columnDefinition = "TEXT")
+    private String optionsJson;
+
     @Column(name = "active", nullable = false)
     private boolean active = true;
 

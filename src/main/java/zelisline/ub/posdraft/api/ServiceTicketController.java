@@ -85,6 +85,17 @@ public class ServiceTicketController {
         return serviceTicketService.addLine(TenantRequestIds.resolveBusinessId(request), id, body);
     }
 
+    /** What the customer chose on one service of the visit: length, extras. */
+    @org.springframework.web.bind.annotation.PutMapping("/{id}/lines/{lineId}/options")
+    public TicketResponse setLineOptions(
+            @PathVariable String id, @PathVariable String lineId,
+            @Valid @RequestBody zelisline.ub.posdraft.api.dto.ServiceTicketDtos.LineOptionsRequest body,
+            HttpServletRequest request) {
+        requireOwnBranch(CurrentTenantUser.requireHuman(request), request, id);
+        return serviceTicketService.setLineOptions(
+                TenantRequestIds.resolveBusinessId(request), id, lineId, body.optionIds());
+    }
+
     @DeleteMapping("/{id}/lines/{lineId}")
     public TicketResponse removeLine(
             @PathVariable String id, @PathVariable String lineId, HttpServletRequest request) {

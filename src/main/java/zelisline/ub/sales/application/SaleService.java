@@ -761,19 +761,27 @@ public class SaleService {
         BigDecimal qty = line.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
         BigDecimal unitPrice = line.unitPrice().setScale(QTY_SCALE, RoundingMode.HALF_UP);
         BigDecimal lineTotal = qty.multiply(unitPrice).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        // What was chosen on it (length, extras) is copied onto the line and named on the receipt.
+        List<zelisline.ub.serviceops.domain.ServiceOptions.Chosen> chosen =
+                zelisline.ub.serviceops.domain.ServiceOptions.chooseStillOffered(service.options(), line.modifierOptionIds());
+        // The name stays the service's own, so reports still group by service; the label is what
+        // the customer reads on the receipt: "Braids (Long, Extra packs)".
+        String labelled = zelisline.ub.serviceops.domain.ServiceOptions.label(service.name(), chosen);
         String name = service.name().length() > 500 ? service.name().substring(0, 500) : service.name();
         SaleItem row = new SaleItem();
         row.setSaleId(saleId);
         row.setLineIndex(lineIndex);
         row.setLineKind(SaleLineKinds.SERVICE);
-        row.setLineLabel(name.length() > 255 ? name.substring(0, 255) : name);
+        row.setModifiers(zelisline.ub.serviceops.domain.ServiceOptions.encodeChosen(chosen));
+        row.setLineLabel(labelled.length() > 255 ? labelled.substring(0, 255) : labelled);
         row.setDisplayName(name);
         row.setServiceId(service.serviceId());
         row.setPerformerStaffProfileId(line.performerStaffProfileId().trim());
         row.setServiceHelpers(zelisline.ub.serviceops.domain.ServiceHelpers.encode(helpersOf(line)));
         row.setPerformerAmount(line.performerAmount() == null
                 ? null : line.performerAmount().setScale(MONEY_SCALE, RoundingMode.HALF_UP));
-        row.setServiceMinutes(service.durationMinutes());
+        row.setServiceMinutes(service.durationMinutes()
+                + zelisline.ub.serviceops.domain.ServiceOptions.extraMinutes(chosen));
         row.setQuantity(qty);
         row.setUnitPrice(unitPrice);
         row.setLineTotal(lineTotal);
@@ -1577,12 +1585,25 @@ public class SaleService {
         }
         // A fixed-price service sells at its listed price. Only a variable-price service (braids
         // priced by length) or someone allowed to set sell prices may charge something else.
-        if (!service.priceIsVariable() && line.unitPrice().compareTo(service.price()) != 0) {
+        // What the customer chose on it adds to that price; the options are read from the
+        // service, never taken from the client.
+        BigDecimal listed;
+        try {
+            // An option the shop has stopped offering is left out rather than refused, so a sale
+            // queued offline is judged on its price like any other, and the line is built the same way.
+            List<zelisline.ub.serviceops.domain.ServiceOptions.Chosen> chosen =
+                    zelisline.ub.serviceops.domain.ServiceOptions.chooseStillOffered(service.options(), line.modifierOptionIds());
+            zelisline.ub.serviceops.domain.ServiceOptions.encodeChosen(chosen);
+            listed = service.price().add(zelisline.ub.serviceops.domain.ServiceOptions.extraPrice(chosen));
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + ex.getMessage());
+        }
+        if (!service.priceIsVariable() && line.unitPrice().compareTo(listed) != 0) {
             boolean mayOverride = roleId != null
                     && requestPermissionService.hasPermission(roleId, PRICE_OVERRIDE_PERMISSION);
             if (!mayOverride) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        prefix + service.name() + " is " + service.price().toPlainString()
+                        prefix + service.name() + " is " + listed.toPlainString()
                                 + "; refresh the till or ask a manager to change the price");
             }
         }

@@ -23,8 +23,6 @@ import zelisline.ub.restaurant.api.dto.RestaurantDtos.ModifierGroupResponse;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.OptionRequest;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.OptionResponse;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.RecipeIngredientRequest;
-import zelisline.ub.restaurant.domain.ModifierGroup;
-import zelisline.ub.restaurant.repository.ModifierGroupRepository;
 
 /**
  * Pour measures for a bar (ADR 0024). A spirit or wine sells by tot, single, double or glass; each
@@ -52,7 +50,6 @@ public class MeasuresService {
     private final MenuService menuService;
     private final RecipeService recipeService;
     private final ItemRepository itemRepository;
-    private final ModifierGroupRepository groupRepository;
     private final RestaurantGate gate;
 
     /**
@@ -74,7 +71,12 @@ public class MeasuresService {
         if (bottleMl.signum() <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The bottle size must be more than zero");
         }
+        java.util.Set<String> seenLabels = new java.util.HashSet<>();
         for (MeasurePour pour : req.pours()) {
+            if (!seenLabels.add(pour.label().trim().toLowerCase(java.util.Locale.ROOT))) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Two pours are called \"" + pour.label().trim() + "\". Give each a different name.");
+            }
             if (pour.pourMl().compareTo(bottleMl) > 0) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         pour.label() + " pours more than the whole bottle");
@@ -85,16 +87,28 @@ public class MeasuresService {
             }
         }
 
+        if (req.dishMenuItemId() == null || req.dishMenuItemId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose the drink these measures are for");
+        }
+        String dishId = req.dishMenuItemId().trim();
+
+        // The owner prices each pour as the whole price a customer pays. The engine rings a dish as
+        // its base price plus the chosen pour's add-on, so the dish base is the cheapest pour and each
+        // pour's add-on is how much dearer it is than that — a single at 150 and a double at 280 then
+        // ring at exactly 150 and 280, with nothing for the owner to reconcile.
+        BigDecimal basePrice = req.pours().stream().map(MeasurePour::price)
+                .min(BigDecimal::compareTo).orElseThrow();
+
         String groupName = req.groupName() == null || req.groupName().isBlank()
                 ? DEFAULT_GROUP_NAME : req.groupName().trim();
 
-        // Build, or replace in place, a "choose exactly one" group whose options are the pours.
-        Optional<ModifierGroup> existing = groupRepository
-                .findByBusinessIdAndDeletedAtIsNullOrderBySortOrderAscNameAsc(businessId).stream()
-                .filter(g -> groupName.equalsIgnoreCase(g.getName()))
-                .findFirst();
-        List<OptionResponse> existingOptions = existing
-                .map(g -> menuService.groupOptions(businessId, g.getId()))
+        // Build, or replace in place, a "choose exactly one" group whose options are the pours. The
+        // group to replace is the measures group ALREADY ON THIS DISH of that name, never some other
+        // dish's group that happens to share the name — so re-running adjusts this drink's pours and
+        // leaves every other menu item's modifiers untouched.
+        Optional<String> existingGroupId = menuService.dishGroupNamed(businessId, dishId, groupName);
+        List<OptionResponse> existingOptions = existingGroupId
+                .map(id -> menuService.groupOptions(businessId, id))
                 .orElse(List.of());
 
         List<OptionRequest> optionRequests = new ArrayList<>();
@@ -104,13 +118,13 @@ public class MeasuresService {
             String keepId = existingOptions.stream()
                     .filter(o -> o.name().equalsIgnoreCase(pour.label().trim()))
                     .map(OptionResponse::id).findFirst().orElse(null);
-            optionRequests.add(new OptionRequest(keepId, pour.label().trim(), pour.priceDelta(),
-                    pour.preselected(), i++));
+            BigDecimal delta = pour.price().subtract(basePrice).setScale(2, RoundingMode.HALF_UP);
+            optionRequests.add(new OptionRequest(keepId, pour.label().trim(), delta, pour.preselected(), i++));
         }
         ModifierGroupRequest groupRequest =
                 new ModifierGroupRequest(groupName, 1, 1, null, optionRequests);
-        ModifierGroupResponse group = existing.isPresent()
-                ? menuService.updateGroup(businessId, existing.get().getId(), groupRequest)
+        ModifierGroupResponse group = existingGroupId.isPresent()
+                ? menuService.updateGroup(businessId, existingGroupId.get(), groupRequest)
                 : menuService.createGroup(businessId, groupRequest);
 
         // Give each pour's option its recipe: its fraction of the one bottle.
@@ -121,12 +135,12 @@ public class MeasuresService {
             BigDecimal quantity = fraction(pour.pourMl(), bottleMl);
             recipeService.setOptionRecipe(businessId, option.id(),
                     List.of(new RecipeIngredientRequest(bottle.getId(), quantity, null, null)));
-            results.add(new MeasurePourResult(option.id(), option.name(), quantity, option.priceDelta()));
+            results.add(new MeasurePourResult(option.id(), option.name(), quantity, pour.price()));
         }
 
-        if (req.dishMenuItemId() != null && !req.dishMenuItemId().isBlank()) {
-            menuService.attachGroup(businessId, req.dishMenuItemId().trim(), group.id());
-        }
+        // The dish carries the pours and rings at each pour's own price (base + its add-on).
+        menuService.setDishBasePrice(businessId, dishId, basePrice);
+        menuService.attachGroup(businessId, dishId, group.id());
 
         return new MeasuresResponse(group.id(), bottle.getId(), bottleMl, results);
     }

@@ -128,17 +128,19 @@ public final class RestaurantDtos {
 
     /**
      * One pour off a bottle: a tot, a single, a double, a glass. The quantity taken from the bottle
-     * is worked out from the pour and bottle sizes — the owner never hand-computes 30/750.
+     * is worked out from the pour and bottle sizes — the owner never hand-computes 30/750. The owner
+     * gives the <em>price the customer pays</em> for the pour, not a surcharge: the helper works out
+     * the dish base and per-pour add-ons so a double rings at exactly its price.
      *
      * @param label        what the customer sees ("Single", "Double", "125 ml glass")
      * @param pourMl       how much liquid this pour is, in the same unit as {@code bottleMl}
-     * @param priceDelta   what this pour adds to the drink's base price; null means nothing
+     * @param price        the whole price a customer pays for this pour
      * @param preselected  true to make this the default pour on the drink
      */
     public record MeasurePour(
             @NotBlank @Size(max = 120) String label,
             @NotNull @DecimalMin("0.0001") BigDecimal pourMl,
-            @DecimalMin(value = "0.00") BigDecimal priceDelta,
+            @NotNull @DecimalMin(value = "0.01") BigDecimal price,
             Boolean preselected) {
     }
 
@@ -162,8 +164,8 @@ public final class RestaurantDtos {
             @NotNull @Size(min = 1, max = 20) @Valid List<MeasurePour> pours) {
     }
 
-    /** One generated pour: the option that rings it and the bottle fraction its recipe takes. */
-    public record MeasurePourResult(String optionId, String label, BigDecimal quantity, BigDecimal priceDelta) {
+    /** One generated pour: the option that rings it, the bottle fraction its recipe takes, and its price. */
+    public record MeasurePourResult(String optionId, String label, BigDecimal quantity, BigDecimal price) {
     }
 
     /** The modifier group the measures helper built (or replaced) and the pours on it. */

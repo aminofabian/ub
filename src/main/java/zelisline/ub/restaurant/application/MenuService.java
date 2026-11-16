@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Optional;
 import java.util.Map;
 import java.util.Set;
 
@@ -517,6 +518,56 @@ public class MenuService {
             out.add(toResponse(option));
         }
         return out;
+    }
+
+    /**
+     * The id of a live modifier group of the given name that is <em>already attached to this dish</em>,
+     * if any. The measures helper uses this to find the group to replace: it reuses the dish's own
+     * measures group on a re-run, and never an unrelated group of the same name belonging to some other
+     * dish. Returns empty when the dish has no such group yet.
+     */
+    @Transactional(readOnly = true)
+    public Optional<String> dishGroupNamed(String businessId, String menuItemId, String groupName) {
+        if (menuItemId == null || menuItemId.isBlank() || groupName == null || groupName.isBlank()) {
+            return Optional.empty();
+        }
+        List<String> attachedGroupIds = linkRepository
+                .findByBusinessIdAndMenuItemIdOrderBySortOrderAsc(businessId, menuItemId.trim()).stream()
+                .map(MenuItemModifierGroup::getGroupId).toList();
+        if (attachedGroupIds.isEmpty()) {
+            return Optional.empty();
+        }
+        String wanted = groupName.trim();
+        for (String groupId : attachedGroupIds) {
+            ModifierGroup group = groupRepository.findByIdAndBusinessId(groupId, businessId)
+                    .filter(g -> g.getDeletedAt() == null).orElse(null);
+            if (group != null && wanted.equalsIgnoreCase(group.getName())) {
+                return Optional.of(group.getId());
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Sets a measures dish's price: its base becomes the cheapest pour, so a drink rings at exactly
+     * the price the owner gave each pour (base plus the pour's add-on). Any happy-hour price is cleared
+     * — a measure is priced by its pour, and a happy-hour base would make a double ring below its price.
+     * Used by the measures helper.
+     */
+    @Transactional
+    public void setDishBasePrice(String businessId, String menuItemId, BigDecimal price) {
+        MenuItem item = requireMenuItem(businessId, menuItemId);
+        if (!KIND_DISH.equals(item.getKind())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only a dish has a price set this way");
+        }
+        item.setPrice(price.setScale(2, RoundingMode.HALF_UP));
+        // A measure drink prices by pour; a happy-hour base would silently under-ring every pour.
+        item.setHappyPrice(null);
+        item.setHappyFromMinute(null);
+        item.setHappyToMinute(null);
+        item.setHappyDays(null);
+        menuItemRepository.save(item);
+        eventPublisher.publishEvent(new zelisline.ub.platform.realtime.RealtimeBridge.MenuUpdatedEvent(businessId));
     }
 
     /**

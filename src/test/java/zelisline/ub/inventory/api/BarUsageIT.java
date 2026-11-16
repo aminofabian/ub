@@ -71,7 +71,7 @@ class BarUsageIT extends ServiceSaleTestSupport {
                 "{\"name\":\"House gin\",\"kind\":\"DISH\",\"price\":150}").get("id").asText();
         single = ownerPost("/api/v1/restaurant/menu/measures",
                 "{\"bottleItemId\":\"" + itemId + "\",\"bottleMl\":750,\"dishMenuItemId\":\"" + drink + "\",\"pours\":["
-                        + "{\"label\":\"Single\",\"pourMl\":25,\"priceDelta\":0}]}")
+                        + "{\"label\":\"Single\",\"pourMl\":25,\"price\":150}]}")
                 .get("pours").get(0).get("optionId").asText();
         this.drink = drink;
     }

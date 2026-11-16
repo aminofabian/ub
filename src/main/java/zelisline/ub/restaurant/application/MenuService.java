@@ -106,6 +106,13 @@ public class MenuService {
                 ? Map.of()
                 : discountResolutionService.resolveForItems(businessId, branchId, productIds);
 
+        List<MenuCategory> categories =
+                categoryRepository.findByBusinessIdAndDeletedAtIsNullOrderBySortOrderAscNameAsc(businessId);
+        Map<String, MenuCategory> categoryById = new LinkedHashMap<>();
+        for (MenuCategory category : categories) {
+            categoryById.put(category.getId(), category);
+        }
+
         List<MenuItemResponse> itemResponses = new ArrayList<>();
         MenuClock.At at = MenuClock.At.now();
         for (MenuItem item : items) {
@@ -120,7 +127,8 @@ public class MenuService {
                         : resolved.finalPrice() != null ? resolved.finalPrice() : resolved.regularPrice();
             }
             itemResponses.add(toResponse(item, name, price, sellable,
-                    groupIdsByItem.getOrDefault(item.getId(), List.of()), at));
+                    groupIdsByItem.getOrDefault(item.getId(), List.of()),
+                    item.getCategoryId() == null ? null : categoryById.get(item.getCategoryId()), at));
         }
 
         Map<String, List<OptionResponse>> optionsByGroup = new LinkedHashMap<>();
@@ -134,8 +142,7 @@ public class MenuService {
                 .toList();
 
         return new MenuResponse(
-                categoryRepository.findByBusinessIdAndDeletedAtIsNullOrderBySortOrderAscNameAsc(businessId).stream()
-                        .map(MenuService::toResponse).toList(),
+                categories.stream().map(MenuService::toResponse).toList(),
                 itemResponses,
                 groups,
                 stationRepository.findByBusinessIdOrderBySortOrderAscNameAsc(businessId).stream()
@@ -221,6 +228,16 @@ public class MenuService {
         }
         if (req.active() != null) {
             category.setActive(req.active());
+        }
+        if (Boolean.TRUE.equals(req.clearServingHours())) {
+            category.setServeFromMinute(null);
+            category.setServeToMinute(null);
+        } else if (req.serveFromMinute() != null || req.serveToMinute() != null) {
+            if (req.serveFromMinute() == null || req.serveToMinute() == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Serving hours need a start and an end");
+            }
+            category.setServeFromMinute(req.serveFromMinute());
+            category.setServeToMinute(req.serveToMinute());
         }
     }
 
@@ -457,15 +474,21 @@ public class MenuService {
         List<String> groupIds = linkRepository.findByBusinessIdAndMenuItemIdOrderBySortOrderAsc(businessId, item.getId())
                 .stream().map(MenuItemModifierGroup::getGroupId).toList();
         MenuClock.At at = MenuClock.At.now();
+        MenuCategory category = item.getCategoryId() == null ? null
+                : categoryRepository.findByIdAndBusinessId(item.getCategoryId(), businessId).orElse(null);
         return toResponse(item, item.getName(),
-                KIND_DISH.equals(item.getKind()) ? MenuClock.price(item, at) : item.getPrice(), true, groupIds, at);
+                KIND_DISH.equals(item.getKind()) ? MenuClock.price(item, at) : item.getPrice(), true, groupIds,
+                category, at);
     }
 
     private static MenuItemResponse toResponse(
-            MenuItem item, String name, BigDecimal price, boolean sellable, List<String> groupIds, MenuClock.At at) {
+            MenuItem item, String name, BigDecimal price, boolean sellable, List<String> groupIds,
+            MenuCategory category, MenuClock.At at) {
+        // A dish is served now only when its named menu (heading) is open and its own hours allow.
+        boolean servedNow = MenuClock.served(item, category, at);
         return new MenuItemResponse(item.getId(), item.getCategoryId(), name, item.getKind(), item.getItemId(), price,
                 item.getTaxRateId(), item.getStationId(), item.isAvailable(), item.isActive(), sellable,
-                item.getSortOrder(), groupIds, item.getPrice(), MenuClock.happy(item, at), MenuClock.served(item, at),
+                item.getSortOrder(), groupIds, item.getPrice(), MenuClock.happy(item, at), servedNow,
                 item.getServeFromMinute(), item.getServeToMinute(), item.getHappyPrice(), item.getHappyFromMinute(),
                 item.getHappyToMinute(), item.getHappyDays(), item.getDescription(), item.getImageUrl());
     }
@@ -608,7 +631,8 @@ public class MenuService {
     }
 
     private static CategoryResponse toResponse(MenuCategory c) {
-        return new CategoryResponse(c.getId(), c.getName(), c.getStationId(), c.getSortOrder(), c.isActive());
+        return new CategoryResponse(c.getId(), c.getName(), c.getStationId(), c.getSortOrder(), c.isActive(),
+                c.getServeFromMinute(), c.getServeToMinute());
     }
 
     private static OptionResponse toResponse(ModifierOption o) {

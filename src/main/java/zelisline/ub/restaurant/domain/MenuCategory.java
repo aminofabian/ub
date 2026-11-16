@@ -39,6 +39,16 @@ public class MenuCategory {
     @Column(name = "active", nullable = false)
     private boolean active = true;
 
+    /**
+     * A named-menu serving window (Breakfast, Lunch), minutes after midnight, Nairobi time. Null
+     * on both means the heading is served all day. An end before the start runs past midnight.
+     */
+    @Column(name = "serve_from_minute")
+    private Integer serveFromMinute;
+
+    @Column(name = "serve_to_minute")
+    private Integer serveToMinute;
+
     @Column(name = "deleted_at")
     private Instant deletedAt;
 

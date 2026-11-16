@@ -115,7 +115,9 @@ public class RestaurantSaleSupport {
             throw bad(item.getName() + " has no price");
         }
         MenuClock.At at = MenuClock.At.now();
-        if (!alreadySold && !MenuClock.served(item, at)) {
+        zelisline.ub.restaurant.domain.MenuCategory category = item.getCategoryId() == null ? null
+                : categoryRepository.findByIdAndBusinessId(item.getCategoryId(), businessId).orElse(null);
+        if (!alreadySold && !MenuClock.served(item, category, at)) {
             throw bad(item.getName() + " is not served at this time of day");
         }
 

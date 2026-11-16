@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 
+import zelisline.ub.restaurant.domain.MenuCategory;
 import zelisline.ub.restaurant.domain.MenuItem;
 
 /**
@@ -29,8 +30,28 @@ public final class MenuClock {
 
     /** True when the item is served at that moment: it has no serving hours, or the moment is inside them. */
     public static boolean served(MenuItem item, At at) {
-        return item.getServeFromMinute() == null || item.getServeToMinute() == null
-                || within(item.getServeFromMinute(), item.getServeToMinute(), at.minute());
+        return servedWindow(item.getServeFromMinute(), item.getServeToMinute(), at);
+    }
+
+    /**
+     * True when a named menu (heading) is open at that moment: it has no serving hours, or the
+     * moment is inside them. A null heading is always open.
+     */
+    public static boolean served(MenuCategory category, At at) {
+        return category == null || servedWindow(category.getServeFromMinute(), category.getServeToMinute(), at);
+    }
+
+    /**
+     * True when the item can be ordered now, honouring both its heading's named-menu window and
+     * its own: a breakfast dish is off outside breakfast even if the dish itself has no hours, and
+     * a dish with its own hours is off outside them even when its heading is open.
+     */
+    public static boolean served(MenuItem item, MenuCategory category, At at) {
+        return served(category, at) && served(item, at);
+    }
+
+    private static boolean servedWindow(Integer from, Integer to, At at) {
+        return from == null || to == null || within(from, to, at.minute());
     }
 
     /** The dish's price at that moment: its happy-hour price inside happy hour, else its ordinary price. */

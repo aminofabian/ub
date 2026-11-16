@@ -23,7 +23,9 @@ public final class RestaurantDtos {
     public record StationResponse(String id, String name, int sortOrder, boolean active) {
     }
 
-    public record CategoryResponse(String id, String name, String stationId, int sortOrder, boolean active) {
+    public record CategoryResponse(String id, String name, String stationId, int sortOrder, boolean active,
+            /** A named-menu serving window, minutes after midnight Nairobi time; null means all day. */
+            Integer serveFromMinute, Integer serveToMinute) {
     }
 
     public record OptionResponse(
@@ -65,7 +67,12 @@ public final class RestaurantDtos {
     // ---------------------------------------------------------------- menu (write)
 
     public record CategoryRequest(
-            @NotBlank @Size(max = 120) String name, String stationId, Integer sortOrder, Boolean active) {
+            @NotBlank @Size(max = 120) String name, String stationId, Integer sortOrder, Boolean active,
+            /** A named-menu serving window (Breakfast, Lunch); both ends or neither. Minutes 0–1439. */
+            @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(1439) Integer serveFromMinute,
+            @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(1439) Integer serveToMinute,
+            /** True clears the serving window, leaving the heading served all day. */
+            Boolean clearServingHours) {
     }
 
     public record MenuItemRequest(

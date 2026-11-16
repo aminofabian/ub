@@ -464,6 +464,54 @@ class RestaurantExtrasIT extends ServiceSaleTestSupport {
     }
 
     @Test
+    void aNamedMenuHidesItsDishesOutsideItsHoursEvenWhenTheDishHasNoHours() throws Exception {
+        ZonedDateTime now = ZonedDateTime.now(NAIROBI);
+        int minute = now.getHour() * 60 + now.getMinute();
+        // A window that does not contain now: starts two hours from now, ends four.
+        int closedFrom = (minute + 120) % 1440;
+        int closedTo = (minute + 240) % 1440;
+        // A window that does contain now: started two hours ago, ends two hours on.
+        int openFrom = (minute + 1440 - 120) % 1440;
+        int openTo = (minute + 120) % 1440;
+
+        // A "Breakfast" heading, closed right now, with the burger under it. The burger keeps no
+        // serving hours of its own, so only the heading decides whether it can be ordered.
+        String breakfast = ownerPost("/api/v1/restaurant/menu/categories",
+                "{\"name\":\"Breakfast\",\"serveFromMinute\":" + closedFrom + ",\"serveToMinute\":" + closedTo + "}", 201)
+                .get("id").asText();
+        String patchPath = "/api/v1/restaurant/menu/items/" + burger;
+        JsonNode moved = send(as(patch(patchPath), TENANT, owner, ROLE_OWNER),
+                "{\"categoryId\":\"" + breakfast + "\"}", 200);
+        assertThat(moved.get("servedNow").asBoolean()).isFalse();
+
+        // Off at the counter and at a table, though the dish itself has no hours.
+        assertThat(postSale("nm1-" + UUID.randomUUID(), dish(burger, "400"), "400", 400).toString())
+                .contains("not served");
+        String orderId = seat(table1);
+        cashierPost("/open-orders/" + orderId + "/lines", "{\"lines\":[{\"clientLineId\":\"a\",\"menuItemId\":\""
+                + burger + "\",\"quantity\":1}]}", 400);
+
+        // Open the heading's window to cover now, and the same dish can be ordered again.
+        JsonNode open = send(as(put("/api/v1/restaurant/menu/categories/" + breakfast), TENANT, owner, ROLE_OWNER),
+                "{\"name\":\"Breakfast\",\"serveFromMinute\":" + openFrom + ",\"serveToMinute\":" + openTo + "}", 200);
+        assertThat(open.get("serveFromMinute").asInt()).isEqualTo(openFrom);
+        assertThat(postSale("nm2-" + UUID.randomUUID(), dish(burger, "400"), "400", 201)).isNotNull();
+
+        // A half-set window is refused; clearing it leaves the heading all day.
+        send(as(put("/api/v1/restaurant/menu/categories/" + breakfast), TENANT, owner, ROLE_OWNER),
+                "{\"name\":\"Breakfast\",\"serveFromMinute\":10}", 400);
+        JsonNode cleared = send(as(put("/api/v1/restaurant/menu/categories/" + breakfast), TENANT, owner, ROLE_OWNER),
+                "{\"name\":\"Breakfast\",\"clearServingHours\":true}", 200);
+        assertThat(cleared.get("serveFromMinute").isNull()).isTrue();
+        postSale("nm3-" + UUID.randomUUID(), dish(burger, "400"), "400", 201);
+
+        // Another business cannot set hours on this one's heading, though its owner holds the same
+        // permission: the heading is not found for them.
+        send(as(put("/api/v1/restaurant/menu/categories/" + breakfast), OTHER, otherOwner, ROLE_OWNER),
+                "{\"name\":\"Breakfast\",\"serveFromMinute\":" + openFrom + ",\"serveToMinute\":" + openTo + "}", 404);
+    }
+
+    @Test
     void aBusinessDayCanStartAfterMidnight() throws Exception {
         postSale("d1-" + UUID.randomUUID(), dish(burger, "400"), "400", 201);
         ZonedDateTime now = ZonedDateTime.now(NAIROBI);

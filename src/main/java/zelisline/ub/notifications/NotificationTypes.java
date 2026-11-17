@@ -34,6 +34,8 @@ public final class NotificationTypes {
     public static final String ONBOARDING_WEB_ORDER = "onboarding.web_order";
     public static final String DRAWOUT_APPROVAL_REQUESTED = "drawout.approval_requested";
     public static final String DRAWOUT_RECORDED = "drawout.recorded";
+    /** A completed sale was voided. Owners and admins, except the person who voided it. */
+    public static final String SALE_VOIDED = "sale.voided";
     public static final String TILL_ACCESS_REQUESTED = "till.access_requested";
     /** Purchase order or goods receipt aimed at one cashier till. */
     public static final String TILL_SLIP = "till.slip";

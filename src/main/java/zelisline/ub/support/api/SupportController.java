@@ -6,7 +6,9 @@ import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -23,10 +25,13 @@ import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.serving.api.dto.ServingDtos;
 import zelisline.ub.serving.application.ServingTicketService;
 import zelisline.ub.support.api.dto.CreateSupportConversationRequest;
+import zelisline.ub.support.api.dto.EditMessageRequest;
 import zelisline.ub.support.api.dto.SendSupportMessageRequest;
 import zelisline.ub.support.api.dto.SupportConversationDetailDto;
 import zelisline.ub.support.api.dto.SupportConversationDto;
 import zelisline.ub.support.api.dto.SupportMessageDto;
+import zelisline.ub.support.api.dto.SupportReactionDto;
+import zelisline.ub.support.api.dto.ToggleReactionRequest;
 import zelisline.ub.support.application.SupportService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 
@@ -51,8 +56,9 @@ public class SupportController {
 
     @GetMapping("/conversation")
     public SupportConversationDetailDto conversation(HttpServletRequest request) {
-        CurrentTenantUser.requireHuman(request);
-        return supportService.tenantDetail(TenantRequestIds.resolveBusinessId(request));
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        return supportService.tenantDetail(
+                TenantRequestIds.resolveBusinessId(request), principal.userId());
     }
 
     @PostMapping("/conversation")
@@ -82,6 +88,40 @@ public class SupportController {
     public void markRead(HttpServletRequest request) {
         CurrentTenantUser.requireHuman(request);
         supportService.markTenantRead(TenantRequestIds.resolveBusinessId(request));
+    }
+
+    @PostMapping("/conversation/messages/{messageId}/reactions")
+    public Map<String, Object> reactToPlatformMessage(
+            @PathVariable String messageId,
+            @Valid @RequestBody ToggleReactionRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        List<SupportReactionDto> reactions = supportService.toggleTenantReaction(
+                businessId, principal.userId(), messageId, body.emoji());
+        return Map.of("messageId", messageId, "reactions", reactions);
+    }
+
+    @PatchMapping("/conversation/messages/{messageId}")
+    public SupportMessageDto editPlatformMessage(
+            @PathVariable String messageId,
+            @Valid @RequestBody EditMessageRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return supportService.editTenantMessage(businessId, principal.userId(), messageId, body.body());
+    }
+
+    @DeleteMapping("/conversation/messages/{messageId}")
+    public SupportMessageDto deletePlatformMessage(
+            @PathVariable String messageId,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return supportService.deleteTenantMessage(businessId, principal.userId(), messageId);
     }
 
     @PostMapping("/conversation/resolve")
@@ -129,11 +169,11 @@ public class SupportController {
             @PathVariable String id,
             HttpServletRequest request
     ) {
-        CurrentTenantUser.requireHuman(request);
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         // Read is an explicit POST; a GET must not mutate state (prefetch/proxy
         // calls were flipping receipts and writing on every 5 s poll).
-        return supportService.storefrontDetail(id, businessId);
+        return supportService.storefrontDetail(id, businessId, principal.userId());
     }
 
     @PostMapping("/storefront/conversations/{id}/messages")
@@ -156,6 +196,47 @@ public class SupportController {
         CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         supportService.markStorefrontStaffRead(id, businessId);
+    }
+
+    @PostMapping("/storefront/conversations/{id}/messages/{messageId}/reactions")
+    @PreAuthorize("hasPermission(null, 'messages.reply')")
+    public Map<String, Object> reactToStorefrontMessage(
+            @PathVariable String id,
+            @PathVariable String messageId,
+            @Valid @RequestBody ToggleReactionRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        List<SupportReactionDto> reactions = supportService.toggleStorefrontStaffReaction(
+                id, businessId, principal.userId(), messageId, body.emoji());
+        return Map.of("messageId", messageId, "reactions", reactions);
+    }
+
+    @PatchMapping("/storefront/conversations/{id}/messages/{messageId}")
+    @PreAuthorize("hasPermission(null, 'messages.reply')")
+    public SupportMessageDto editStorefrontMessage(
+            @PathVariable String id,
+            @PathVariable String messageId,
+            @Valid @RequestBody EditMessageRequest body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return supportService.editStorefrontStaffMessage(
+                id, businessId, principal.userId(), messageId, body.body());
+    }
+
+    @DeleteMapping("/storefront/conversations/{id}/messages/{messageId}")
+    @PreAuthorize("hasPermission(null, 'messages.reply')")
+    public SupportMessageDto deleteStorefrontMessage(
+            @PathVariable String id,
+            @PathVariable String messageId,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return supportService.deleteStorefrontStaffMessage(id, businessId, principal.userId(), messageId);
     }
 
     @GetMapping("/storefront/unread-count")

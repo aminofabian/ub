@@ -1,6 +1,7 @@
 package zelisline.ub.support.api.dto;
 
 import java.time.Instant;
+import java.util.List;
 
 public record SupportMessageDto(
         String id,
@@ -15,5 +16,11 @@ public record SupportMessageDto(
         SupportAttachmentDto attachment,
         SupportMessageReplyDto replyTo,
         Instant readAt,
-        Instant createdAt
+        Instant createdAt,
+        /** Emoji reaction summary; empty when none. Never null. */
+        List<SupportReactionDto> reactions,
+        /** Set when the body was edited after sending. */
+        Instant editedAt,
+        /** Set when the message was unsent; body/attachment are blanked. */
+        Instant deletedAt
 ) {}

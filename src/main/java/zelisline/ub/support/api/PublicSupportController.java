@@ -1,6 +1,7 @@
 package zelisline.ub.support.api;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -9,7 +10,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -35,9 +38,12 @@ import zelisline.ub.platform.realtime.RealtimeScopes;
 import zelisline.ub.platform.realtime.RealtimeTicketController;
 import zelisline.ub.platform.realtime.RealtimeTicketService;
 import zelisline.ub.platform.realtime.TicketRecord;
+import zelisline.ub.support.api.dto.EditMessageRequest;
 import zelisline.ub.support.api.dto.GuestThreadDto;
 import zelisline.ub.support.api.dto.SendSupportMessageRequest;
 import zelisline.ub.support.api.dto.SupportMessageDto;
+import zelisline.ub.support.api.dto.SupportReactionDto;
+import zelisline.ub.support.api.dto.ToggleReactionRequest;
 import zelisline.ub.support.application.GuestThreadRecoveryService;
 import zelisline.ub.support.application.SupportService;
 import zelisline.ub.support.domain.SupportConversation;
@@ -204,6 +210,40 @@ public class PublicSupportController {
             @RequestHeader(HEADER_GUEST_TOKEN) @Size(max = 256) String token
     ) {
         supportService.markGuestRead(id, guestId, token);
+    }
+
+    @PostMapping("/threads/{id}/messages/{messageId}/reactions")
+    public Map<String, Object> react(
+            @PathVariable String id,
+            @PathVariable String messageId,
+            @Valid @RequestBody ToggleReactionRequest body,
+            @RequestHeader(HEADER_GUEST_ID) @Size(max = 36) String guestId,
+            @RequestHeader(HEADER_GUEST_TOKEN) @Size(max = 256) String token
+    ) {
+        List<SupportReactionDto> reactions = supportService.toggleGuestReaction(
+                id, guestId, token, messageId, body.emoji());
+        return Map.of("messageId", messageId, "reactions", reactions);
+    }
+
+    @PatchMapping("/threads/{id}/messages/{messageId}")
+    public SupportMessageDto editMessage(
+            @PathVariable String id,
+            @PathVariable String messageId,
+            @Valid @RequestBody EditMessageRequest body,
+            @RequestHeader(HEADER_GUEST_ID) @Size(max = 36) String guestId,
+            @RequestHeader(HEADER_GUEST_TOKEN) @Size(max = 256) String token
+    ) {
+        return supportService.editGuestMessage(id, guestId, token, messageId, body.body());
+    }
+
+    @DeleteMapping("/threads/{id}/messages/{messageId}")
+    public SupportMessageDto deleteMessage(
+            @PathVariable String id,
+            @PathVariable String messageId,
+            @RequestHeader(HEADER_GUEST_ID) @Size(max = 36) String guestId,
+            @RequestHeader(HEADER_GUEST_TOKEN) @Size(max = 256) String token
+    ) {
+        return supportService.deleteGuestMessage(id, guestId, token, messageId);
     }
 
     /**

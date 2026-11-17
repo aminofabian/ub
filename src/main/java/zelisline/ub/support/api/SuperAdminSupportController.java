@@ -7,7 +7,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -21,10 +23,13 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.identity.domain.SuperAdmin;
 import zelisline.ub.identity.repository.SuperAdminRepository;
+import zelisline.ub.support.api.dto.EditMessageRequest;
 import zelisline.ub.support.api.dto.SendSupportMessageRequest;
 import zelisline.ub.support.api.dto.SupportConversationDetailDto;
 import zelisline.ub.support.api.dto.SupportConversationDto;
 import zelisline.ub.support.api.dto.SupportMessageDto;
+import zelisline.ub.support.api.dto.SupportReactionDto;
+import zelisline.ub.support.api.dto.ToggleReactionRequest;
 import zelisline.ub.support.application.SupportPresenceService;
 import zelisline.ub.support.application.SupportService;
 
@@ -58,7 +63,8 @@ public class SuperAdminSupportController {
     @GetMapping("/conversations/{id}")
     public SupportConversationDetailDto conversation(@PathVariable String id) {
         // Read is an explicit POST; a GET must not mutate state.
-        return supportService.adminDetail(id);
+        SuperAdmin admin = requireSuperAdmin();
+        return supportService.adminDetail(id, admin.getId());
     }
 
     /**
@@ -94,6 +100,37 @@ public class SuperAdminSupportController {
     public SupportMessageDto send(@PathVariable String id, @Valid @RequestBody SendSupportMessageRequest body) {
         SuperAdmin admin = requireSuperAdmin();
         return supportService.sendAdminMessage(id, admin.getId(), admin.getName(), body);
+    }
+
+    @PostMapping("/conversations/{id}/messages/{messageId}/reactions")
+    public Map<String, Object> react(
+            @PathVariable String id,
+            @PathVariable String messageId,
+            @Valid @RequestBody ToggleReactionRequest body
+    ) {
+        SuperAdmin admin = requireSuperAdmin();
+        List<SupportReactionDto> reactions = supportService.toggleAdminReaction(
+                id, admin.getId(), messageId, body.emoji());
+        return Map.of("messageId", messageId, "reactions", reactions);
+    }
+
+    @PatchMapping("/conversations/{id}/messages/{messageId}")
+    public SupportMessageDto editMessage(
+            @PathVariable String id,
+            @PathVariable String messageId,
+            @Valid @RequestBody EditMessageRequest body
+    ) {
+        SuperAdmin admin = requireSuperAdmin();
+        return supportService.editAdminMessage(id, admin.getId(), messageId, body.body());
+    }
+
+    @DeleteMapping("/conversations/{id}/messages/{messageId}")
+    public SupportMessageDto deleteMessage(
+            @PathVariable String id,
+            @PathVariable String messageId
+    ) {
+        SuperAdmin admin = requireSuperAdmin();
+        return supportService.deleteAdminMessage(id, admin.getId(), messageId);
     }
 
     @PostMapping("/conversations/{id}/read")

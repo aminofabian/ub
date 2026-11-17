@@ -88,6 +88,8 @@ public class SalesIntelligenceService {
     private static final int MAX_PROFIT_ITEM_LIMIT = 500;
     private static final int STOCK_IN_LIMIT = 40;
     private static final int ITEM_RECENT_SALES_LIMIT = 80;
+    /** Third status placeholder when the caller does not want voided lines. */
+    private static final String RECENT_SALE_STATUS_NONE = "excluded";
     private static final int DEFAULT_CUSTOMER_SPEND_LIMIT = 400;
     private static final int MAX_CUSTOMER_SPEND_LIMIT = 800;
     private static final List<String> STOCK_IN_TYPES = List.of(
@@ -591,7 +593,7 @@ public class SalesIntelligenceService {
          LEFT JOIN customers cu ON cu.id = """ + PAYER_CUSTOMER_ID + """
                                AND cu.business_id = s.business_id
              WHERE s.business_id = ?
-               AND s.status IN (?, ?)
+               AND s.status IN (?, ?, ?)
                AND s.sold_at >= ? AND s.sold_at < ?
                AND (? IS NULL OR s.branch_id = ?)
                AND (? IS NULL OR i.item_type_id = ?)
@@ -939,7 +941,7 @@ public class SalesIntelligenceService {
             String branchId,
             String itemTypeId
     ) {
-        return recentSales(businessId, fromInclusive, toInclusive, branchId, itemTypeId, null, 500);
+        return recentSales(businessId, fromInclusive, toInclusive, branchId, itemTypeId, null, 500, false);
     }
 
     @Transactional(readOnly = true)
@@ -951,6 +953,20 @@ public class SalesIntelligenceService {
             String itemTypeId,
             String itemId,
             int limit
+    ) {
+        return recentSales(businessId, fromInclusive, toInclusive, branchId, itemTypeId, itemId, limit, false);
+    }
+
+    @Transactional(readOnly = true)
+    public List<RecentSaleRow> recentSales(
+            String businessId,
+            LocalDate fromInclusive,
+            LocalDate toInclusive,
+            String branchId,
+            String itemTypeId,
+            String itemId,
+            int limit,
+            boolean includeVoided
     ) {
         ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
         Timestamp from = utcBound(w.startInclusive());
@@ -1001,6 +1017,7 @@ public class SalesIntelligenceService {
                 businessId,
                 SalesConstants.SALE_STATUS_COMPLETED,
                 SalesConstants.SALE_STATUS_REFUNDED,
+                includeVoided ? SalesConstants.SALE_STATUS_VOIDED : RECENT_SALE_STATUS_NONE,
                 from,
                 to,
                 branchFilter,
@@ -1193,7 +1210,8 @@ public class SalesIntelligenceService {
                 branchFilter,
                 null,
                 itemId,
-                ITEM_RECENT_SALES_LIMIT
+                ITEM_RECENT_SALES_LIMIT,
+                true
         );
 
         return new ItemActivityResponse(summary, periods, daily, stockIns, recent);

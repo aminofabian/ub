@@ -71,6 +71,14 @@ public class SupportMessage {
     @Column(name = "read_at")
     private Instant readAt;
 
+    /** When set, the body was edited after sending. */
+    @Column(name = "edited_at")
+    private Instant editedAt;
+
+    /** When set, the message was unsent; the row is kept as a tombstone. */
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
+
     /** When set, this message is a reply to another message in the same thread. */
     @Column(name = "reply_to_message_id", length = 36)
     private String replyToMessageId;

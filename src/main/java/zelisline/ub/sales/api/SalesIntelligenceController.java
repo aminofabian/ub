@@ -126,6 +126,7 @@ public class SalesIntelligenceController {
             @RequestParam(required = false) String itemTypeId,
             @RequestParam(required = false) String itemId,
             @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false, defaultValue = "false") boolean includeVoided,
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
@@ -140,7 +141,8 @@ public class SalesIntelligenceController {
                 branchId,
                 itemTypeId,
                 itemId,
-                rowLimit);
+                rowLimit,
+                includeVoided);
     }
 
     /**

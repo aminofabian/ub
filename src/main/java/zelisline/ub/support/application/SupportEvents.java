@@ -2,9 +2,12 @@ package zelisline.ub.support.application;
 
 import java.time.Instant;
 
+import java.util.List;
+
 import zelisline.ub.support.api.dto.SupportAttachmentDto;
 import zelisline.ub.support.api.dto.SupportMessageReplyDto;
 import zelisline.ub.support.api.dto.SupportOrderCardDto;
+import zelisline.ub.support.api.dto.SupportReactionDto;
 import zelisline.ub.support.api.dto.SupportWelcomeCardDto;
 
 /**
@@ -51,6 +54,44 @@ public final class SupportEvents {
             String businessId,
             String conversationId,
             String status,
+            String conversationType,
+            String guestId
+    ) {}
+
+    /**
+     * An emoji reaction was added or removed on a message. {@code summary} is the
+     * message's full per-emoji count after the change (each entry's {@code mine}
+     * is left false here — the client recomputes it against its own identity).
+     */
+    public record SupportReactionEvent(
+            String businessId,
+            String conversationId,
+            String messageId,
+            String emoji,
+            String actorType,
+            String actorRef,
+            /** ADD or REMOVE. */
+            String action,
+            List<SupportReactionDto> summary,
+            String conversationType,
+            String guestId
+    ) {}
+
+    public record SupportMessageEditedEvent(
+            String businessId,
+            String conversationId,
+            String messageId,
+            String body,
+            Instant editedAt,
+            String conversationType,
+            String guestId
+    ) {}
+
+    public record SupportMessageDeletedEvent(
+            String businessId,
+            String conversationId,
+            String messageId,
+            Instant deletedAt,
             String conversationType,
             String guestId
     ) {}

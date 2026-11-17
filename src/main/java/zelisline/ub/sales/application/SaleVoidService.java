@@ -89,6 +89,7 @@ public class SaleVoidService {
     private final BranchResolutionService branchResolutionService;
     private final zelisline.ub.serviceops.application.StaffEarningsService staffEarningsService;
     private final zelisline.ub.restaurant.application.RestaurantSaleSupport restaurantSaleSupport;
+    private final SaleVoidNotifier saleVoidNotifier;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -189,7 +190,9 @@ public class SaleVoidService {
         sale.setVoidJournalEntryId(voidJeId);
         sale.setVoidNotes(blankToNull(req != null ? req.notes() : null));
         saleRepository.save(sale);
-        publishVoidEvents(businessId, sale, shift, userId, cashBack, req != null ? req.notes() : null);
+        String voidReason = req != null ? req.notes() : null;
+        publishVoidEvents(businessId, sale, shift, userId, cashBack, voidReason);
+        saleVoidNotifier.notifyVoided(businessId, sale, userId, voidReason);
         return responseFor(sale);
     }
 

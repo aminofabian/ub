@@ -38,7 +38,10 @@ public class ServingIntakeListener {
                 event.attachment(),
                 event.replyTo(),
                 null,
-                event.createdAt()
+                event.createdAt(),
+                java.util.List.of(),
+                null,
+                null
         );
         servingTicketService.openFromConversation(conversation, dto);
     }

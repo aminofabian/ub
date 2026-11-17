@@ -36,10 +36,13 @@ import zelisline.ub.support.api.dto.SupportConversationDto;
 import zelisline.ub.support.api.dto.SupportMessageDto;
 import zelisline.ub.support.api.dto.SupportMessageReplyDto;
 import zelisline.ub.support.api.dto.SupportOrderCardDto;
+import zelisline.ub.support.api.dto.SupportReactionDto;
 import zelisline.ub.support.api.dto.SupportWelcomeCardDto;
 import zelisline.ub.support.domain.SupportConversation;
 import zelisline.ub.support.domain.SupportMessage;
+import zelisline.ub.support.domain.SupportMessageReaction;
 import zelisline.ub.support.repository.SupportConversationRepository;
+import zelisline.ub.support.repository.SupportMessageReactionRepository;
 import zelisline.ub.support.repository.SupportMessageRepository;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -92,6 +95,7 @@ public class SupportService {
 
     private final SupportConversationRepository conversationRepository;
     private final SupportMessageRepository messageRepository;
+    private final SupportMessageReactionRepository reactionRepository;
     private final BusinessRepository businessRepository;
     private final UserRepository userRepository;
     private final GuestSupportTokenService guestTokens;
@@ -102,6 +106,7 @@ public class SupportService {
     public SupportService(
             SupportConversationRepository conversationRepository,
             SupportMessageRepository messageRepository,
+            SupportMessageReactionRepository reactionRepository,
             BusinessRepository businessRepository,
             UserRepository userRepository,
             GuestSupportTokenService guestTokens,
@@ -111,6 +116,7 @@ public class SupportService {
     ) {
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
+        this.reactionRepository = reactionRepository;
         this.businessRepository = businessRepository;
         this.userRepository = userRepository;
         this.guestTokens = guestTokens;
@@ -480,9 +486,11 @@ public class SupportService {
 
     // ── Tenant side (TENANT thread) ─────────────────────────────────────────
 
-    public SupportConversationDetailDto tenantDetail(String businessId) {
+    public SupportConversationDetailDto tenantDetail(String businessId, String userId) {
+        ReactionViewer viewer = userId == null || userId.isBlank()
+                ? null : new ReactionViewer(SupportMessage.SENDER_TENANT, userId);
         return findByBusinessId(businessId)
-                .map(c -> toDetail(c, businessName(businessId), guestUnread(c)))
+                .map(c -> toDetail(c, businessName(businessId), guestUnread(c), viewer))
                 .orElseGet(() -> new SupportConversationDetailDto(null, List.of()));
     }
 
@@ -536,9 +544,11 @@ public class SupportService {
         return rows.stream().map(c -> toAdminDto(c, businessName(businessId), staffUnread(c))).toList();
     }
 
-    public SupportConversationDetailDto storefrontDetail(String conversationId, String businessId) {
+    public SupportConversationDetailDto storefrontDetail(String conversationId, String businessId, String userId) {
         SupportConversation conversation = requireStorefrontOwned(conversationId, businessId);
-        return toDetail(conversation, businessName(businessId), staffUnread(conversation));
+        ReactionViewer viewer = userId == null || userId.isBlank()
+                ? null : new ReactionViewer(SupportMessage.SENDER_TENANT, userId);
+        return toDetail(conversation, businessName(businessId), staffUnread(conversation), viewer);
     }
 
     @Transactional
@@ -595,9 +605,11 @@ public class SupportService {
                 .toList();
     }
 
-    public SupportConversationDetailDto adminDetail(String conversationId) {
+    public SupportConversationDetailDto adminDetail(String conversationId, String adminUserId) {
         SupportConversation conversation = requirePlatformStaffed(conversationId);
-        return toDetail(conversation, displayName(conversation), staffUnread(conversation));
+        ReactionViewer viewer = adminUserId == null || adminUserId.isBlank()
+                ? null : new ReactionViewer(SupportMessage.SENDER_SUPER_ADMIN, adminUserId);
+        return toDetail(conversation, displayName(conversation), staffUnread(conversation), viewer);
     }
 
     /**
@@ -992,6 +1004,13 @@ public class SupportService {
     }
 
     // ── Internals ───────────────────────────────────────────────────────────
+
+    /** The business's own platform thread, or 404 if it was never opened. */
+    private SupportConversation requireTenantThread(String businessId) {
+        return findByBusinessId(businessId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "No support conversation yet"));
+    }
 
     private SupportConversation requireStorefrontOwned(String conversationId, String businessId) {
         SupportConversation conversation = conversationRepository.findById(conversationId)
@@ -1391,15 +1410,24 @@ public class SupportService {
     private SupportConversationDetailDto toDetail(
             SupportConversation conversation, String displayName, long unreadCount
     ) {
+        return toDetail(conversation, displayName, unreadCount, null);
+    }
+
+    private SupportConversationDetailDto toDetail(
+            SupportConversation conversation, String displayName, long unreadCount, ReactionViewer viewer
+    ) {
         List<SupportMessageDto> messages = toMessageDtos(
-                messageRepository.findByConversationIdOrderByCreatedAtAsc(conversation.getId()));
+                messageRepository.findByConversationIdOrderByCreatedAtAsc(conversation.getId()), viewer);
         return new SupportConversationDetailDto(
                 toAdminDto(conversation, displayName, unreadCount),
                 messages);
     }
 
     private GuestThreadDto guestPayload(SupportConversation conversation, String token) {
-        SupportConversationDetailDto detail = toDetail(conversation, displayName(conversation), guestUnread(conversation));
+        ReactionViewer viewer = conversation.getGuestId() == null || conversation.getGuestId().isBlank()
+                ? null : new ReactionViewer(SupportMessage.SENDER_GUEST, conversation.getGuestId());
+        SupportConversationDetailDto detail = toDetail(
+                conversation, displayName(conversation), guestUnread(conversation), viewer);
         return new GuestThreadDto(detail.conversation(), token, detail.messages());
     }
 
@@ -1468,6 +1496,14 @@ public class SupportService {
     }
 
     private List<SupportMessageDto> toMessageDtos(List<SupportMessage> messages) {
+        return toMessageDtos(messages, null);
+    }
+
+    /**
+     * @param viewer whose perspective drives the {@code mine} flag on reactions;
+     *               null (system/internal reads) yields {@code mine = false}.
+     */
+    private List<SupportMessageDto> toMessageDtos(List<SupportMessage> messages, ReactionViewer viewer) {
         if (messages.isEmpty()) {
             return List.of();
         }
@@ -1479,35 +1515,337 @@ public class SupportService {
                 ? Map.of()
                 : messageRepository.findAllById(replyIds).stream()
                         .collect(Collectors.toMap(SupportMessage::getId, Function.identity()));
+        Map<String, List<SupportReactionDto>> reactions = reactionsByMessage(
+                messages.stream().map(SupportMessage::getId).toList(), viewer);
         return messages.stream()
                 .map(message -> toMessageDto(
                         message,
-                        buildReplyDto(message.getReplyToMessageId(), replyTargets)))
+                        buildReplyDto(message.getReplyToMessageId(), replyTargets),
+                        reactions.getOrDefault(message.getId(), List.of())))
                 .toList();
     }
 
     private SupportMessageDto toMessageDto(SupportMessage message) {
-        return toMessageDto(message, resolveReplyDto(message));
+        return toMessageDto(message, resolveReplyDto(message), List.of());
     }
 
     private SupportMessageDto toMessageDto(SupportMessage message, SupportMessageReplyDto replyTo) {
+        return toMessageDto(message, replyTo, List.of());
+    }
+
+    private SupportMessageDto toMessageDto(
+            SupportMessage message, SupportMessageReplyDto replyTo, List<SupportReactionDto> reactions
+    ) {
+        boolean deleted = message.getDeletedAt() != null;
+        // A tombstone leaks nothing: no body, no attachment, no card, no reactions.
         return new SupportMessageDto(
                 message.getId(),
                 message.getConversationId(),
                 message.getSenderType(),
                 message.getSenderUserId(),
                 message.getSenderName(),
-                message.getBody(),
+                deleted ? "" : message.getBody(),
                 message.getMessageKind() == null || message.getMessageKind().isBlank()
                         ? SupportMessage.KIND_TEXT
                         : message.getMessageKind(),
-                parseOrderCard(message),
-                parseWelcomeCard(message),
-                toAttachmentDto(message),
+                deleted ? null : parseOrderCard(message),
+                deleted ? null : parseWelcomeCard(message),
+                deleted ? null : toAttachmentDto(message),
                 replyTo,
                 message.getReadAt(),
-                message.getCreatedAt()
+                message.getCreatedAt(),
+                deleted || reactions == null ? List.of() : reactions,
+                message.getEditedAt(),
+                message.getDeletedAt()
         );
+    }
+
+    // ── Reactions ───────────────────────────────────────────────────────────
+
+    /** Who is reading, for the per-viewer {@code mine} flag. */
+    record ReactionViewer(String actorType, String actorRef) {}
+
+    private static final int MAX_REACTIONS_PER_ACTOR_PER_MESSAGE = 6;
+
+    /**
+     * Groups a batch of messages' reactions into per-emoji summaries, preserving
+     * first-seen order. One query for the whole thread — no N+1.
+     */
+    private Map<String, List<SupportReactionDto>> reactionsByMessage(
+            List<String> messageIds, ReactionViewer viewer
+    ) {
+        if (messageIds.isEmpty()) {
+            return Map.of();
+        }
+        List<SupportMessageReaction> rows =
+                reactionRepository.findByMessageIdInOrderByCreatedAtAsc(messageIds);
+        if (rows.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Map<String, int[]>> counts = new java.util.LinkedHashMap<>();
+        Map<String, Set<String>> mine = new java.util.HashMap<>();
+        for (SupportMessageReaction r : rows) {
+            counts.computeIfAbsent(r.getMessageId(), k -> new java.util.LinkedHashMap<>())
+                    .computeIfAbsent(r.getEmoji(), k -> new int[1])[0]++;
+            if (viewer != null
+                    && viewer.actorType().equals(r.getActorType())
+                    && viewer.actorRef().equals(r.getActorRef())) {
+                mine.computeIfAbsent(r.getMessageId(), k -> new HashSet<>()).add(r.getEmoji());
+            }
+        }
+        Map<String, List<SupportReactionDto>> out = new java.util.HashMap<>();
+        counts.forEach((messageId, byEmoji) -> {
+            List<SupportReactionDto> list = new ArrayList<>();
+            Set<String> mineHere = mine.getOrDefault(messageId, Set.of());
+            byEmoji.forEach((emoji, count) ->
+                    list.add(new SupportReactionDto(emoji, count[0], mineHere.contains(emoji))));
+            out.put(messageId, list);
+        });
+        return out;
+    }
+
+    private SupportMessageReaction toggleReaction(
+            SupportConversation conversation, String actorType, String actorRef,
+            String messageId, String rawEmoji
+    ) {
+        String emoji = normalizeEmoji(rawEmoji);
+        SupportMessage message = messageRepository.findById(messageId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Message not found"));
+        if (!conversation.getId().equals(message.getConversationId())) {
+            // Never let a reaction target a message in another thread (or tenant).
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Message not found");
+        }
+        String action;
+        Optional<SupportMessageReaction> existing = reactionRepository
+                .findByMessageIdAndActorTypeAndActorRefAndEmoji(messageId, actorType, actorRef, emoji);
+        if (existing.isPresent()) {
+            reactionRepository.delete(existing.get());
+            action = "REMOVE";
+        } else {
+            if (reactionRepository.countByMessageIdAndActorTypeAndActorRef(messageId, actorType, actorRef)
+                    >= MAX_REACTIONS_PER_ACTOR_PER_MESSAGE) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Too many reactions on this message");
+            }
+            SupportMessageReaction reaction = new SupportMessageReaction();
+            reaction.setMessageId(messageId);
+            reaction.setConversationId(conversation.getId());
+            reaction.setBusinessId(conversation.getBusinessId());
+            reaction.setActorType(actorType);
+            reaction.setActorRef(actorRef);
+            reaction.setEmoji(emoji);
+            try {
+                reactionRepository.save(reaction);
+            } catch (DataIntegrityViolationException e) {
+                // Concurrent double-tap: the unique key already holds it. Treat as present.
+            }
+            action = "ADD";
+        }
+
+        List<SupportReactionDto> summary = reactionsByMessage(List.of(messageId), null)
+                .getOrDefault(messageId, List.of());
+        eventPublisher.publishEvent(new SupportEvents.SupportReactionEvent(
+                conversation.getBusinessId(), conversation.getId(), messageId,
+                emoji, actorType, actorRef, action, summary,
+                conversation.getConversationType(), conversation.getGuestId()));
+        return existing.orElse(null);
+    }
+
+    private static String normalizeEmoji(String raw) {
+        String emoji = raw == null ? "" : raw.trim();
+        if (emoji.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Emoji is required");
+        }
+        // One short emoji cluster. Codepoint count, not char count (emoji are
+        // multi-char). Lets through ZWJ sequences (e.g. 👩‍💻) while blocking text.
+        int codepoints = emoji.codePointCount(0, emoji.length());
+        if (emoji.length() > 32 || codepoints > 8) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Not a valid emoji");
+        }
+        boolean hasSymbol = emoji.codePoints().anyMatch(cp ->
+                Character.getType(cp) == Character.OTHER_SYMBOL
+                        || cp >= 0x1F000);
+        if (!hasSymbol) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Not a valid emoji");
+        }
+        return emoji;
+    }
+
+    // Public toggle entry points — one per surface, each reusing that surface's
+    // existing ownership guard so cross-tenant access is impossible.
+
+    @Transactional
+    public List<SupportReactionDto> toggleTenantReaction(
+            String businessId, String userId, String messageId, String emoji
+    ) {
+        SupportConversation conversation = findByBusinessId(businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No support conversation yet"));
+        toggleReaction(conversation, SupportMessage.SENDER_TENANT, userId, messageId, emoji);
+        return reactionsByMessage(List.of(messageId), new ReactionViewer(SupportMessage.SENDER_TENANT, userId))
+                .getOrDefault(messageId, List.of());
+    }
+
+    @Transactional
+    public List<SupportReactionDto> toggleStorefrontStaffReaction(
+            String conversationId, String businessId, String userId, String messageId, String emoji
+    ) {
+        SupportConversation conversation = requireStorefrontOwned(conversationId, businessId);
+        toggleReaction(conversation, SupportMessage.SENDER_TENANT, userId, messageId, emoji);
+        return reactionsByMessage(List.of(messageId), new ReactionViewer(SupportMessage.SENDER_TENANT, userId))
+                .getOrDefault(messageId, List.of());
+    }
+
+    @Transactional
+    public List<SupportReactionDto> toggleAdminReaction(
+            String conversationId, String adminUserId, String messageId, String emoji
+    ) {
+        SupportConversation conversation = requirePlatformStaffed(conversationId);
+        toggleReaction(conversation, SupportMessage.SENDER_SUPER_ADMIN, adminUserId, messageId, emoji);
+        return reactionsByMessage(List.of(messageId), new ReactionViewer(SupportMessage.SENDER_SUPER_ADMIN, adminUserId))
+                .getOrDefault(messageId, List.of());
+    }
+
+    @Transactional
+    public List<SupportReactionDto> toggleGuestReaction(
+            String conversationId, String guestId, String token, String messageId, String emoji
+    ) {
+        SupportConversation conversation = requireGuestThread(conversationId, guestId, token);
+        toggleReaction(conversation, SupportMessage.SENDER_GUEST, guestId, messageId, emoji);
+        return reactionsByMessage(List.of(messageId), new ReactionViewer(SupportMessage.SENDER_GUEST, guestId))
+                .getOrDefault(messageId, List.of());
+    }
+
+    // ── Edit / delete (unsend) ──────────────────────────────────────────────
+
+    /** How long after sending a message may still be edited. */
+    private static final java.time.Duration EDIT_WINDOW = java.time.Duration.ofMinutes(15);
+
+    private SupportMessage requireOwnMessage(
+            SupportConversation conversation, String actorType, String actorRef, String messageId
+    ) {
+        SupportMessage message = messageRepository.findById(messageId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Message not found"));
+        if (!conversation.getId().equals(message.getConversationId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Message not found");
+        }
+        // You may only edit/delete your own message.
+        if (!actorType.equals(message.getSenderType())
+                || !actorRef.equals(message.getSenderUserId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not your message");
+        }
+        return message;
+    }
+
+    private SupportMessageDto editMessage(
+            SupportConversation conversation, String actorType, String actorRef,
+            String messageId, String rawBody
+    ) {
+        SupportMessage message = requireOwnMessage(conversation, actorType, actorRef, messageId);
+        if (message.getDeletedAt() != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Message was deleted");
+        }
+        String kind = message.getMessageKind();
+        if (kind != null && !kind.isBlank() && !SupportMessage.KIND_TEXT.equals(kind)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only text messages can be edited");
+        }
+        if (message.getAttachmentUrl() != null && !message.getAttachmentUrl().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Messages with attachments cannot be edited");
+        }
+        if (message.getCreatedAt() != null
+                && message.getCreatedAt().plus(EDIT_WINDOW).isBefore(Instant.now())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Edit window has passed");
+        }
+        String body = normalizeBody(rawBody, null);
+        message.setBody(body);
+        message.setEditedAt(Instant.now());
+        messageRepository.save(message);
+
+        SupportMessage last = messageRepository
+                .findTopByConversationIdOrderByCreatedAtDesc(conversation.getId()).orElse(null);
+        if (last != null && last.getId().equals(message.getId())) {
+            conversation.setLastMessagePreview(previewOf(body, null));
+            conversationRepository.save(conversation);
+        }
+
+        eventPublisher.publishEvent(new SupportEvents.SupportMessageEditedEvent(
+                conversation.getBusinessId(), conversation.getId(), message.getId(),
+                body, message.getEditedAt(),
+                conversation.getConversationType(), conversation.getGuestId()));
+        return toMessageDto(message, resolveReplyDto(message), List.of());
+    }
+
+    private SupportMessageDto deleteMessage(
+            SupportConversation conversation, String actorType, String actorRef, String messageId
+    ) {
+        SupportMessage message = requireOwnMessage(conversation, actorType, actorRef, messageId);
+        if (message.getDeletedAt() == null) {
+            message.setDeletedAt(Instant.now());
+            messageRepository.save(message);
+
+            SupportMessage last = messageRepository
+                    .findTopByConversationIdOrderByCreatedAtDesc(conversation.getId()).orElse(null);
+            if (last != null && last.getId().equals(message.getId())) {
+                conversation.setLastMessagePreview("Message deleted");
+                conversationRepository.save(conversation);
+            }
+
+            eventPublisher.publishEvent(new SupportEvents.SupportMessageDeletedEvent(
+                    conversation.getBusinessId(), conversation.getId(), message.getId(),
+                    message.getDeletedAt(),
+                    conversation.getConversationType(), conversation.getGuestId()));
+        }
+        return toMessageDto(message, resolveReplyDto(message), List.of());
+    }
+
+    @Transactional
+    public SupportMessageDto editTenantMessage(String businessId, String userId, String messageId, String body) {
+        return editMessage(requireTenantThread(businessId),
+                SupportMessage.SENDER_TENANT, userId, messageId, body);
+    }
+
+    @Transactional
+    public SupportMessageDto deleteTenantMessage(String businessId, String userId, String messageId) {
+        return deleteMessage(requireTenantThread(businessId),
+                SupportMessage.SENDER_TENANT, userId, messageId);
+    }
+
+    @Transactional
+    public SupportMessageDto editStorefrontStaffMessage(
+            String conversationId, String businessId, String userId, String messageId, String body) {
+        return editMessage(requireStorefrontOwned(conversationId, businessId),
+                SupportMessage.SENDER_TENANT, userId, messageId, body);
+    }
+
+    @Transactional
+    public SupportMessageDto deleteStorefrontStaffMessage(
+            String conversationId, String businessId, String userId, String messageId) {
+        return deleteMessage(requireStorefrontOwned(conversationId, businessId),
+                SupportMessage.SENDER_TENANT, userId, messageId);
+    }
+
+    @Transactional
+    public SupportMessageDto editAdminMessage(String conversationId, String adminUserId, String messageId, String body) {
+        return editMessage(requirePlatformStaffed(conversationId),
+                SupportMessage.SENDER_SUPER_ADMIN, adminUserId, messageId, body);
+    }
+
+    @Transactional
+    public SupportMessageDto deleteAdminMessage(String conversationId, String adminUserId, String messageId) {
+        return deleteMessage(requirePlatformStaffed(conversationId),
+                SupportMessage.SENDER_SUPER_ADMIN, adminUserId, messageId);
+    }
+
+    @Transactional
+    public SupportMessageDto editGuestMessage(
+            String conversationId, String guestId, String token, String messageId, String body) {
+        return editMessage(requireGuestThread(conversationId, guestId, token),
+                SupportMessage.SENDER_GUEST, guestId, messageId, body);
+    }
+
+    @Transactional
+    public SupportMessageDto deleteGuestMessage(
+            String conversationId, String guestId, String token, String messageId) {
+        return deleteMessage(requireGuestThread(conversationId, guestId, token),
+                SupportMessage.SENDER_GUEST, guestId, messageId);
     }
 
     private SupportMessageReplyDto resolveReplyDto(SupportMessage message) {
@@ -1543,6 +1881,9 @@ public class SupportService {
     }
 
     private static String replyPreviewBody(SupportMessage message) {
+        if (message.getDeletedAt() != null) {
+            return "Deleted message";
+        }
         if (SupportMessage.KIND_ORDER_CARD.equals(message.getMessageKind())) {
             return "Online order";
         }

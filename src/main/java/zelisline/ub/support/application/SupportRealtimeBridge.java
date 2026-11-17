@@ -158,6 +158,58 @@ public class SupportRealtimeBridge {
                 "support.conversation", eventId, payload);
     }
 
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onReaction(SupportEvents.SupportReactionEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        // DTO-serialized (not hand-formatted) — reactions grow in shape, and
+        // ObjectMapper escapes the emoji and nested summary correctly.
+        String payload = toJsonOrNull(java.util.Map.of(
+                "conversationId", event.conversationId(),
+                "messageId", event.messageId(),
+                "emoji", event.emoji(),
+                "actorType", event.actorType(),
+                "actorRef", event.actorRef(),
+                "action", event.action(),
+                "reactions", event.summary(),
+                "conversationType", event.conversationType() == null ? "" : event.conversationType()));
+        if ("null".equals(payload)) {
+            return;
+        }
+        fanOut(event.businessId(), event.conversationType(), event.guestId(),
+                "support.reaction", eventId, payload);
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onMessageEdited(SupportEvents.SupportMessageEditedEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        String payload = toJsonOrNull(java.util.Map.of(
+                "conversationId", event.conversationId(),
+                "messageId", event.messageId(),
+                "body", event.body(),
+                "editedAt", event.editedAt().toString(),
+                "conversationType", event.conversationType() == null ? "" : event.conversationType()));
+        if ("null".equals(payload)) {
+            return;
+        }
+        fanOut(event.businessId(), event.conversationType(), event.guestId(),
+                "support.message.edited", eventId, payload);
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onMessageDeleted(SupportEvents.SupportMessageDeletedEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        String payload = toJsonOrNull(java.util.Map.of(
+                "conversationId", event.conversationId(),
+                "messageId", event.messageId(),
+                "deletedAt", event.deletedAt().toString(),
+                "conversationType", event.conversationType() == null ? "" : event.conversationType()));
+        if ("null".equals(payload)) {
+            return;
+        }
+        fanOut(event.businessId(), event.conversationType(), event.guestId(),
+                "support.message.deleted", eventId, payload);
+    }
+
     private void fanOut(String businessId, String conversationType, String guestId,
                         String type, String eventId, String payload) {
         Set<String> tenantSessions = Set.of();

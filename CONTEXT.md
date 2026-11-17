@@ -85,6 +85,11 @@
 * **Can make** — how many portions of a dish the branch's usable stock allows, if only that dish were made (ADR 0026): the smallest, over the dish's counted ingredients, of usable stock divided by what one portion takes from stock, rounded down. `RecipeService.makeable` is the only place it is worked out. Two dishes sharing an ingredient each see all of it. It is advice and never refuses a sale.
 * **Usable stock** — what is left in a branch's active batches that have not expired, read through `StockOnHandReader`. An ingredient's stand-in counts with it. An ingredient that is not stocked (salt, water) is not counted and never limits a dish.
 * **Must use today** — the part of a dish's can-make that depends on stock whose batch expires today.
+* **Pantry** — a branch's ingredients restated as portions (`PantryService`, ADR 0026): what each dish can make, how long that lasts, what expires within three days, what was last paid for it, and what was lost in the last seven days. Read-only except for a loss.
+* **Days of cover** — a dish's can-make divided by its average daily sales at the branch over the last fourteen days. None when it has not sold.
+* **Stated dish** — the dish an ingredient's stock or loss is counted in: of the dishes that use it, the one that sells most (by name when none has sold).
+* **Service plan** — portions per dish for a coming service, turned into what must be bought: each ingredient's need added up across the dishes, less usable stock, priced at the last unit cost paid (else the product's buying price). A calculation; nothing is stored. The shortfall goes to the order pad.
+* **Kitchen loss** — an ingredient written off from the pantry as spoiled, broken, expired or other. It is inventory's standalone wastage (`recordStandaloneWastage`: one stock movement, Dr `INVENTORY_SHRINKAGE` / Cr `INVENTORY`), allowed only for a product that is an ingredient of a dish on the menu, and never for more than is on the shelf. A loss given as expired is taken from the batches past their date first; inventory prices it at what those batches cost.
 
 ## Restaurant: charges, delivery, batches, timed menus and QR ordering (ADR 0020, amendment 3)
 

@@ -92,6 +92,28 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, St
             @Param("itemIds") Collection<String> itemIds
     );
 
+    /**
+     * What was written off as waste at a branch over a window, per item and reason: the quantity
+     * (negative) and its cost (negative). For the pantry's losses (ADR 0026). {@code [from, to)}.
+     */
+    @Query("""
+            SELECT m.itemId, m.wastageReason, COALESCE(SUM(m.quantityDelta), 0),
+                   COALESCE(SUM(m.quantityDelta * COALESCE(m.unitCost, 0)), 0)
+              FROM StockMovement m
+             WHERE m.businessId = :businessId
+               AND m.branchId = :branchId
+               AND m.movementType = 'wastage'
+               AND m.createdAt >= :from
+               AND m.createdAt < :to
+             GROUP BY m.itemId, m.wastageReason
+            """)
+    List<Object[]> sumWastageByItemAndReason(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("from") Instant from,
+            @Param("to") Instant to
+    );
+
     List<StockMovement> findByBatchId(String batchId);
 
     List<StockMovement> findByBusinessIdAndItemIdOrderByCreatedAtDesc(

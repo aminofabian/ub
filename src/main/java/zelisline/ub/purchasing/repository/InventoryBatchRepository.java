@@ -324,6 +324,56 @@ public interface InventoryBatchRepository extends JpaRepository<InventoryBatch, 
             @Param("until") LocalDate until
     );
 
+    /**
+     * Stock at a branch whose batch expires within a window, per item: how much, and the first date.
+     * For the pantry's use-first list (ADR 0026). Scoped by business and branch.
+     */
+    @Query("""
+            select b.itemId, coalesce(sum(b.quantityRemaining), 0), min(b.expiryDate)
+              from InventoryBatch b
+             where b.businessId = :businessId
+               and b.branchId = :branchId
+               and b.status = 'active'
+               and b.quantityRemaining > 0
+               and b.itemId in :itemIds
+               and b.expiryDate is not null
+               and b.expiryDate >= :fromDay
+               and b.expiryDate <= :untilDay
+             group by b.itemId
+            """)
+    List<Object[]> sumExpiringForItemsAtBranch(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("itemIds") Collection<String> itemIds,
+            @Param("fromDay") LocalDate fromDay,
+            @Param("untilDay") LocalDate untilDay
+    );
+
+    /**
+     * For each of these items, the newest batch bought from a supplier at a branch since a time:
+     * one row an item (more only when two deliveries share the same instant).
+     */
+    @Query("""
+            select b from InventoryBatch b
+             where b.businessId = :businessId
+               and b.branchId = :branchId
+               and b.itemId in :itemIds
+               and b.supplierId is not null
+               and b.receivedAt = (
+                    select max(n.receivedAt) from InventoryBatch n
+                     where n.businessId = :businessId
+                       and n.branchId = :branchId
+                       and n.itemId = b.itemId
+                       and n.supplierId is not null
+                       and n.receivedAt >= :since)
+            """)
+    List<InventoryBatch> findNewestPurchaseForItemsAtBranchSince(
+            @Param("businessId") String businessId,
+            @Param("branchId") String branchId,
+            @Param("itemIds") Collection<String> itemIds,
+            @Param("since") java.time.Instant since
+    );
+
     List<InventoryBatch> findBySupplyBatchId(String supplyBatchId);
 
     List<InventoryBatch> findBySupplyBatchIdAndStatus(String supplyBatchId, String status);

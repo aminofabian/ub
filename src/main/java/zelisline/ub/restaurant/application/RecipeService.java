@@ -342,14 +342,21 @@ public class RecipeService {
     }
 
     /**
-     * For every dish with a recipe, how many portions the branch's usable stock can produce. A dish
-     * is counted on its own: two dishes sharing an ingredient each see all of it. Only stocked
-     * ingredients limit a dish; one made only of things that are not counted (salt, water) is left
-     * out of the result, as is a dish with no recipe. An ingredient's stand-in counts with it.
-     * Choices on a dish are not included. Read-only, and never a reason to refuse a sale.
+     * What each dish takes from stock per portion, of counted ingredients only, in recipe order.
+     *
+     * @param perPortionByDish dish id to (ingredient id to what one portion takes)
+     * @param standInsByDish   dish id to (ingredient id to the products that may stand in for it)
+     * @param ingredients      the counted ingredients and stand-ins named above, by id
      */
+    public record Needs(
+            Map<String, Map<String, BigDecimal>> perPortionByDish,
+            Map<String, Map<String, List<String>>> standInsByDish,
+            Map<String, Item> ingredients) {
+    }
+
+    /** Every dish's use of counted ingredients. A dish with none is left out. Choices are not included. */
     @Transactional(readOnly = true)
-    public Map<String, Makeable> makeable(String businessId, String branchId) {
+    public Needs needs(String businessId) {
         Map<String, List<RecipeLine>> byDish = new HashMap<>();
         Set<String> itemIds = new HashSet<>();
         for (RecipeLine line : recipeRepository.findByBusinessId(businessId)) {
@@ -362,29 +369,17 @@ public class RecipeService {
                 itemIds.add(line.getSubstituteItemId());
             }
         }
-        Map<String, Makeable> out = new HashMap<>();
-        if (byDish.isEmpty()) {
-            return out;
-        }
         Map<String, Item> stocked = new HashMap<>();
-        for (Item item : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)) {
-            if (item.isStocked()) {
-                stocked.put(item.getId(), item);
+        if (!itemIds.isEmpty()) {
+            for (Item item : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)) {
+                if (item.isStocked()) {
+                    stocked.put(item.getId(), item);
+                }
             }
         }
-        Map<String, StockOnHandReader.Usable> stock = stockOnHandReader.usableByItemAtBranch(
-                businessId, branchId, stocked.keySet(), java.time.LocalDate.now(NAIROBI));
-
-        Map<String, BigDecimal> usable = new HashMap<>();
-        Map<String, BigDecimal> usableAfterToday = new HashMap<>();
-        stock.forEach((id, have) -> {
-            usable.put(id, have.usable());
-            usableAfterToday.put(id, have.usable().subtract(have.expiringToday()));
-        });
-
+        Map<String, Map<String, BigDecimal>> perPortionByDish = new HashMap<>();
+        Map<String, Map<String, List<String>>> standInsByDish = new HashMap<>();
         for (Map.Entry<String, List<RecipeLine>> dish : byDish.entrySet()) {
-            // What one portion takes of each counted ingredient, in the recipe's own order, and what
-            // may stand in for it.
             List<RecipeLine> lines = new ArrayList<>(dish.getValue());
             lines.sort(java.util.Comparator.comparingInt(RecipeLine::getSortOrder));
             Map<String, BigDecimal> perPortion = new java.util.LinkedHashMap<>();
@@ -402,9 +397,47 @@ public class RecipeService {
                     }
                 }
             }
-            if (perPortion.isEmpty()) {
-                continue;
+            if (!perPortion.isEmpty()) {
+                perPortionByDish.put(dish.getKey(), perPortion);
+                standInsByDish.put(dish.getKey(), standIns);
             }
+        }
+        return new Needs(perPortionByDish, standInsByDish, stocked);
+    }
+
+    /**
+     * For every dish with a recipe, how many portions the branch's usable stock can produce. A dish
+     * is counted on its own: two dishes sharing an ingredient each see all of it. Only stocked
+     * ingredients limit a dish; one made only of things that are not counted (salt, water) is left
+     * out of the result, as is a dish with no recipe. An ingredient's stand-in counts with it.
+     * Choices on a dish are not included. Read-only, and never a reason to refuse a sale.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Makeable> makeable(String businessId, String branchId) {
+        return makeable(businessId, branchId, needs(businessId));
+    }
+
+    /** As {@link #makeable(String, String)}, for a caller that has already read the recipes. */
+    @Transactional(readOnly = true)
+    public Map<String, Makeable> makeable(String businessId, String branchId, Needs needs) {
+        Map<String, Makeable> out = new HashMap<>();
+        if (needs.perPortionByDish().isEmpty()) {
+            return out;
+        }
+        Map<String, Item> stocked = needs.ingredients();
+        Map<String, StockOnHandReader.Usable> stock = stockOnHandReader.usableByItemAtBranch(
+                businessId, branchId, stocked.keySet(), java.time.LocalDate.now(NAIROBI));
+
+        Map<String, BigDecimal> usable = new HashMap<>();
+        Map<String, BigDecimal> usableAfterToday = new HashMap<>();
+        stock.forEach((id, have) -> {
+            usable.put(id, have.usable());
+            usableAfterToday.put(id, have.usable().subtract(have.expiringToday()));
+        });
+
+        for (Map.Entry<String, Map<String, BigDecimal>> dish : needs.perPortionByDish().entrySet()) {
+            Map<String, BigDecimal> perPortion = dish.getValue();
+            Map<String, List<String>> standIns = needs.standInsByDish().getOrDefault(dish.getKey(), Map.of());
             long canMake = most(perPortion, standIns, usable);
             String shortFirst = shortAt(canMake + 1, perPortion, standIns, usable);
             long afterToday = most(perPortion, standIns, usableAfterToday);

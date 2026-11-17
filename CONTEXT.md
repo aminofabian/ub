@@ -108,3 +108,11 @@
 * **Business day** — reports count a day from `day_starts_at_minute`, Nairobi time, to the same minute the next day.
 * **Table QR code** — `service_resources.qr_token`, a 48-character random secret an owner can replace. `PublicTableOrderService` lets a customer who scans it add **unsent** lines to the table's open order; staff must send them. Works only while `qr_ordering` is on, and only under the business's own slug.
 * **Order number on a receipt** — a restaurant sale's receipt footer starts with `Order N`: the counter order it produced or the table order whose bill it paid.
+
+## Lodging: rooms, stays and the folio (ADR 0028)
+
+* **Room** — a `service_resources` row of type `ROOM` with a nightly rate (`nightly_rate`). Managed at the front desk (`/api/v1/rooms`), kept off the service floor and the restaurant floor like a table. A lodging tenant is a bar or restaurant that also lets rooms, so managing rooms reuses `restaurant.menu.manage`.
+* **Stay** — an open order on channel `LODGING`, booked for later: `pos_drafts` with `service_stage = BOOKED`, `scheduled_start`/`scheduled_end` the check-in and check-out, `table_resource_id` the room. Two stays cannot hold one room over overlapping nights. Its folio is the open order; lines, bills and payment reuse the restaurant open-order path.
+* **Check-in** — seating the booking. It charges the room for all its nights at once: one `sale_items` row with `line_kind = ROOM`, quantity the nights, unit price the nightly rate **frozen onto the line at check-in** (a later rate change never moves a live folio). No item, no batch, no stock movement.
+* **Room-night revenue** — a `ROOM` line posts to `ROOM_REVENUE` (4020), separate from `SALES_REVENUE` (4000) and `SERVICE_REVENUE` (4010). The sale's revenue split is three-way (goods, services, rooms) in the sale and void journals. A room night cannot be refunded line by line (no item), so only a void reverses it; the void split mirrors the sale.
+* **Charge to the room** — bar and kitchen lines are added to the stay order; stock moves when the line is added, the money when the folio settles. Checkout settles the whole folio as one sale (`BillService.pay`, key `bill-<id>`); a held deposit (`CUSTOMER_DEPOSITS` 2320, via `HeldMoneyService`) is applied as a wallet tender.

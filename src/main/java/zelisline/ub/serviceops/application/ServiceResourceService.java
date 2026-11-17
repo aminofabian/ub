@@ -40,6 +40,8 @@ public class ServiceResourceService {
     public static final String TYPE_CHAIR = "CHAIR";
     /** A restaurant table. Never used by a service, never given a chair number. */
     public static final String TYPE_TABLE = "TABLE";
+    /** A lodging room. Booked for a stay; carries a nightly rate. Never used by a service. */
+    public static final String TYPE_ROOM = "ROOM";
     private static final int MAX_RESOURCES = 200;
 
     private final ServiceResourceRepository resourceRepository;
@@ -50,10 +52,11 @@ public class ServiceResourceService {
     /** Resources of a branch with what each is doing now. Creates the numbered chairs if they are missing. */
     @Transactional
     public List<ResourceResponse> list(String businessId, String branchId) {
-        // A restaurant's tables live in the same table but are not places a service is done:
-        // a shop with both a salon floor and a dining room must not see tables among its chairs.
+        // A restaurant's tables and a guest house's rooms live in the same table but are not places
+        // a service is done: a shop with a salon floor, a dining room and rooms upstairs must not see
+        // any of those among its chairs.
         List<ServiceResource> rows = ensureForStations(businessId, branchId).stream()
-                .filter(r -> !TYPE_TABLE.equals(r.getResourceType()))
+                .filter(r -> !TYPE_TABLE.equals(r.getResourceType()) && !TYPE_ROOM.equals(r.getResourceType()))
                 .toList();
         Map<String, String> busy = new HashMap<>();
         for (PosDraftLine line : lineRepository.findInServiceAtBranch(businessId, branchId.trim())) {
@@ -111,7 +114,11 @@ public class ServiceResourceService {
         if (TYPE_TABLE.equals(request.resourceType())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Add tables from the restaurant floor");
         }
-        if (rows.stream().filter(r -> !TYPE_TABLE.equals(r.getResourceType())).count() >= MAX_RESOURCES) {
+        if (TYPE_ROOM.equals(request.resourceType())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Add rooms from the front desk");
+        }
+        if (rows.stream().filter(r -> !TYPE_TABLE.equals(r.getResourceType()) && !TYPE_ROOM.equals(r.getResourceType()))
+                .count() >= MAX_RESOURCES) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This branch already has " + MAX_RESOURCES + " resources");
         }
         ServiceResource row = new ServiceResource();
@@ -128,10 +135,13 @@ public class ServiceResourceService {
     @Transactional
     public ResourceResponse update(String businessId, String resourceId, UpdateResourceRequest request) {
         ServiceResource row = resourceRepository.findByIdAndBusinessIdForUpdate(resourceId, businessId)
-                .filter(r -> !TYPE_TABLE.equals(r.getResourceType()))
+                .filter(r -> !TYPE_TABLE.equals(r.getResourceType()) && !TYPE_ROOM.equals(r.getResourceType()))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Resource not found"));
         if (TYPE_TABLE.equals(request.resourceType())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Add tables from the restaurant floor");
+        }
+        if (TYPE_ROOM.equals(request.resourceType())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Add rooms from the front desk");
         }
         boolean takingOutOfUse = Boolean.FALSE.equals(request.active())
                 || (request.blockedUntil() != null && request.blockedUntil().isAfter(Instant.now()));
@@ -181,7 +191,7 @@ public class ServiceResourceService {
     @Transactional
     public ServiceResource claim(String businessId, String branchId, String resourceId, String forLineId, String serviceId) {
         ServiceResource row = resourceRepository.findByIdAndBusinessIdForUpdate(resourceId, businessId)
-                .filter(r -> !TYPE_TABLE.equals(r.getResourceType()))
+                .filter(r -> !TYPE_TABLE.equals(r.getResourceType()) && !TYPE_ROOM.equals(r.getResourceType()))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Resource not found"));
         if (!row.getBranchId().equals(branchId)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, row.getName() + " is at another branch");
@@ -363,6 +373,94 @@ public class ServiceResourceService {
         return new TableRecord(row.getId(), row.getBranchId(), row.getName(), row.getCapacity(), row.getArea(),
                 row.isActive(), row.getSortOrder(), row.getQrToken(), row.getBusinessId(),
                 row.getAssignedStaffProfileId());
+    }
+
+    // ------------------------------------------------------------------ lodging rooms (ADR 0028)
+
+    /**
+     * A room a guest house lets. Stored as a resource of type {@code ROOM}; a stay's occupancy is the
+     * booking order's business, like a table. {@code area} is the floor or wing it is on.
+     */
+    public record RoomRecord(
+            String id, String branchId, String name, java.math.BigDecimal nightlyRate, String area,
+            boolean active, int sortOrder, String businessId) {
+    }
+
+    /** The rooms of a branch. Like {@link #tables}, never creates the numbered chairs. */
+    @Transactional(readOnly = true)
+    public List<RoomRecord> rooms(String businessId, String branchId) {
+        return resourceRepository
+                .findByBusinessIdAndBranchIdAndResourceTypeOrderBySortOrderAscNameAsc(businessId, branchId.trim(), TYPE_ROOM)
+                .stream().map(ServiceResourceService::toRoom).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.Optional<RoomRecord> room(String businessId, String roomId) {
+        return resourceRepository.findByIdAndBusinessId(roomId, businessId)
+                .filter(r -> TYPE_ROOM.equals(r.getResourceType()))
+                .map(ServiceResourceService::toRoom);
+    }
+
+    @Transactional
+    public RoomRecord createRoom(
+            String businessId, String branchId, String name, java.math.BigDecimal nightlyRate, String area) {
+        List<ServiceResource> rows = resourceRepository
+                .findByBusinessIdAndBranchIdAndResourceTypeOrderBySortOrderAscNameAsc(businessId, branchId.trim(), TYPE_ROOM);
+        if (rows.size() >= MAX_RESOURCES) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This branch already has " + MAX_RESOURCES + " rooms");
+        }
+        ServiceResource row = new ServiceResource();
+        row.setBusinessId(businessId);
+        row.setBranchId(branchId.trim());
+        row.setName(name.trim());
+        row.setResourceType(TYPE_ROOM);
+        row.setNightlyRate(requireRate(nightlyRate));
+        row.setArea(area == null || area.isBlank() ? null : area.trim());
+        row.setSortOrder(rows.stream().mapToInt(ServiceResource::getSortOrder).max().orElse(0) + 1);
+        saveUnique(row);
+        return toRoom(row);
+    }
+
+    /** Null leaves a field as it is; a blank area clears it. */
+    @Transactional
+    public RoomRecord updateRoom(
+            String businessId, String roomId, String name, java.math.BigDecimal nightlyRate, String area, Boolean active) {
+        ServiceResource row = resourceRepository.findByIdAndBusinessIdForUpdate(roomId, businessId)
+                .filter(r -> TYPE_ROOM.equals(r.getResourceType()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Room not found"));
+        if (name != null && !name.isBlank()) {
+            row.setName(name.trim());
+        }
+        if (nightlyRate != null) {
+            row.setNightlyRate(requireRate(nightlyRate));
+        }
+        if (area != null) {
+            row.setArea(area.isBlank() ? null : area.trim());
+        }
+        if (active != null) {
+            row.setActive(active);
+        }
+        saveUnique(row);
+        return toRoom(row);
+    }
+
+    /** A positive KES amount with at most two decimal places, under a million a night. */
+    private static java.math.BigDecimal requireRate(java.math.BigDecimal rate) {
+        if (rate == null || rate.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A room needs a nightly rate above zero");
+        }
+        if (rate.scale() > 2) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A nightly rate has at most two decimal places");
+        }
+        if (rate.compareTo(new java.math.BigDecimal("1000000")) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That nightly rate is too high");
+        }
+        return rate.setScale(2, java.math.RoundingMode.UNNECESSARY);
+    }
+
+    private static RoomRecord toRoom(ServiceResource row) {
+        return new RoomRecord(row.getId(), row.getBranchId(), row.getName(), row.getNightlyRate(), row.getArea(),
+                row.isActive(), row.getSortOrder(), row.getBusinessId());
     }
 
     private void saveUnique(ServiceResource row) {

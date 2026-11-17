@@ -131,7 +131,10 @@ public class DineInService {
     @Transactional(readOnly = true)
     public FloorResponse floor(String businessId, String branchId) {
         gate.requireEnabled(businessId);
-        List<OrderTicketService.Order> open = new ArrayList<>(orderTicketService.openOrders(businessId, branchId));
+        // A stay lives on the front desk, not the restaurant floor: keep lodging orders out of it.
+        List<OrderTicketService.Order> open = orderTicketService.openOrders(businessId, branchId).stream()
+                .filter(o -> !OrderTicketService.CHANNEL_LODGING.equals(o.channel()))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
         // A delivery that was paid up front is closed, but it is not done until it is delivered.
         open.addAll(orderTicketService.settledDeliveriesNotDelivered(businessId, branchId));
         Map<String, String> names = staffNames(businessId, open);
@@ -161,6 +164,49 @@ public class DineInService {
         return new FloorResponse(branchId, Instant.now(), tables, others);
     }
 
+    // ------------------------------------------------------------------ the front desk
+
+    /** Every room of a branch with its stays (in-house and booked), and stays whose room is gone. */
+    @Transactional(readOnly = true)
+    public zelisline.ub.restaurant.api.dto.RoomDtos.FrontDeskResponse frontDesk(String businessId, String branchId) {
+        gate.requireEnabled(businessId);
+        List<OrderTicketService.Order> stays = orderTicketService.openOrders(businessId, branchId).stream()
+                .filter(o -> OrderTicketService.CHANNEL_LODGING.equals(o.channel()))
+                .toList();
+        Map<String, String> names = staffNames(businessId, stays);
+        Map<String, List<OrderCard>> byRoom = new HashMap<>();
+        List<OrderCard> others = new ArrayList<>();
+        for (OrderTicketService.Order stay : stays) {
+            OrderCard card = toCard(businessId, stay, names);
+            if (stay.tableResourceId() == null) {
+                others.add(card);
+            } else {
+                byRoom.computeIfAbsent(stay.tableResourceId(), k -> new ArrayList<>()).add(card);
+            }
+        }
+        List<zelisline.ub.restaurant.api.dto.RoomDtos.RoomWithStays> rooms = new ArrayList<>();
+        for (ServiceResourceService.RoomRecord room : resourceService.rooms(businessId, branchId)) {
+            List<OrderCard> cards = byRoom.remove(room.id());
+            if (room.active() || cards != null) {
+                rooms.add(new zelisline.ub.restaurant.api.dto.RoomDtos.RoomWithStays(toRoomResponse(room),
+                        cards == null ? List.of() : cards));
+            }
+        }
+        // A stay on a room that no longer exists must not vanish from the desk.
+        for (List<OrderCard> orphaned : byRoom.values()) {
+            others.addAll(orphaned);
+        }
+        return new zelisline.ub.restaurant.api.dto.RoomDtos.FrontDeskResponse(
+                branchId, Instant.now(), rooms, others);
+    }
+
+    private static zelisline.ub.restaurant.api.dto.RoomDtos.RoomResponse toRoomResponse(
+            ServiceResourceService.RoomRecord room) {
+        return new zelisline.ub.restaurant.api.dto.RoomDtos.RoomResponse(
+                room.id(), room.branchId(), room.name(), room.nightlyRate(), room.area(), room.active(),
+                room.sortOrder());
+    }
+
     // ------------------------------------------------------------------ an order
 
     @Transactional
@@ -168,13 +214,23 @@ public class DineInService {
         gate.requireEnabled(businessId);
         String channel = request.channel().trim().toUpperCase(java.util.Locale.ROOT);
         String tableId = blankToNull(request.tableId());
+        boolean lodging = OrderTicketService.CHANNEL_LODGING.equals(channel);
+        // A stay is a booking on a room: the tableId field carries the room, and both dates are required.
+        if (lodging) {
+            if (tableId == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a room for the stay");
+            }
+            requireRoom(businessId, branchId, tableId);
+            requireRoomFreeForStay(businessId, branchId, tableId, request.scheduledStart(),
+                    request.scheduledEnd(), null);
+        }
         // A dine-in order needs a table, unless it is a booking for later or a named tab (a bar runs
         // tabs under a name with no table; it can be seated at a table later with move).
         if (OrderTicketService.CHANNEL_DINE_IN.equals(channel) && tableId == null
                 && request.scheduledStart() == null && blankToNull(request.customerName()) == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a table, or name the tab");
         }
-        if (tableId != null) {
+        if (tableId != null && !lodging) {
             requireTable(businessId, branchId, tableId);
             if (request.scheduledStart() != null && OrderTicketService.CHANNEL_DINE_IN.equals(channel)) {
                 requireTableFreeForBooking(businessId, branchId, tableId, request.scheduledStart(),
@@ -399,7 +455,7 @@ public class DineInService {
         return toResponse(businessId, orderTicketService.requestBill(businessId, orderId, requested, Instant.now()));
     }
 
-    /** A booking's guests have arrived. They need a table by now. */
+    /** A booking's guests have arrived (a table), or a stay's guest checks in (a room). */
     @Transactional
     public OrderResponse seat(String businessId, String orderId, String userId) {
         gate.requireEnabled(businessId);
@@ -411,7 +467,42 @@ public class DineInService {
             orderTicketService.setDetails(businessId, orderId, null,
                     staffProfileService.ensureProfile(businessId, userId).getId(), null, null, null, null);
         }
-        return toResponse(businessId, orderTicketService.seatBooking(businessId, orderId));
+        // Checking in charges the stay for all its nights at once: one room-night line, the rate
+        // frozen onto it now, so a later rate change never moves this folio (ADR 0028).
+        if (OrderTicketService.CHANNEL_LODGING.equals(order.channel())) {
+            addRoomNightLine(businessId, order);
+        }
+        OrderTicketService.Order seated = orderTicketService.seatBooking(businessId, orderId);
+        return toResponse(businessId, seated);
+    }
+
+    /** The whole number of nights of a stay, at least one, from its check-in and check-out. */
+    static long nightsBetween(Instant checkIn, Instant checkOut) {
+        if (checkIn == null || checkOut == null) {
+            return 1;
+        }
+        long nights = java.time.Duration.between(checkIn, checkOut).toDays();
+        return Math.max(1, nights);
+    }
+
+    /** Adds the one ROOM line for a stay, if it has not been added already (check-in is idempotent). */
+    private void addRoomNightLine(String businessId, OrderTicketService.Order order) {
+        String roomId = order.tableResourceId();
+        if (roomId == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This stay has no room");
+        }
+        boolean alreadyCharged = order.lines().stream()
+                .anyMatch(l -> "ROOM".equals(l.lineKind()) && !l.isVoided());
+        if (alreadyCharged) {
+            return;
+        }
+        ServiceResourceService.RoomRecord room = resourceService.room(businessId, roomId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "This stay's room is gone"));
+        long nights = nightsBetween(order.scheduledStart(), order.scheduledEnd());
+        String label = nights == 1 ? room.name() + " — 1 night" : room.name() + " — " + nights + " nights";
+        orderTicketService.addLines(businessId, order.id(), List.of(new OrderTicketService.NewLine(
+                "ROOM", null, null, label, java.math.BigDecimal.valueOf(nights), room.nightlyRate(),
+                null, null, null, false)));
     }
 
     /** Everything the kitchen has finished has reached the table (or the customer). */
@@ -675,6 +766,27 @@ public class DineInService {
         for (OrderTicketService.Order other : orderTicketService.bookingsOverlapping(businessId, branchId, from, to)) {
             if (tableId.equals(other.tableResourceId()) && !other.id().equals(exceptOrderId)) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "That table is already booked for then");
+            }
+        }
+    }
+
+    private void requireRoom(String businessId, String branchId, String roomId) {
+        ServiceResourceService.RoomRecord room = resourceService.room(businessId, roomId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Room not found"));
+        if (!room.branchId().equals(branchId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That room is at another branch");
+        }
+        if (!room.active()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, room.name() + " is not in use");
+        }
+    }
+
+    /** Two stays cannot hold one room over the same nights. Uses the same overlap query as a table booking. */
+    private void requireRoomFreeForStay(
+            String businessId, String branchId, String roomId, Instant from, Instant to, String exceptOrderId) {
+        for (OrderTicketService.Order other : orderTicketService.bookingsOverlapping(businessId, branchId, from, to)) {
+            if (roomId.equals(other.tableResourceId()) && !other.id().equals(exceptOrderId)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "That room is already booked for those nights");
             }
         }
     }

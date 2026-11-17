@@ -299,6 +299,7 @@ public class SaleService {
                 overpayAlloc.towardWallet(),
                 overpayAlloc.towardAr(),
                 SaleRevenueSplit.serviceTotal(saleItems),
+                SaleRevenueSplit.roomTotal(saleItems),
                 tipTotal);
         attachJournalToSale(saleId, businessId, journalId);
         // Commission and tips for the staff involved, in this same transaction: either the sale
@@ -695,6 +696,11 @@ public class SaleService {
                 lineIndex++;
                 continue;
             }
+            if (line.isRoom()) {
+                all.add(buildRoomSaleItem(saleId, lineIndex, line));
+                lineIndex++;
+                continue;
+            }
             if (line.isDish()) {
                 all.add(buildDishSaleItem(businessId, req.branchId(), userId, saleId, lineIndex, line,
                         wasSoldOffline(req.clientSoldAt())));
@@ -814,6 +820,53 @@ public class SaleService {
         row.setCostTotal(BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
         row.setProfit(lineTotal);
         return row;
+    }
+
+    /**
+     * A night (or nights) in a lodging room (ADR 0028): no item, no stock, no cost. Its label is
+     * the room, its unit price the nightly rate frozen at check-in, its quantity the nights.
+     * Already validated by {@link #validateRoomSaleLine}.
+     */
+    private static SaleItem buildRoomSaleItem(String saleId, int lineIndex, PostSaleLineRequest line) {
+        BigDecimal qty = line.quantity().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal unitPrice = line.unitPrice().setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal lineTotal = qty.multiply(unitPrice).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        String label = line.label().trim();
+        SaleItem row = new SaleItem();
+        row.setSaleId(saleId);
+        row.setLineIndex(lineIndex);
+        row.setLineKind(SaleLineKinds.ROOM);
+        row.setLineLabel(label.length() > 255 ? label.substring(0, 255) : label);
+        row.setDisplayName(label);
+        row.setQuantity(qty);
+        row.setUnitPrice(unitPrice);
+        row.setLineTotal(lineTotal);
+        row.setUnitCost(BigDecimal.ZERO.setScale(QTY_SCALE, RoundingMode.HALF_UP));
+        row.setCostTotal(BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP));
+        row.setProfit(lineTotal);
+        return row;
+    }
+
+    /**
+     * A room night, like a charge, is never taken from a client: the price is the room's rate,
+     * which the server froze onto the stay at check-in. It is accepted only while a bill is being
+     * settled.
+     */
+    private static void validateRoomSaleLine(int i, PostSaleLineRequest line) {
+        String prefix = "Line " + (i + 1) + ": ";
+        if (!OrderSettlement.isActive()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "a room night can only be added by a stay's bill");
+        }
+        if (line.itemId() != null && !line.itemId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "a room night cannot name a product");
+        }
+        if (line.label() == null || line.label().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "a room night needs the room's name");
+        }
+        if (line.quantity() == null || line.quantity().signum() <= 0
+                || line.unitPrice() == null || line.unitPrice().signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, prefix + "a room night must be more than zero");
+        }
     }
 
     /**
@@ -1085,6 +1138,7 @@ public class SaleService {
             BigDecimal overpayToWallet,
             BigDecimal overpayToAr,
             BigDecimal serviceRevenue,
+            BigDecimal roomRevenue,
             BigDecimal tipTotal
     ) {
         Map<String, BigDecimal> tenderDr = new LinkedHashMap<>();
@@ -1106,9 +1160,9 @@ public class SaleService {
             entry.debit(ledgerAccountResolver.resolveId(businessId, e.getKey()), amt);
         }
         SaleTaxLedgerSplit.Split revenue = SaleTaxLedgerSplit.of(grandTotal, taxTotal);
-        // Service lines carry no tax today, so their total is already net. A sale with no
-        // service lines posts exactly as before.
-        SaleRevenueSplit.Split split = SaleRevenueSplit.of(revenue.net(), serviceRevenue);
+        // Service and room lines carry no tax today, so their totals are already net. A sale with
+        // no service and no room lines posts exactly as before.
+        SaleRevenueSplit.Split split = SaleRevenueSplit.of(revenue.net(), serviceRevenue, roomRevenue);
         if (split.creditGoods()) {
             entry.credit(
                     ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE),
@@ -1118,6 +1172,11 @@ public class SaleService {
             entry.credit(
                     ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SERVICE_REVENUE),
                     split.services());
+        }
+        if (split.rooms().signum() > 0) {
+            entry.credit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.ROOM_REVENUE),
+                    split.rooms());
         }
         if (revenue.tax().signum() > 0) {
             entry.credit(
@@ -1209,8 +1268,8 @@ public class SaleService {
     private static List<StaffEarningsService.SaleLine> earningLines(List<SaleItem> saleItems) {
         List<StaffEarningsService.SaleLine> out = new ArrayList<>(saleItems.size());
         for (SaleItem item : saleItems) {
-            // Nobody earns commission on airtime or on a service charge or delivery fee.
-            if (item.isAirtime() || item.isCharge()) {
+            // Nobody earns commission on airtime, on a service charge or delivery fee, or on a room night.
+            if (item.isAirtime() || item.isCharge() || item.isRoom()) {
                 continue;
             }
             out.add(new StaffEarningsService.SaleLine(
@@ -1279,7 +1338,7 @@ public class SaleService {
             }
         }
         List<String> itemIds = lines.stream()
-                .filter(l -> !l.isAirtime() && !l.isService() && !l.isDish() && !l.isCharge())
+                .filter(l -> !l.isAirtime() && !l.isService() && !l.isDish() && !l.isCharge() && !l.isRoom())
                 .map(PostSaleLineRequest::itemId)
                 .filter(id -> id != null && !id.isBlank())
                 .distinct()
@@ -1315,6 +1374,10 @@ public class SaleService {
             }
             if (line.isCharge()) {
                 validateChargeSaleLine(i, line);
+                continue;
+            }
+            if (line.isRoom()) {
+                validateRoomSaleLine(i, line);
                 continue;
             }
             if (line.modifierOptionIds() != null && !line.modifierOptionIds().isEmpty()) {

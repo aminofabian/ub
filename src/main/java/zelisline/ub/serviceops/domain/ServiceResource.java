@@ -74,6 +74,10 @@ public class ServiceResource {
     @Column(name = "qr_token", length = 64, unique = true)
     private String qrToken;
 
+    /** For a lodging room: what one night costs (KES). Null on every other kind of resource. */
+    @Column(name = "nightly_rate", precision = 14, scale = 2)
+    private java.math.BigDecimal nightlyRate;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

@@ -9,6 +9,11 @@ public final class LedgerAccountCodes {
      * shop that sells both can read service and product income separately (ADR 0014).
      */
     public static final String SERVICE_REVENUE = "4010";
+    /**
+     * Revenue from letting rooms for the night (ADR 0028) — kept apart from {@link #SALES_REVENUE}
+     * and {@link #SERVICE_REVENUE} so a guest house that also runs a bar reads room income on its own.
+     */
+    public static final String ROOM_REVENUE = "4020";
     public static final String COST_OF_GOODS_SOLD = "5000";
     /** Operating expenses root (Phase 6). */
     public static final String OPERATING_EXPENSES = "6000";
@@ -64,8 +69,8 @@ public final class LedgerAccountCodes {
     private LedgerAccountCodes() {
     }
 
-    /** Income from selling: goods or services. Use this instead of comparing to one revenue code. */
+    /** Income from selling: goods, services or rooms. Use this instead of comparing to one revenue code. */
     public static boolean isSalesOrServiceRevenue(String code) {
-        return SALES_REVENUE.equals(code) || SERVICE_REVENUE.equals(code);
+        return SALES_REVENUE.equals(code) || SERVICE_REVENUE.equals(code) || ROOM_REVENUE.equals(code);
     }
 }

@@ -198,6 +198,12 @@ public class BillService {
                         line.modifiers(), taxRateId, line.unitPrice().setScale(2, RoundingMode.HALF_UP), line.note()));
                 saleLines.add(new PostSaleLineRequest(null, row.getQuantity(), line.unitPrice(), SaleLineKinds.DISH,
                         null, null, null, null, null, null, null, null, null, null, line.menuItemId(), null, null));
+            } else if ("ROOM".equals(line.lineKind())) {
+                // A room night keeps the rate frozen onto it at check-in; it is never repriced. Its
+                // label is the room's name, its quantity the nights on the bill.
+                String roomLabel = line.name().length() > 255 ? line.name().substring(0, 252) + "..." : line.name();
+                saleLines.add(new PostSaleLineRequest(null, row.getQuantity(), line.unitPrice(), SaleLineKinds.ROOM,
+                        roomLabel, null, null, null, null, null, null, null, null, null, null, null, null));
             } else {
                 // A product sells at today's shelf price, as it would at the till. If that moved since
                 // it was ordered, the bill has changed and the customer must be told before paying.

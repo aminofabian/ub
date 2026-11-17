@@ -305,6 +305,10 @@ public class SaleRefundService {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "A dish cannot be refunded line by line — void the sale to reverse it");
             }
+            if (si.isRoom()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "A room night cannot be refunded line by line — void the sale to reverse it");
+            }
             if (si.isAirtime() || si.getItemId() == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Airtime on this sale cannot be refunded as stock — void the sale or retry the top-up from Airtime");

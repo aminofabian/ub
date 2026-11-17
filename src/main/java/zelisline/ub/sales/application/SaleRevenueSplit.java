@@ -7,12 +7,13 @@ import java.util.List;
 import zelisline.ub.sales.domain.SaleItem;
 
 /**
- * Splits a sale's net revenue between goods ({@code SALES_REVENUE}) and services
- * ({@code SERVICE_REVENUE}) for the sale, void and refund journals (ADR 0014).
+ * Splits a sale's net revenue between goods ({@code SALES_REVENUE}), services
+ * ({@code SERVICE_REVENUE}) and rooms ({@code ROOM_REVENUE}) for the sale and void journals
+ * (ADR 0014, ADR 0028).
  *
- * <p>Service lines carry no tax today, so the sum of their line totals is already net and the
- * goods share is simply the remainder. A sale with no service lines keeps posting one
- * {@code SALES_REVENUE} line exactly as before, including when that amount is zero.</p>
+ * <p>Service and room lines carry no tax today, so the sum of each kind's line totals is already
+ * net and the goods share is the remainder. A sale with no service and no room lines keeps posting
+ * one {@code SALES_REVENUE} line exactly as before, including when that amount is zero.</p>
  */
 final class SaleRevenueSplit {
 
@@ -21,29 +22,45 @@ final class SaleRevenueSplit {
     private SaleRevenueSplit() {
     }
 
-    record Split(BigDecimal goods, BigDecimal services) {
+    record Split(BigDecimal goods, BigDecimal services, BigDecimal rooms) {
 
-        /** Post the goods line unless everything on the sale was a service. */
+        /** Post the goods line unless everything on the sale was a service or a room night. */
         boolean creditGoods() {
-            return services.signum() == 0 || goods.signum() != 0;
+            return (services.signum() == 0 && rooms.signum() == 0) || goods.signum() != 0;
         }
     }
 
-    static Split of(BigDecimal netRevenue, BigDecimal serviceTotal) {
+    static Split of(BigDecimal netRevenue, BigDecimal serviceTotal, BigDecimal roomTotal) {
         BigDecimal net = netRevenue.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-        BigDecimal services = serviceTotal == null
-                ? BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP)
-                : serviceTotal.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-        if (services.signum() < 0 || services.compareTo(net) > 0) {
-            throw new IllegalStateException("Service revenue " + services + " exceeds net revenue " + net);
+        BigDecimal services = scaleOrZero(serviceTotal);
+        BigDecimal rooms = scaleOrZero(roomTotal);
+        if (services.signum() < 0 || rooms.signum() < 0) {
+            throw new IllegalStateException("Service " + services + " or room " + rooms + " revenue is negative");
         }
-        return new Split(net.subtract(services), services);
+        BigDecimal nonGoods = services.add(rooms);
+        if (nonGoods.compareTo(net) > 0) {
+            throw new IllegalStateException(
+                    "Service + room revenue " + nonGoods + " exceeds net revenue " + net);
+        }
+        return new Split(net.subtract(nonGoods), services, rooms);
+    }
+
+    private static BigDecimal scaleOrZero(BigDecimal value) {
+        return (value == null ? BigDecimal.ZERO : value).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
 
     static BigDecimal serviceTotal(List<SaleItem> items) {
+        return totalWhere(items, SaleItem::isService);
+    }
+
+    static BigDecimal roomTotal(List<SaleItem> items) {
+        return totalWhere(items, SaleItem::isRoom);
+    }
+
+    private static BigDecimal totalWhere(List<SaleItem> items, java.util.function.Predicate<SaleItem> keep) {
         BigDecimal total = BigDecimal.ZERO;
         for (SaleItem item : items) {
-            if (item.isService() && item.getLineTotal() != null) {
+            if (keep.test(item) && item.getLineTotal() != null) {
                 total = total.add(item.getLineTotal());
             }
         }

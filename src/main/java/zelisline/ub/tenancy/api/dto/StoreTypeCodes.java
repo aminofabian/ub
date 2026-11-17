@@ -12,7 +12,8 @@ public final class StoreTypeCodes {
     public static final String PATTERN =
             "butchery|mini-mart|full-grocery|fresh-market|mixed-shop|cosmetics|wines-spirits|pharmacy|other"
                     + "|barbershop|salon|spa|nail-studio|beauty-parlour"
-                    + "|restaurant|cafe|fast-food|bar";
+                    + "|restaurant|cafe|fast-food|bar"
+                    + "|lodging";
 
     /**
      * Shop formats that take orders and prepare food or drink (ADR 0020). As with service formats,
@@ -55,6 +56,26 @@ public final class StoreTypeCodes {
 
     /** Food formats where customers sit and pay after eating; a café or fast-food counter takes payment first. */
     public static final Set<String> TABLE_SERVICE_TYPES = Set.of("restaurant", "bar");
+
+    /**
+     * Shop formats that let rooms for the night (ADR 0028): a guest house, or a bar with rooms above
+     * it. An add-on capability, not an exclusive format — a tenant is usually a bar <em>and</em>
+     * lodging. A store type only picks defaults and wording; branch on {@link #isLodgingBusiness}.
+     */
+    public static final Set<String> LODGING_TYPES = Set.of("lodging");
+
+    /** True when any of the business's shop formats lets rooms. */
+    public static boolean isLodgingBusiness(Collection<String> storeTypes) {
+        if (storeTypes == null) {
+            return false;
+        }
+        for (String raw : storeTypes) {
+            if (raw != null && LODGING_TYPES.contains(raw.trim().toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     /** True when the business has shop formats and every one of them is a food format. */
     public static boolean isFoodOnlyBusiness(Collection<String> storeTypes) {

@@ -48,6 +48,8 @@ public class OrderTicketService {
     public static final String CHANNEL_DINE_IN = "DINE_IN";
     public static final String CHANNEL_TAKEAWAY = "TAKEAWAY";
     public static final String CHANNEL_DELIVERY = "DELIVERY";
+    /** A stay in a lodging room (ADR 0028): a booking on a room, with a check-in and check-out. */
+    public static final String CHANNEL_LODGING = "LODGING";
 
     /** On the order, not yet sent to the kitchen; still freely editable. */
     public static final String STAGE_DRAFT = "DRAFT";
@@ -61,7 +63,10 @@ public class OrderTicketService {
     public static final String ORDER_BOOKED = PosDraftConstants.STAGE_BOOKED;
 
     private static final List<String> STAGE_ORDER = List.of(STAGE_NEW, STAGE_PREPARING, STAGE_READY, STAGE_SERVED);
-    private static final Set<String> OPEN_CHANNELS = Set.of(CHANNEL_DINE_IN, CHANNEL_TAKEAWAY, CHANNEL_DELIVERY);
+    private static final Set<String> OPEN_CHANNELS =
+            Set.of(CHANNEL_DINE_IN, CHANNEL_TAKEAWAY, CHANNEL_DELIVERY, CHANNEL_LODGING);
+    /** Channels whose order is booked for later when it carries a scheduled start: a table, or a room. */
+    private static final Set<String> BOOKABLE_CHANNELS = Set.of(CHANNEL_DINE_IN, CHANNEL_LODGING);
 
     /** An order is read whole by a phone, so its size is bounded. */
     public static final int MAX_LINES_PER_ORDER = 300;
@@ -206,7 +211,7 @@ public class OrderTicketService {
     public Order open(String businessId, String userId, OpenOrder request) {
         String channel = request.channel() == null ? "" : request.channel().trim().toUpperCase(java.util.Locale.ROOT);
         if (!OPEN_CHANNELS.contains(channel)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "An order is for a table, to take away or to deliver");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "An order is for a table, to take away, to deliver or a room");
         }
         String clientId = request.clientOrderId() == null || request.clientOrderId().isBlank()
                 ? null : "order-" + request.clientOrderId().trim();
@@ -222,11 +227,15 @@ public class OrderTicketService {
                 return toOrder(existing.get());
             }
         }
-        // Only a table is booked. A time on a takeaway or delivery order is when it is wanted, and
-        // the order is open straight away so the kitchen can work towards it.
-        boolean booking = request.scheduledStart() != null && CHANNEL_DINE_IN.equals(channel);
+        // Only a table or a room is booked for later. A time on a takeaway or delivery order is when
+        // it is wanted, and the order is open straight away so the kitchen can work towards it.
+        boolean booking = request.scheduledStart() != null && BOOKABLE_CHANNELS.contains(channel);
         if (booking && (request.scheduledEnd() == null || !request.scheduledEnd().isAfter(request.scheduledStart()))) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A booking needs a start and a later end");
+        }
+        // A stay is always a booking: it names a check-in and a check-out, never opens as a walk-in.
+        if (CHANNEL_LODGING.equals(channel) && request.scheduledStart() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A stay needs a check-in and a check-out");
         }
         if (request.guestCount() != null && (request.guestCount() < 1 || request.guestCount() > 500)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Check the number of guests");

@@ -172,7 +172,7 @@ public class SaleVoidService {
         creditSaleDebtService.reverseDebtForVoidedSale(businessId, sale, payments);
         String voidJeId = postVoidJournal(
                 businessId, sale.getBranchId(), saleId, grandTotal, sale.getTaxTotal(), cogs, payments, overpayToAr, overpay,
-                SaleRevenueSplit.serviceTotal(itemRows), tipTotal);
+                SaleRevenueSplit.serviceTotal(itemRows), SaleRevenueSplit.roomTotal(itemRows), tipTotal);
         // Staff give back the commission and tips they earned on this sale.
         staffEarningsService.reverseForSale(businessId, saleId, userId);
         // Tell the kitchen to stop making anything on this sale it has not finished.
@@ -354,6 +354,7 @@ public class SaleVoidService {
             BigDecimal overpayToAr,
             BigDecimal overpayTotal,
             BigDecimal serviceRevenue,
+            BigDecimal roomRevenue,
             BigDecimal tipTotal
     ) {
         Map<String, BigDecimal> tenderCr = new LinkedHashMap<>();
@@ -375,8 +376,9 @@ public class SaleVoidService {
             entry.credit(ledgerAccountResolver.resolveId(businessId, e.getKey()), amt);
         }
         SaleTaxLedgerSplit.Split revenue = SaleTaxLedgerSplit.of(grandTotal, taxTotal);
-        // Mirror the sale: goods back out of SALES_REVENUE, services out of SERVICE_REVENUE.
-        SaleRevenueSplit.Split split = SaleRevenueSplit.of(revenue.net(), serviceRevenue);
+        // Mirror the sale: goods back out of SALES_REVENUE, services out of SERVICE_REVENUE, room
+        // nights out of ROOM_REVENUE.
+        SaleRevenueSplit.Split split = SaleRevenueSplit.of(revenue.net(), serviceRevenue, roomRevenue);
         if (split.creditGoods()) {
             entry.debit(
                     ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SALES_REVENUE),
@@ -386,6 +388,11 @@ public class SaleVoidService {
             entry.debit(
                     ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.SERVICE_REVENUE),
                     split.services());
+        }
+        if (split.rooms().signum() > 0) {
+            entry.debit(
+                    ledgerAccountResolver.resolveId(businessId, LedgerAccountCodes.ROOM_REVENUE),
+                    split.rooms());
         }
         if (tipTotal != null && tipTotal.signum() > 0) {
             entry.debit(

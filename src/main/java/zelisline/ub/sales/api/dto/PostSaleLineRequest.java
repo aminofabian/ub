@@ -127,4 +127,8 @@ public record PostSaleLineRequest(
     public boolean isDish() {
         return SaleLineKinds.isDish(kind);
     }
+
+    public boolean isRoom() {
+        return SaleLineKinds.isRoom(kind);
+    }
 }

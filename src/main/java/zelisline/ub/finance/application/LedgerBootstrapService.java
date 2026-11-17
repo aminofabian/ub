@@ -25,6 +25,7 @@ public class LedgerBootstrapService {
         ensure(businessId, LedgerAccountCodes.INVENTORY, "Inventory", "asset");
         ensure(businessId, LedgerAccountCodes.SALES_REVENUE, "Sales revenue", "revenue");
         ensure(businessId, LedgerAccountCodes.SERVICE_REVENUE, "Service revenue", "revenue");
+        ensure(businessId, LedgerAccountCodes.ROOM_REVENUE, "Room revenue", "revenue");
         ensure(businessId, LedgerAccountCodes.COST_OF_GOODS_SOLD, "Cost of goods sold", "expense");
         ensure(businessId, LedgerAccountCodes.OPERATING_EXPENSES, "Operating expenses", "expense");
         ensure(businessId, LedgerAccountCodes.EXPENSE_RENT, "Rent", "expense");

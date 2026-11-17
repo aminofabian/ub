@@ -158,4 +158,8 @@ public class SaleItem {
     public boolean isService() {
         return SaleLineKinds.isService(lineKind);
     }
+
+    public boolean isRoom() {
+        return SaleLineKinds.isRoom(lineKind);
+    }
 }

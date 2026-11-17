@@ -126,6 +126,25 @@ class RoomStayIT extends ServiceSaleTestSupport {
     }
 
     @Test
+    void nightsAreCountedByCalendarDateNotByTwentyFourHourBlocks() throws Exception {
+        // A real stay: check in tomorrow at 2pm Nairobi, check out the day after next at 11am — only
+        // 45 hours, but two calendar nights slept, so it is charged two nights (2 × 2500 = 5000).
+        java.time.ZoneId zone = java.time.ZoneId.of("Africa/Nairobi");
+        java.time.LocalDate day = java.time.LocalDate.now(zone).plusDays(1);
+        Instant checkIn = day.atTime(14, 0).atZone(zone).toInstant();
+        Instant checkOut = day.plusDays(2).atTime(11, 0).atZone(zone).toInstant();
+        assertThat(java.time.Duration.between(checkIn, checkOut).toHours()).isEqualTo(45);
+
+        String stay = openStayNamed(room1, checkIn, checkOut, "Night counter", null, 201).get("id").asText();
+        waiterPost("/open-orders/" + stay + "/seat", "", 200);
+        JsonNode roomLine = getJson(as(get("/api/v1/restaurant/open-orders/" + stay), TENANT, waiter, ROLE_WAITER), 200)
+                .get("lines").get(0);
+        assertThat(roomLine.get("kind").asText()).isEqualTo("ROOM");
+        assertThat(roomLine.get("quantity").decimalValue()).isEqualByComparingTo("2");
+        assertThat(roomLine.get("lineTotal").decimalValue()).isEqualByComparingTo("5000");
+    }
+
+    @Test
     void aDepositCoversPartOfTheStayAndTheFrontDeskListsRoomsAndStays() throws Exception {
         Instant checkIn = Instant.now().plusSeconds(3600);
         String stay = openStayNamed(room1, checkIn, checkIn.plusSeconds(86400), "Kevin", "0711000111", 201)

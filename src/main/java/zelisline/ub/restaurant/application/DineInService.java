@@ -476,12 +476,21 @@ public class DineInService {
         return toResponse(businessId, seated);
     }
 
-    /** The whole number of nights of a stay, at least one, from its check-in and check-out. */
+    /** Africa/Nairobi: a stay's nights are counted by the calendar dates it spans, local time. */
+    private static final java.time.ZoneId STAY_ZONE = java.time.ZoneId.of("Africa/Nairobi");
+
+    /**
+     * The whole number of nights of a stay, at least one. A night is a calendar date slept, so a
+     * guest in on the 18th and out on the 20th is charged two nights even if that is under 48 hours
+     * (a 2pm check-in to an 11am check-out) — counted by local date, not by 24-hour blocks.
+     */
     static long nightsBetween(Instant checkIn, Instant checkOut) {
         if (checkIn == null || checkOut == null) {
             return 1;
         }
-        long nights = java.time.Duration.between(checkIn, checkOut).toDays();
+        java.time.LocalDate in = checkIn.atZone(STAY_ZONE).toLocalDate();
+        java.time.LocalDate out = checkOut.atZone(STAY_ZONE).toLocalDate();
+        long nights = java.time.temporal.ChronoUnit.DAYS.between(in, out);
         return Math.max(1, nights);
     }
 

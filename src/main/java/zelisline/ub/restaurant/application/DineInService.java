@@ -75,7 +75,9 @@ public class DineInService {
     @Transactional(readOnly = true)
     public List<TableResponse> tables(String businessId, String branchId) {
         gate.requireEnabled(businessId);
-        return resourceService.tables(businessId, branchId).stream().map(DineInService::toResponse).toList();
+        List<ServiceResourceService.TableRecord> tables = resourceService.tables(businessId, branchId);
+        Map<String, String> waiters = waiterNames(businessId, tables);
+        return tables.stream().map(t -> toResponse(t, waiters)).toList();
     }
 
     @Transactional
@@ -85,21 +87,34 @@ public class DineInService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Give the table a name or number");
         }
         Integer capacity = request.capacity() == null || request.capacity() <= 0 ? null : request.capacity();
-        return toResponse(resourceService.createTable(businessId, branchId, request.name(), capacity, request.area()));
+        ServiceResourceService.TableRecord table =
+                resourceService.createTable(businessId, branchId, request.name(), capacity, request.area());
+        if (request.waiterStaffProfileId() != null && !request.waiterStaffProfileId().isBlank()) {
+            requireStaff(businessId, request.waiterStaffProfileId().trim());
+            table = resourceService.assignTableWaiter(businessId, table.id(), request.waiterStaffProfileId());
+        }
+        return toResponse(businessId, table);
     }
 
     @Transactional
     public TableResponse updateTable(String businessId, String tableId, TableRequest request) {
         gate.requireEnabled(businessId);
-        return toResponse(resourceService.updateTable(
-                businessId, tableId, request.name(), request.capacity(), request.area(), request.active()));
+        ServiceResourceService.TableRecord table = resourceService.updateTable(
+                businessId, tableId, request.name(), request.capacity(), request.area(), request.active());
+        if (request.waiterStaffProfileId() != null) {
+            if (!request.waiterStaffProfileId().isBlank()) {
+                requireStaff(businessId, request.waiterStaffProfileId().trim());
+            }
+            table = resourceService.assignTableWaiter(businessId, tableId, request.waiterStaffProfileId());
+        }
+        return toResponse(businessId, table);
     }
 
     /** Gives a table a new QR code (the old one stops working), or takes its code away. */
     @Transactional
     public TableResponse setTableQr(String businessId, String tableId, boolean enabled) {
         gate.requireEnabled(businessId);
-        return toResponse(resourceService.setTableQr(businessId, tableId, enabled));
+        return toResponse(businessId, resourceService.setTableQr(businessId, tableId, enabled));
     }
 
     /** Which branch a table is at, so the caller's branch can be checked before it is changed. */
@@ -131,10 +146,12 @@ public class DineInService {
             }
         }
         List<FloorTable> tables = new ArrayList<>();
-        for (ServiceResourceService.TableRecord table : resourceService.tables(businessId, branchId)) {
+        List<ServiceResourceService.TableRecord> all = resourceService.tables(businessId, branchId);
+        Map<String, String> waiters = waiterNames(businessId, all);
+        for (ServiceResourceService.TableRecord table : all) {
             List<OrderCard> cards = byTable.remove(table.id());
             if (table.active() || cards != null) {
-                tables.add(new FloorTable(toResponse(table), cards == null ? List.of() : cards));
+                tables.add(new FloorTable(toResponse(table, waiters), cards == null ? List.of() : cards));
             }
         }
         // An order on a table that no longer exists must not vanish from the floor.
@@ -172,8 +189,14 @@ public class DineInService {
         if (servedBy != null) {
             requireStaff(businessId, servedBy);
         } else if (request.scheduledStart() == null) {
-            // Whoever seats the table serves it unless someone else is named.
-            servedBy = staffProfileService.ensureProfile(businessId, userId).getId();
+            // The table's own waiter serves it; with none assigned, whoever seats it does.
+            servedBy = tableId == null ? null : resourceService.table(businessId, tableId)
+                    .map(ServiceResourceService.TableRecord::assignedStaffProfileId)
+                    .filter(id -> staffProfileService.displayNamesByIds(businessId, List.of(id)).get(id) != null)
+                    .orElse(null);
+            if (servedBy == null) {
+                servedBy = staffProfileService.ensureProfile(businessId, userId).getId();
+            }
         }
         OrderTicketService.Order order = orderTicketService.open(businessId, userId, new OrderTicketService.OpenOrder(
                 branchId, channel, tableId, request.guestCount(), servedBy, blankToNull(request.customerId()),
@@ -662,9 +685,22 @@ public class DineInService {
         }
     }
 
-    private static TableResponse toResponse(ServiceResourceService.TableRecord table) {
+    /** The names of the waiters assigned to these tables, by staff profile id. */
+    private Map<String, String> waiterNames(String businessId, List<ServiceResourceService.TableRecord> tables) {
+        List<String> ids = tables.stream().map(ServiceResourceService.TableRecord::assignedStaffProfileId)
+                .filter(java.util.Objects::nonNull).distinct().toList();
+        return ids.isEmpty() ? Map.of() : staffProfileService.displayNamesByIds(businessId, ids);
+    }
+
+    private TableResponse toResponse(String businessId, ServiceResourceService.TableRecord table) {
+        return toResponse(table, waiterNames(businessId, List.of(table)));
+    }
+
+    private static TableResponse toResponse(ServiceResourceService.TableRecord table, Map<String, String> waiters) {
+        // A waiter who has since left the team is no longer shown on the table.
+        String name = table.assignedStaffProfileId() == null ? null : waiters.get(table.assignedStaffProfileId());
         return new TableResponse(table.id(), table.name(), table.capacity(), table.area(), table.active(),
-                table.sortOrder(), table.qrToken());
+                table.sortOrder(), table.qrToken(), name == null ? null : table.assignedStaffProfileId(), name);
     }
 
     private static String blankToNull(String raw) {

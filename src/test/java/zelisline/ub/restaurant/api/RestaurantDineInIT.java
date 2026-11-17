@@ -707,6 +707,71 @@ class RestaurantDineInIT extends ServiceSaleTestSupport {
     }
 
     @Test
+    void aTableHasAWaiterAndTheDaysTakingsAreCountedByTableAndByWaiter() throws Exception {
+        String asha = createStaff(TENANT, owner, "Asha");
+        String patchTable = "/api/v1/restaurant/tables/" + table1;
+        // Only whoever manages the menu assigns a waiter; the waiter must be on this team.
+        mockMvc.perform(as(patch(patchTable), TENANT, waiter, ROLE_WAITER).content("{\"waiterStaffProfileId\":\"" + asha + "\"}"))
+                .andExpect(status().isForbidden());
+        send(as(patch(patchTable), TENANT, owner, ROLE_OWNER), "{\"waiterStaffProfileId\":\"" + UUID.randomUUID() + "\"}", 400);
+        send(as(patch(patchTable), OTHER, otherOwner, ROLE_OWNER), "{\"waiterStaffProfileId\":\"" + asha + "\"}", 404);
+        JsonNode assigned = send(as(patch(patchTable), TENANT, owner, ROLE_OWNER), "{\"waiterStaffProfileId\":\"" + asha + "\"}", 200);
+        assertThat(assigned.get("waiterName").asText()).isEqualTo("Asha");
+        // Renaming the table leaves its waiter where they are.
+        assertThat(send(as(patch(patchTable), TENANT, owner, ROLE_OWNER), "{\"capacity\":6}", 200).get("waiterName").asText())
+                .isEqualTo("Asha");
+
+        // Whoever seats the table, the order is the table's waiter's.
+        JsonNode order = open(table1, UUID.randomUUID().toString(), 3, 201);
+        String orderId = order.get("id").asText();
+        assertThat(order.get("servedByStaffProfileId").asText()).isEqualTo(asha);
+        assertThat(getJson(as(get("/api/v1/restaurant/floor").param("branchId", branchId), TENANT, waiter, ROLE_WAITER), 200)
+                .get("tables").get(0).get("table").get("waiterName").asText()).isEqualTo("Asha");
+
+        waiterPost("/open-orders/" + orderId + "/lines", "{\"lines\":[" + line("w1", burger, 2, single) + "]}", 200);
+        waiterPost("/open-orders/" + orderId + "/send", "", 200);
+        JsonNode bill = waiterPost("/open-orders/" + orderId + "/bills", "", 201).get("bills").get(0);
+        String total = bill.get("total").decimalValue().toPlainString();
+        cashierPost("/open-orders/" + orderId + "/bills/" + bill.get("id").asText() + "/pay",
+                "{\"payments\":[{\"method\":\"cash\",\"amount\":" + bill.get("total").decimalValue().add(new BigDecimal("50")).toPlainString()
+                        + "}],\"tip\":50}", 200);
+
+        String today = java.time.LocalDate.now(java.time.ZoneId.of("Africa/Nairobi")).toString();
+        var takings = get("/api/v1/restaurant/reports/tables").param("branchId", branchId).param("from", today).param("to", today);
+        JsonNode report = getJson(as(takings, TENANT, owner, ROLE_OWNER), 200);
+        assertThat(report.get("taken").decimalValue()).isEqualByComparingTo(total);
+        assertThat(report.get("tips").decimalValue()).isEqualByComparingTo("50");
+        assertThat(report.get("orders").asLong()).isEqualTo(1);
+        JsonNode first = report.get("tables").get(0);
+        assertThat(first.get("tableId").asText()).isEqualTo(table1);
+        assertThat(first.get("waiter").asText()).isEqualTo("Asha");
+        assertThat(first.get("orders").asLong()).isEqualTo(1);
+        assertThat(first.get("guests").asLong()).isEqualTo(3);
+        assertThat(first.get("taken").decimalValue()).isEqualByComparingTo(total);
+        assertThat(first.get("perOrder").decimalValue()).isEqualByComparingTo(total);
+        // The other table is listed and took nothing.
+        assertThat(report.get("tables").get(1).get("tableId").asText()).isEqualTo(table2);
+        assertThat(report.get("tables").get(1).get("taken").decimalValue()).isEqualByComparingTo("0");
+        assertThat(report.get("waiters")).hasSize(1);
+        assertThat(report.get("waiters").get(0).get("name").asText()).isEqualTo("Asha");
+        assertThat(report.get("waiters").get(0).get("taken").decimalValue()).isEqualByComparingTo(total);
+
+        // A waiter does not see the takings; another business sees none of them.
+        mockMvc.perform(as(get("/api/v1/restaurant/reports/tables").param("branchId", branchId).param("from", today).param("to", today),
+                        TENANT, waiter, ROLE_WAITER))
+                .andExpect(status().isForbidden());
+        JsonNode other = getJson(as(get("/api/v1/restaurant/reports/tables").param("branchId", branchId).param("from", today)
+                .param("to", today), OTHER, otherOwner, ROLE_OWNER), 200);
+        assertThat(other.get("taken").decimalValue()).isEqualByComparingTo("0");
+        assertThat(other.get("tables")).isEmpty();
+
+        // Taking the waiter off the table: the next order is whoever seats it.
+        assertThat(send(as(patch(patchTable), TENANT, owner, ROLE_OWNER), "{\"waiterStaffProfileId\":\"\"}", 200)
+                .get("waiterName").isNull()).isTrue();
+        assertThat(open(table1, UUID.randomUUID().toString(), 2, 201).get("servedByStaffProfileId").asText()).isNotEqualTo(asha);
+    }
+
+    @Test
     void aBarTabOpensUnderANameWithNoTableAndRunsLikeAnyOpenOrder() throws Exception {
         // A dine-in order with no table but a name is a tab (ADR 0024): it opens, takes rounds, and
         // appears off the floor, distinct from takeaway and delivery.

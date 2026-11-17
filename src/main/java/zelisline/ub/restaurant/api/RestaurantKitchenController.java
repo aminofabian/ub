@@ -129,6 +129,17 @@ public class RestaurantKitchenController {
         return reportsService.menuSales(TenantRequestIds.resolveBusinessId(request), branch(request, branchId), from, to);
     }
 
+    /** What each table and each waiter took over a period, from the bills paid. */
+    @GetMapping("/reports/tables")
+    @PreAuthorize(REPORTS)
+    public zelisline.ub.restaurant.api.dto.RestaurantDtos.TableTakingsReport tableTakings(
+            @RequestParam String branchId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            HttpServletRequest request) {
+        return reportsService.tableTakings(TenantRequestIds.resolveBusinessId(request), branch(request, branchId), from, to);
+    }
+
     @GetMapping("/reports/kitchen-times")
     @PreAuthorize(REPORTS)
     public KitchenTimesReport kitchenTimes(

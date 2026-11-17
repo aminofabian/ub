@@ -66,6 +66,10 @@ public class ServiceResource {
     @Column(name = "area", length = 60)
     private String area;
 
+    /** For a restaurant table: the waiter who looks after it. A new order at the table is theirs unless another is named. */
+    @Column(name = "assigned_staff_profile_id", length = 36)
+    private String assignedStaffProfileId;
+
     /** For a restaurant table: the secret in its QR code. Null means customers cannot order from it. */
     @Column(name = "qr_token", length = 64, unique = true)
     private String qrToken;

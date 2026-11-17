@@ -53,6 +53,8 @@ public class RestaurantReportsService {
     private final RestaurantGate gate;
     private final RecipeService recipeService;
     private final RestaurantSettingsService settingsService;
+    private final zelisline.ub.serviceops.application.ServiceResourceService resourceService;
+    private final zelisline.ub.payroll.application.StaffProfileService staffProfileService;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -198,6 +200,145 @@ public class RestaurantReportsService {
                     sorted.size(), median, sorted.get(sorted.size() - 1)));
         }
         return new KitchenTimesReport(from.toString(), to.toString(), out);
+    }
+
+    // ------------------------------------------------------------------ takings by table
+
+    /** One order's paid bills in the period. */
+    private record OrderTakings(
+            String tableId, String servedBy, long guests, String channel, long bills, BigDecimal taken, BigDecimal tips) {
+    }
+
+    private static final class Tally {
+        long orders;
+        long guests;
+        long bills;
+        BigDecimal taken = BigDecimal.ZERO;
+        BigDecimal tips = BigDecimal.ZERO;
+
+        void add(OrderTakings order) {
+            orders++;
+            guests += order.guests();
+            bills += order.bills();
+            taken = taken.add(order.taken());
+            tips = tips.add(order.tips());
+        }
+    }
+
+    /**
+     * What each table and each waiter took over a period (ADR 0027). A table's takings are the
+     * paid bills of the orders that sat at it; a waiter's are those of the orders they served.
+     */
+    @Transactional(readOnly = true)
+    public zelisline.ub.restaurant.api.dto.RestaurantDtos.TableTakingsReport tableTakings(
+            String businessId, String branchId, LocalDate from, LocalDate to) {
+        gate.requireEnabled(businessId);
+        int dayStart = settingsService.get(businessId).getDayStartsAtMinute();
+        Instant start = start(from, to).plusSeconds(dayStart * 60L);
+        Instant end = to.plusDays(1).atStartOfDay(NAIROBI).toInstant().plusSeconds(dayStart * 60L);
+
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                        SELECT d.id, d.table_resource_id, d.served_by_staff_profile_id, d.guest_count, d.order_channel,
+                               COUNT(b.id), SUM(s.grand_total), SUM(s.tip_total)
+                          FROM order_bills b
+                          JOIN sales s ON s.id = b.sale_id
+                          JOIN pos_drafts d ON d.id = b.order_id
+                         WHERE b.business_id = :businessId
+                           AND b.branch_id = :branchId
+                           AND d.business_id = :businessId
+                           AND s.business_id = :businessId
+                           AND b.status = 'PAID'
+                           AND s.status <> 'voided'
+                           AND s.sold_at >= :fromTs AND s.sold_at < :toTs
+                         GROUP BY d.id, d.table_resource_id, d.served_by_staff_profile_id, d.guest_count, d.order_channel
+                        """)
+                .setParameter("businessId", businessId)
+                .setParameter("branchId", branchId)
+                .setParameter("fromTs", start)
+                .setParameter("toTs", end)
+                .getResultList();
+
+        Map<String, Tally> byTable = new HashMap<>();
+        Map<String, Tally> byChannel = new java.util.LinkedHashMap<>();
+        Map<String, Tally> byWaiter = new HashMap<>();
+        Tally all = new Tally();
+        for (Object[] row : rows) {
+            OrderTakings order = new OrderTakings((String) row[1], (String) row[2],
+                    row[3] == null ? 0 : ((Number) row[3]).longValue(), (String) row[4],
+                    ((Number) row[5]).longValue(), decimal(row[6]), decimal(row[7]));
+            all.add(order);
+            if (order.tableId() != null) {
+                byTable.computeIfAbsent(order.tableId(), k -> new Tally()).add(order);
+            } else {
+                byChannel.computeIfAbsent(order.channel() == null ? "" : order.channel(), k -> new Tally()).add(order);
+            }
+            if (order.servedBy() != null) {
+                byWaiter.computeIfAbsent(order.servedBy(), k -> new Tally()).add(order);
+            }
+        }
+
+        List<zelisline.ub.serviceops.application.ServiceResourceService.TableRecord> tables =
+                resourceService.tables(businessId, branchId);
+        java.util.Set<String> staffIds = new java.util.HashSet<>(byWaiter.keySet());
+        tables.forEach(t -> {
+            if (t.assignedStaffProfileId() != null) {
+                staffIds.add(t.assignedStaffProfileId());
+            }
+        });
+        Map<String, String> names = staffIds.isEmpty() ? Map.of()
+                : staffProfileService.displayNamesByIds(businessId, staffIds);
+
+        List<zelisline.ub.restaurant.api.dto.RestaurantDtos.TableTakingsRow> tableRows = new ArrayList<>();
+        for (var table : tables) {
+            Tally tally = byTable.remove(table.id());
+            if (tally == null && !table.active()) {
+                continue; // out of use and took nothing: not worth a line
+            }
+            tableRows.add(takingsRow(table.id(), table.name(), table.area(),
+                    table.assignedStaffProfileId() == null ? null : names.get(table.assignedStaffProfileId()),
+                    tally == null ? new Tally() : tally));
+        }
+        // A table removed since still took what it took.
+        for (Tally orphan : byTable.values()) {
+            tableRows.add(takingsRow(null, "A table since removed", null, null, orphan));
+        }
+        tableRows.sort(Comparator.comparing(zelisline.ub.restaurant.api.dto.RestaurantDtos.TableTakingsRow::taken).reversed()
+                .thenComparing(zelisline.ub.restaurant.api.dto.RestaurantDtos.TableTakingsRow::name, String.CASE_INSENSITIVE_ORDER));
+
+        List<zelisline.ub.restaurant.api.dto.RestaurantDtos.TableTakingsRow> offFloor = new ArrayList<>();
+        for (Map.Entry<String, Tally> entry : byChannel.entrySet()) {
+            String label = switch (entry.getKey()) {
+                case "TAKEAWAY" -> "Takeaway";
+                case "DELIVERY" -> "Delivery";
+                case "DINE_IN" -> "Tabs";
+                default -> "Other orders";
+            };
+            offFloor.add(takingsRow(null, label, null, null, entry.getValue()));
+        }
+        offFloor.sort(Comparator.comparing(zelisline.ub.restaurant.api.dto.RestaurantDtos.TableTakingsRow::taken).reversed());
+
+        List<zelisline.ub.restaurant.api.dto.RestaurantDtos.WaiterTakingsRow> waiters = new ArrayList<>();
+        for (Map.Entry<String, Tally> entry : byWaiter.entrySet()) {
+            waiters.add(new zelisline.ub.restaurant.api.dto.RestaurantDtos.WaiterTakingsRow(entry.getKey(),
+                    names.getOrDefault(entry.getKey(), "Someone no longer on the team"), entry.getValue().orders,
+                    entry.getValue().taken.setScale(2, RoundingMode.HALF_UP),
+                    entry.getValue().tips.setScale(2, RoundingMode.HALF_UP)));
+        }
+        waiters.sort(Comparator.comparing(zelisline.ub.restaurant.api.dto.RestaurantDtos.WaiterTakingsRow::taken).reversed());
+
+        return new zelisline.ub.restaurant.api.dto.RestaurantDtos.TableTakingsReport(from.toString(), to.toString(),
+                all.taken.setScale(2, RoundingMode.HALF_UP), all.tips.setScale(2, RoundingMode.HALF_UP), all.orders,
+                tableRows, offFloor, waiters);
+    }
+
+    private static zelisline.ub.restaurant.api.dto.RestaurantDtos.TableTakingsRow takingsRow(
+            String tableId, String name, String area, String waiter, Tally tally) {
+        BigDecimal perOrder = tally.orders == 0 ? BigDecimal.ZERO
+                : tally.taken.divide(BigDecimal.valueOf(tally.orders), 2, RoundingMode.HALF_UP);
+        return new zelisline.ub.restaurant.api.dto.RestaurantDtos.TableTakingsRow(tableId, name, area, waiter,
+                tally.orders, tally.guests, tally.bills, tally.taken.setScale(2, RoundingMode.HALF_UP),
+                tally.tips.setScale(2, RoundingMode.HALF_UP), perOrder);
     }
 
     private static Instant start(LocalDate from, LocalDate to) {

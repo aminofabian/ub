@@ -24,8 +24,13 @@ public final class OrderDtos {
     // ---------------------------------------------------------------- tables
 
     /** @param qrToken the secret in the table's QR code; null when customers cannot order from it */
+    /**
+     * @param waiterStaffProfileId the waiter who looks after the table; a new order there is theirs
+     *                             unless another is named. Null when no one is assigned
+     */
     public record TableResponse(
-            String id, String name, Integer capacity, String area, boolean active, int sortOrder, String qrToken) {
+            String id, String name, Integer capacity, String area, boolean active, int sortOrder, String qrToken,
+            String waiterStaffProfileId, String waiterName) {
     }
 
     public record TableQrRequest(@NotNull Boolean enabled) {
@@ -86,7 +91,9 @@ public final class OrderDtos {
             @Size(max = 80) String name,
             @Min(0) @Max(500) Integer capacity,
             @Size(max = 60) String area,
-            Boolean active) {
+            Boolean active,
+            /** The waiter who looks after the table. Null leaves it as it is; empty takes them off it. */
+            @Size(max = 36) String waiterStaffProfileId) {
     }
 
     // ---------------------------------------------------------------- the floor

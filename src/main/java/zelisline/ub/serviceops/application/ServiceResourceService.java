@@ -248,7 +248,7 @@ public class ServiceResourceService {
     /** A table of a restaurant floor. Stored as a resource of type {@code TABLE}; occupancy is the order's business. */
     public record TableRecord(
             String id, String branchId, String name, Integer capacity, String area, boolean active, int sortOrder,
-            String qrToken, String businessId) {
+            String qrToken, String businessId, String assignedStaffProfileId) {
     }
 
     /**
@@ -345,9 +345,24 @@ public class ServiceResourceService {
         return toTable(row);
     }
 
+    /**
+     * Names the waiter who looks after a table, or with null takes them off it. The caller checks
+     * that the staff profile is one of this business's.
+     */
+    @Transactional
+    public TableRecord assignTableWaiter(String businessId, String tableId, String staffProfileId) {
+        ServiceResource row = resourceRepository.findByIdAndBusinessIdForUpdate(tableId, businessId)
+                .filter(r -> TYPE_TABLE.equals(r.getResourceType()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Table not found"));
+        row.setAssignedStaffProfileId(staffProfileId == null || staffProfileId.isBlank() ? null : staffProfileId.trim());
+        saveUnique(row);
+        return toTable(row);
+    }
+
     private static TableRecord toTable(ServiceResource row) {
         return new TableRecord(row.getId(), row.getBranchId(), row.getName(), row.getCapacity(), row.getArea(),
-                row.isActive(), row.getSortOrder(), row.getQrToken(), row.getBusinessId());
+                row.isActive(), row.getSortOrder(), row.getQrToken(), row.getBusinessId(),
+                row.getAssignedStaffProfileId());
     }
 
     private void saveUnique(ServiceResource row) {

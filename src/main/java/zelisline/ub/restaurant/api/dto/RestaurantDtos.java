@@ -409,6 +409,35 @@ public final class RestaurantDtos {
             List<MenuItemSalesRow> items, List<ModifierSalesRow> modifiers) {
     }
 
+    /**
+     * What one table took over a period, from the bills paid at it.
+     *
+     * @param tableId   null for a row that is not a table: tabs, takeaway, delivery
+     * @param waiter    the waiter assigned to the table now; null when none
+     * @param orders    orders with at least one paid bill in the period
+     * @param guests    guests on those orders, where a number was given
+     * @param taken     what the paid bills came to, service charge included, tips not
+     * @param perOrder  {@code taken} over {@code orders}
+     */
+    public record TableTakingsRow(
+            String tableId, String name, String area, String waiter, long orders, long guests, long bills,
+            BigDecimal taken, BigDecimal tips, BigDecimal perOrder) {
+    }
+
+    /** What one waiter's orders took: the orders they served, whoever took the money. */
+    public record WaiterTakingsRow(String staffProfileId, String name, long orders, BigDecimal taken, BigDecimal tips) {
+    }
+
+    /**
+     * Takings by table and by waiter for a period, counted in business days. Paid bills only: a
+     * bill on the house or left unpaid took nothing, a voided sale is left out, and refunds made
+     * afterwards are not taken off. Sales rung at the counter are not table orders and are not here.
+     */
+    public record TableTakingsReport(
+            String from, String to, BigDecimal taken, BigDecimal tips, long orders,
+            List<TableTakingsRow> tables, List<TableTakingsRow> offTheFloor, List<WaiterTakingsRow> waiters) {
+    }
+
     public record StationTimesRow(String stationId, String stationName, long tickets, long medianSeconds, long slowestSeconds) {
     }
 

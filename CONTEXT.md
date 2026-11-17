@@ -70,6 +70,8 @@
 
 * **Open order** — an `ORDER` ticket that is `pending`: a table (`DINE_IN`), a `TAKEAWAY` or a `DELIVERY`. Opened, added to, sent in rounds and settled later. Idempotent on the device's `clientOrderId`. Survives a shift close.
 * **Table** — a `service_resources` row of type `TABLE` with a capacity and an area. It is occupied while an open order points at it; several orders may sit at one table. `ServiceResourceService.tables` never creates the numbered chairs.
+* **Table's waiter** — the staff profile that looks after a table (`service_resources.assigned_staff_profile_id`, ADR 0027). A new dine-in order at the table is served by them unless another is named; it is a default, and the server can still be changed on the order.
+* **Table takings** — what a table took over a period: the sales of the `PAID` bills of the orders that sat at it (`RestaurantReportsService.tableTakings`). Derived, never stored. Tips are beside it, not in it; refunds made afterwards are not taken off. A waiter's takings are those of the orders they served.
 * **Draft line** — a line on an open order that has not been sent (`line_stage = DRAFT`): freely changed or removed. `client_line_id` stops a repeated request adding it twice.
 * **Send / round** — sending turns every draft line into `NEW` (a dish, or a product with a station) or straight to `READY` (a product with none), and writes one kitchen ticket per station with the next `round_no`. Sending twice sends nothing.
 * **Cancelled line** — a sent line is never edited. It is set to `VOIDED` with a reason and who did it (`restaurant.orders.void_sent`); the kitchen gets a `VOID` ticket if it was still making it. A line on a bill cannot be cancelled.

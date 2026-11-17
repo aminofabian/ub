@@ -82,6 +82,9 @@
 * **Recipe** — the stocked ingredients of a dish or of a modifier option (`recipe_lines`), each with a plated quantity and an optional yield percent. Ingredients need not be for sale.
 * **Ingredient use** — when a dish with a recipe is sold, `InventoryBatchPickerService.pickAndApplyIngredientUse` takes its ingredients from the batches (stock movements with `reference_type = sale_recipe`) and their cost becomes the line's cost of goods, posted with the sale. A short count never refuses the sale: the remainder drives on-hand negative, costed at the last known cost. Voiding the sale puts them back (`sale_recipe_void`).
 * **Menu engineering** — among dishes with a recipe: sells at least 70% of an even share, and a plate earns at least the average plate → `STAR`; sells but earns little → `PLOWHORSE`; earns but sells little → `PUZZLE`; neither → `DOG`.
+* **Can make** — how many portions of a dish the branch's usable stock allows, if only that dish were made (ADR 0026): the smallest, over the dish's counted ingredients, of usable stock divided by what one portion takes from stock, rounded down. `RecipeService.makeable` is the only place it is worked out. Two dishes sharing an ingredient each see all of it. It is advice and never refuses a sale.
+* **Usable stock** — what is left in a branch's active batches that have not expired, read through `StockOnHandReader`. An ingredient's stand-in counts with it. An ingredient that is not stocked (salt, water) is not counted and never limits a dish.
+* **Must use today** — the part of a dish's can-make that depends on stock whose batch expires today.
 
 ## Restaurant: charges, delivery, batches, timed menus and QR ordering (ADR 0020, amendment 3)
 

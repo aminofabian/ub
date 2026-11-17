@@ -58,7 +58,16 @@ public final class RestaurantDtos {
             /** A line or two for the customer; null when none was written. */
             String description,
             /** Where the picture is served from; null when the item has none. */
-            String imageUrl) {
+            String imageUrl,
+            /**
+             * How many more the branch's usable stock can make, if only this were made (ADR 0026).
+             * Null when it was not asked for, or the dish has no recipe of counted ingredients.
+             */
+            Long canMake,
+            /** The ingredient that runs out first; null with {@code canMake}. */
+            String limitingIngredient,
+            /** How many of {@code canMake} depend on stock that expires today; null with it. */
+            Long mustUseToday) {
     }
 
     public record MenuResponse(

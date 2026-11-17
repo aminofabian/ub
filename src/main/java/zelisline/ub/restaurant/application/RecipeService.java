@@ -19,6 +19,7 @@ import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.inventory.api.dto.BatchAllocationLine;
 import zelisline.ub.inventory.application.InventoryBatchPickerService;
+import zelisline.ub.inventory.application.StockOnHandReader;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.ChosenModifier;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.RecipeIngredientRequest;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.RecipeIngredientResponse;
@@ -45,12 +46,14 @@ public class RecipeService {
 
     private static final int MAX_INGREDIENTS = 40;
     private static final BigDecimal HUNDRED = new BigDecimal("100");
+    private static final java.time.ZoneId NAIROBI = java.time.ZoneId.of("Africa/Nairobi");
 
     private final RecipeLineRepository recipeRepository;
     private final MenuItemRepository menuItemRepository;
     private final ModifierOptionRepository optionRepository;
     private final ItemRepository itemRepository;
     private final InventoryBatchPickerService stockPicker;
+    private final StockOnHandReader stockOnHandReader;
     private final zelisline.ub.inventory.application.InventoryLedgerService inventoryLedgerService;
     private final zelisline.ub.finance.application.LedgerPostingPort ledgerPostingPort;
     private final zelisline.ub.finance.application.LedgerAccountResolver ledgerAccountResolver;
@@ -324,6 +327,161 @@ public class RecipeService {
             }
         }
         return out;
+    }
+
+    // ------------------------------------------------------------------ servings forecast
+
+    /**
+     * How many of a dish the branch can still make (ADR 0026).
+     *
+     * @param canMake            whole portions the usable stock allows, if only this dish were made
+     * @param limitingIngredient the ingredient that runs out first
+     * @param mustUseToday       portions of {@code canMake} that depend on stock expiring today
+     */
+    public record Makeable(long canMake, String limitingIngredient, long mustUseToday) {
+    }
+
+    /**
+     * For every dish with a recipe, how many portions the branch's usable stock can produce. A dish
+     * is counted on its own: two dishes sharing an ingredient each see all of it. Only stocked
+     * ingredients limit a dish; one made only of things that are not counted (salt, water) is left
+     * out of the result, as is a dish with no recipe. An ingredient's stand-in counts with it.
+     * Choices on a dish are not included. Read-only, and never a reason to refuse a sale.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Makeable> makeable(String businessId, String branchId) {
+        Map<String, List<RecipeLine>> byDish = new HashMap<>();
+        Set<String> itemIds = new HashSet<>();
+        for (RecipeLine line : recipeRepository.findByBusinessId(businessId)) {
+            if (line.getMenuItemId() == null) {
+                continue;
+            }
+            byDish.computeIfAbsent(line.getMenuItemId(), k -> new ArrayList<>()).add(line);
+            itemIds.add(line.getItemId());
+            if (line.getSubstituteItemId() != null) {
+                itemIds.add(line.getSubstituteItemId());
+            }
+        }
+        Map<String, Makeable> out = new HashMap<>();
+        if (byDish.isEmpty()) {
+            return out;
+        }
+        Map<String, Item> stocked = new HashMap<>();
+        for (Item item : itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId)) {
+            if (item.isStocked()) {
+                stocked.put(item.getId(), item);
+            }
+        }
+        Map<String, StockOnHandReader.Usable> stock = stockOnHandReader.usableByItemAtBranch(
+                businessId, branchId, stocked.keySet(), java.time.LocalDate.now(NAIROBI));
+
+        Map<String, BigDecimal> usable = new HashMap<>();
+        Map<String, BigDecimal> usableAfterToday = new HashMap<>();
+        stock.forEach((id, have) -> {
+            usable.put(id, have.usable());
+            usableAfterToday.put(id, have.usable().subtract(have.expiringToday()));
+        });
+
+        for (Map.Entry<String, List<RecipeLine>> dish : byDish.entrySet()) {
+            // What one portion takes of each counted ingredient, in the recipe's own order, and what
+            // may stand in for it.
+            List<RecipeLine> lines = new ArrayList<>(dish.getValue());
+            lines.sort(java.util.Comparator.comparingInt(RecipeLine::getSortOrder));
+            Map<String, BigDecimal> perPortion = new java.util.LinkedHashMap<>();
+            Map<String, List<String>> standIns = new HashMap<>();
+            for (RecipeLine line : lines) {
+                if (!stocked.containsKey(line.getItemId()) || fromStock(line).signum() <= 0) {
+                    continue;
+                }
+                perPortion.merge(line.getItemId(), fromStock(line), BigDecimal::add);
+                String standIn = line.getSubstituteItemId();
+                if (standIn != null && stocked.containsKey(standIn)) {
+                    List<String> known = standIns.computeIfAbsent(line.getItemId(), k -> new ArrayList<>());
+                    if (!known.contains(standIn)) {
+                        known.add(standIn);
+                    }
+                }
+            }
+            if (perPortion.isEmpty()) {
+                continue;
+            }
+            long canMake = most(perPortion, standIns, usable);
+            String shortFirst = shortAt(canMake + 1, perPortion, standIns, usable);
+            long afterToday = most(perPortion, standIns, usableAfterToday);
+            out.put(dish.getKey(), new Makeable(canMake,
+                    stocked.get(shortFirst == null ? perPortion.keySet().iterator().next() : shortFirst).getName(),
+                    Math.max(0, canMake - afterToday)));
+        }
+        return out;
+    }
+
+    /** The most whole portions the stock allows: the largest count no ingredient falls short at. */
+    private static long most(
+            Map<String, BigDecimal> perPortion, Map<String, List<String>> standIns, Map<String, BigDecimal> stock) {
+        // No more than if every ingredient had all of its stand-ins' stock to itself.
+        long high = Long.MAX_VALUE;
+        for (Map.Entry<String, BigDecimal> need : perPortion.entrySet()) {
+            BigDecimal all = stock.getOrDefault(need.getKey(), BigDecimal.ZERO).max(BigDecimal.ZERO);
+            for (String standIn : standIns.getOrDefault(need.getKey(), List.of())) {
+                all = all.add(stock.getOrDefault(standIn, BigDecimal.ZERO).max(BigDecimal.ZERO));
+            }
+            high = Math.min(high, portions(all, need.getValue()));
+        }
+        long low = 0;
+        while (low < high) {
+            long middle = low + (high - low + 1) / 2;
+            if (shortAt(middle, perPortion, standIns, stock) == null) {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
+        }
+        return low;
+    }
+
+    /**
+     * The first ingredient, in recipe order, there is not enough of to make this many portions; null
+     * when there is enough of all. Stock is shared honestly: an ingredient is used for its own line
+     * first, what is left of it may stand in for another, and a stand-in covers whole portions only
+     * (a sale never splits one portion between an ingredient and its stand-in).
+     */
+    private static String shortAt(
+            long count, Map<String, BigDecimal> perPortion, Map<String, List<String>> standIns,
+            Map<String, BigDecimal> stock) {
+        Map<String, BigDecimal> left = new HashMap<>();
+        Map<String, Long> stillNeeded = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, BigDecimal> need : perPortion.entrySet()) {
+            BigDecimal have = stock.getOrDefault(need.getKey(), BigDecimal.ZERO).max(BigDecimal.ZERO);
+            long own = Math.min(count, portions(have, need.getValue()));
+            left.put(need.getKey(), have.subtract(need.getValue().multiply(BigDecimal.valueOf(own))));
+            stillNeeded.put(need.getKey(), count - own);
+        }
+        for (Map.Entry<String, Long> need : stillNeeded.entrySet()) {
+            long missing = need.getValue();
+            BigDecimal each = perPortion.get(need.getKey());
+            for (String standIn : standIns.getOrDefault(need.getKey(), List.of())) {
+                if (missing == 0) {
+                    break;
+                }
+                BigDecimal have = left.computeIfAbsent(standIn,
+                        id -> stock.getOrDefault(id, BigDecimal.ZERO).max(BigDecimal.ZERO));
+                long covered = Math.min(missing, portions(have, each));
+                left.put(standIn, have.subtract(each.multiply(BigDecimal.valueOf(covered))));
+                missing -= covered;
+            }
+            if (missing > 0) {
+                return need.getKey();
+            }
+        }
+        return null;
+    }
+
+    /** Whole portions a quantity allows; nothing when there is none or less than none. */
+    private static long portions(BigDecimal available, BigDecimal perPortion) {
+        if (available.signum() <= 0) {
+            return 0;
+        }
+        return available.divide(perPortion, 0, RoundingMode.DOWN).longValue();
     }
 
     /** How much of each ingredient leaves stock for a quantity of a dish with its chosen options. */

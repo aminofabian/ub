@@ -61,7 +61,7 @@ public class RestaurantMenuController {
         TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
         String branch = branchId == null || branchId.isBlank() ? null
                 : branchResolutionService.requireBranchForLockedRole(caller.roleId(), caller.branchId(), branchId);
-        return menuService.menu(TenantRequestIds.resolveBusinessId(request), branch);
+        return menuService.menu(TenantRequestIds.resolveBusinessId(request), branch, true);
     }
 
     /** How the restaurant runs: service charge, pooled tips, packaging and delivery charges, day start, QR ordering. */

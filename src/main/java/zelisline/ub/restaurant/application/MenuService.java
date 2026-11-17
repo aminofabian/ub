@@ -77,6 +77,7 @@ public class MenuService {
     private final ItemTaxResolver itemTaxResolver;
     private final DiscountResolutionService discountResolutionService;
     private final RestaurantGate gate;
+    private final RecipeService recipeService;
     private final zelisline.ub.platform.media.PictureUploads pictureUploads;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -88,7 +89,18 @@ public class MenuService {
      */
     @Transactional(readOnly = true)
     public MenuResponse menu(String businessId, String branchId) {
+        return menu(businessId, branchId, false);
+    }
+
+    /**
+     * The menu, and for staff with a branch, how many of each dish its stock can still make.
+     * The count is asked for explicitly so the public menu, which shares this, never carries it.
+     */
+    @Transactional(readOnly = true)
+    public MenuResponse menu(String businessId, String branchId, boolean withCanMake) {
         gate.requireEnabled(businessId);
+        Map<String, RecipeService.Makeable> makeable = withCanMake && branchId != null
+                ? recipeService.makeable(businessId, branchId) : Map.of();
         List<MenuItem> items = menuItemRepository.findByBusinessIdAndDeletedAtIsNullOrderBySortOrderAscNameAsc(businessId);
         Map<String, List<String>> groupIdsByItem = new HashMap<>();
         for (MenuItemModifierGroup link : linkRepository.findByBusinessIdOrderBySortOrderAsc(businessId)) {
@@ -129,7 +141,8 @@ public class MenuService {
             }
             itemResponses.add(toResponse(item, name, price, sellable,
                     groupIdsByItem.getOrDefault(item.getId(), List.of()),
-                    item.getCategoryId() == null ? null : categoryById.get(item.getCategoryId()), at));
+                    item.getCategoryId() == null ? null : categoryById.get(item.getCategoryId()), at,
+                    makeable.get(item.getId())));
         }
 
         Map<String, List<OptionResponse>> optionsByGroup = new LinkedHashMap<>();
@@ -611,13 +624,22 @@ public class MenuService {
     private static MenuItemResponse toResponse(
             MenuItem item, String name, BigDecimal price, boolean sellable, List<String> groupIds,
             MenuCategory category, MenuClock.At at) {
+        return toResponse(item, name, price, sellable, groupIds, category, at, null);
+    }
+
+    private static MenuItemResponse toResponse(
+            MenuItem item, String name, BigDecimal price, boolean sellable, List<String> groupIds,
+            MenuCategory category, MenuClock.At at, RecipeService.Makeable makeable) {
         // A dish is served now only when its named menu (heading) is open and its own hours allow.
         boolean servedNow = MenuClock.served(item, category, at);
         return new MenuItemResponse(item.getId(), item.getCategoryId(), name, item.getKind(), item.getItemId(), price,
                 item.getTaxRateId(), item.getStationId(), item.isAvailable(), item.isActive(), sellable,
                 item.getSortOrder(), groupIds, item.getPrice(), MenuClock.happy(item, at), servedNow,
                 item.getServeFromMinute(), item.getServeToMinute(), item.getHappyPrice(), item.getHappyFromMinute(),
-                item.getHappyToMinute(), item.getHappyDays(), item.getDescription(), item.getImageUrl());
+                item.getHappyToMinute(), item.getHappyDays(), item.getDescription(), item.getImageUrl(),
+                makeable == null ? null : makeable.canMake(),
+                makeable == null ? null : makeable.limitingIngredient(),
+                makeable == null ? null : makeable.mustUseToday());
     }
 
     // ------------------------------------------------------------------ modifier groups

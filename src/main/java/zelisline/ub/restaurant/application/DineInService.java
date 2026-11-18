@@ -196,21 +196,148 @@ public class DineInService {
         for (List<OrderCard> orphaned : byRoom.values()) {
             others.addAll(orphaned);
         }
+        // The booking default times: the business setting, or 2pm in / 11am out (ADR 0031).
+        zelisline.ub.restaurant.domain.RestaurantSettings settings = settingsService.get(businessId);
+        String checkIn = fmtTime(settings.getCheckInTime(), java.time.LocalTime.of(14, 0));
+        String checkOut = fmtTime(settings.getCheckOutTime(), java.time.LocalTime.of(11, 0));
         return new zelisline.ub.restaurant.api.dto.RoomDtos.FrontDeskResponse(
-                branchId, Instant.now(), rooms, others);
+                branchId, Instant.now(), rooms, others, checkIn, checkOut);
     }
 
-    private static zelisline.ub.restaurant.api.dto.RoomDtos.RoomResponse toRoomResponse(
+    /** A LocalTime as "HH:mm", falling back to {@code dflt} when unset. */
+    private static String fmtTime(java.time.LocalTime time, java.time.LocalTime dflt) {
+        java.time.LocalTime t = time != null ? time : dflt;
+        return String.format("%02d:%02d", t.getHour(), t.getMinute());
+    }
+
+    /**
+     * The stays a cashier can charge a drink or a meal to: guests checked in now (ADR 0030). A
+     * booking not yet arrived is left out — you cannot charge a guest who is not here — as is a
+     * settled stay. The charge rides the stay's folio and is realized once, at checkout.
+     */
+    @Transactional(readOnly = true)
+    public zelisline.ub.restaurant.api.dto.RoomDtos.InHouseStaysResponse inHouseStays(
+            String businessId, String branchId) {
+        gate.requireEnabled(businessId);
+        Map<String, String> roomNames = new HashMap<>();
+        for (ServiceResourceService.RoomRecord room : resourceService.rooms(businessId, branchId)) {
+            roomNames.put(room.id(), room.name());
+        }
+        List<zelisline.ub.restaurant.api.dto.RoomDtos.InHouseStay> out = new ArrayList<>();
+        for (OrderTicketService.Order stay : orderTicketService.openOrders(businessId, branchId)) {
+            if (!OrderTicketService.CHANNEL_LODGING.equals(stay.channel()) || stay.isBooked() || !stay.isOpen()) {
+                continue;
+            }
+            BigDecimal total = BigDecimal.ZERO;
+            for (OrderTicketService.OrderLine line : stay.lines()) {
+                if (!line.isVoided()) {
+                    total = total.add(line.lineTotal());
+                }
+            }
+            String roomId = stay.tableResourceId();
+            out.add(new zelisline.ub.restaurant.api.dto.RoomDtos.InHouseStay(
+                    stay.id(), stay.orderNumber(), roomId, roomId == null ? null : roomNames.get(roomId),
+                    stay.customerName(), total.setScale(2, RoundingMode.HALF_UP)));
+        }
+        return new zelisline.ub.restaurant.api.dto.RoomDtos.InHouseStaysResponse(branchId, out);
+    }
+
+    /**
+     * A guest's stays with this business, newest first (ADR 0030) — repeat-guest recognition. Keyed
+     * on the customer a stay already links to; no new guest data is stored. Read-only.
+     */
+    @Transactional(readOnly = true)
+    public zelisline.ub.restaurant.api.dto.RoomDtos.GuestStaysResponse guestStays(
+            String businessId, String customerId) {
+        gate.requireEnabled(businessId);
+        List<OrderTicketService.Order> stays = orderTicketService.lodgingStaysForCustomer(businessId, customerId, 50);
+        java.util.Map<String, String> roomNames = new HashMap<>();
+        List<zelisline.ub.restaurant.api.dto.RoomDtos.GuestStay> out = new ArrayList<>();
+        String name = null;
+        for (OrderTicketService.Order stay : stays) {
+            if (name == null) {
+                name = stay.customerName();
+            }
+            String roomId = stay.tableResourceId();
+            String roomName = roomId == null ? null
+                    : roomNames.computeIfAbsent(roomId, id -> resourceService.room(businessId, id)
+                            .map(ServiceResourceService.RoomRecord::name).orElse(null));
+            BigDecimal total = BigDecimal.ZERO;
+            for (OrderTicketService.OrderLine line : stay.lines()) {
+                if (!line.isVoided()) {
+                    total = total.add(line.lineTotal());
+                }
+            }
+            out.add(new zelisline.ub.restaurant.api.dto.RoomDtos.GuestStay(stay.id(), stay.orderNumber(), roomName,
+                    stay.scheduledStart(), stay.scheduledEnd(), stayState(stay), total.setScale(2, RoundingMode.HALF_UP)));
+        }
+        return new zelisline.ub.restaurant.api.dto.RoomDtos.GuestStaysResponse(customerId, name, out.size(), out);
+    }
+
+    private static String stayState(OrderTicketService.Order stay) {
+        if ("cancelled".equals(stay.status())) {
+            return "cancelled";
+        }
+        if (!stay.isOpen()) {
+            return "checked-out";
+        }
+        return stay.isBooked() ? "booked" : "in-house";
+    }
+
+    /**
+     * Charges lines (a drink, a meal) to a checked-in stay's folio (ADR 0030). This is the counter
+     * "charge to the room" action: the obligation moves to the guest's stay, and no sale is rung now
+     * — the folio settles once, at checkout. The stay must be a guest checked in here, not a booking
+     * for later and not an order already settled.
+     */
+    @Transactional
+    public OrderResponse chargeToStay(String businessId, String stayOrderId, List<NewOrderLine> lines) {
+        gate.requireEnabled(businessId);
+        OrderTicketService.Order stay = require(businessId, stayOrderId);
+        if (!OrderTicketService.CHANNEL_LODGING.equals(stay.channel())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That is not a room stay");
+        }
+        if (stay.isBooked()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Check the guest in before charging to their room");
+        }
+        if (!stay.isOpen()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "That stay is settled; it can take no more charges");
+        }
+        return addLines(businessId, stayOrderId, lines);
+    }
+
+    /**
+     * A stay has checked out (its folio settled): send its room to housekeeping rather than free it
+     * (ADR 0030). Called when an order completes; does nothing unless it is a lodging stay with a
+     * room. The room becomes DIRTY and is not bookable again until it is turned round.
+     */
+    public void onStayCompleted(String businessId, OrderTicketService.Order order) {
+        if (order != null && OrderTicketService.CHANNEL_LODGING.equals(order.channel())) {
+            resourceService.markRoomDirtyOnCheckout(businessId, order.tableResourceId());
+        }
+    }
+
+    private zelisline.ub.restaurant.api.dto.RoomDtos.RoomResponse toRoomResponse(
             ServiceResourceService.RoomRecord room) {
+        String cleaner = staffName(room.businessId(), room.cleanerStaffProfileId());
         return new zelisline.ub.restaurant.api.dto.RoomDtos.RoomResponse(
                 room.id(), room.branchId(), room.name(), room.nightlyRate(), room.area(), room.active(),
-                room.sortOrder());
+                room.sortOrder(), room.housekeepingStatus(), room.readyToLet(), room.roomTypeId(),
+                room.effectiveNightlyRate(), room.effectiveWeekendRate(),
+                room.housekeepingNote(), room.cleanerStaffProfileId(), cleaner);
     }
 
     // ------------------------------------------------------------------ an order
 
     @Transactional
     public OrderResponse open(String businessId, String branchId, String userId, OpenOrderRequest request) {
+        return open(businessId, branchId, userId, request, "STAFF");
+    }
+
+    /** As {@link #open}, naming where the order came from ("STAFF" at the desk, "ONLINE" from the web). */
+    @Transactional
+    public OrderResponse open(String businessId, String branchId, String userId, OpenOrderRequest request,
+            String source) {
         gate.requireEnabled(businessId);
         String channel = request.channel().trim().toUpperCase(java.util.Locale.ROOT);
         String tableId = blankToNull(request.tableId());
@@ -221,8 +348,12 @@ public class DineInService {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a room for the stay");
             }
             requireRoom(businessId, branchId, tableId);
+            // A replay of the same booking (same client order id) must not collide with the stay it
+            // already created: exclude that one from the overlap check so the request stays idempotent.
+            String existingId = orderTicketService.findByClientOrderId(businessId, request.clientOrderId())
+                    .map(OrderTicketService.Order::id).orElse(null);
             requireRoomFreeForStay(businessId, branchId, tableId, request.scheduledStart(),
-                    request.scheduledEnd(), null);
+                    request.scheduledEnd(), existingId);
         }
         // A dine-in order needs a table, unless it is a booking for later or a named tab (a bar runs
         // tabs under a name with no table; it can be seated at a table later with move).
@@ -258,7 +389,7 @@ public class DineInService {
                 branchId, channel, tableId, request.guestCount(), servedBy, blankToNull(request.customerId()),
                 request.customerName(), request.customerPhone(), request.deliveryAddress(),
                 request.clientOrderId(), request.scheduledStart(), request.scheduledEnd(),
-                OrderTicketService.CHANNEL_DELIVERY.equals(channel) ? request.deliveryFee() : null, "STAFF"));
+                OrderTicketService.CHANNEL_DELIVERY.equals(channel) ? request.deliveryFee() : null, source));
         return toResponse(businessId, order);
     }
 
@@ -401,6 +532,69 @@ public class DineInService {
         return toResponse(businessId, orderTicketService.moveToTable(businessId, orderId, target));
     }
 
+    /**
+     * Moves a stay to another room (ADR 0030): the guest changes rooms, their folio travels with
+     * them. The target room must be free for the stay's nights and in use. A checked-in stay keeps
+     * its frozen room-night line as it is — the rate is not re-figured for a mid-stay move; only
+     * which room holds the stay changes.
+     */
+    @Transactional
+    public OrderResponse moveStayToRoom(String businessId, String orderId, String roomId) {
+        gate.requireEnabled(businessId);
+        OrderTicketService.Order stay = orderTicketService.lock(businessId, orderId);
+        if (!OrderTicketService.CHANNEL_LODGING.equals(stay.channel())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That is not a room stay");
+        }
+        String target = blankToNull(roomId);
+        if (target == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a room");
+        }
+        requireRoom(businessId, stay.branchId(), target);
+        requireRoomFreeForStay(businessId, stay.branchId(), target, stay.scheduledStart(), stay.scheduledEnd(),
+                stay.id());
+        // A checked-in guest is in the room now whatever their scheduled dates say, so an in-house
+        // stay on the target blocks the move even when the date windows do not overlap.
+        requireRoomNotInHouse(businessId, stay.branchId(), target, stay.id());
+        return toResponse(businessId, orderTicketService.moveToTable(businessId, orderId, target));
+    }
+
+    /** Refuses a room that a guest is checked into now (a different stay than {@code exceptOrderId}). */
+    private void requireRoomNotInHouse(String businessId, String branchId, String roomId, String exceptOrderId) {
+        for (OrderTicketService.Order other : orderTicketService.openOrders(businessId, branchId)) {
+            if (OrderTicketService.CHANNEL_LODGING.equals(other.channel())
+                    && roomId.equals(other.tableResourceId())
+                    && !other.isBooked()
+                    && !other.id().equals(exceptOrderId)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "A guest is already in that room");
+            }
+        }
+    }
+
+    /**
+     * Changes a booking's check-in and check-out before the guest arrives (ADR 0030): extend,
+     * shorten, or shift the stay. The room must still be free for the new nights. Only a booking
+     * not yet checked in is changed here; once a guest is in, the folio's nights are frozen.
+     */
+    @Transactional
+    public OrderResponse changeStayDates(String businessId, String orderId, Instant checkIn, Instant checkOut) {
+        gate.requireEnabled(businessId);
+        OrderTicketService.Order stay = orderTicketService.lock(businessId, orderId);
+        if (!OrderTicketService.CHANNEL_LODGING.equals(stay.channel())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That is not a room stay");
+        }
+        if (!stay.isBooked()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "This guest is checked in; their dates can no longer be changed here");
+        }
+        if (checkIn == null || checkOut == null || !checkOut.isAfter(checkIn)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Check-out must be after check-in");
+        }
+        if (stay.tableResourceId() != null) {
+            requireRoomFreeForStay(businessId, stay.branchId(), stay.tableResourceId(), checkIn, checkOut, stay.id());
+        }
+        return toResponse(businessId, orderTicketService.rescheduleBooking(businessId, orderId, checkIn, checkOut));
+    }
+
     /** Joins this order into another open order at the same branch; this one is closed. */
     @Transactional
     public OrderResponse merge(String businessId, String orderId, String intoOrderId, String userId) {
@@ -455,6 +649,17 @@ public class DineInService {
         return toResponse(businessId, orderTicketService.requestBill(businessId, orderId, requested, Instant.now()));
     }
 
+    /** Records (or clears) a lodging guest's ID on their stay (ADR 0031). Sensitive PII; not logged. */
+    @Transactional
+    public OrderResponse setGuestId(String businessId, String orderId, String idType, String idNumber) {
+        gate.requireEnabled(businessId);
+        OrderTicketService.Order stay = require(businessId, orderId);
+        if (!OrderTicketService.CHANNEL_LODGING.equals(stay.channel())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That is not a room stay");
+        }
+        return toResponse(businessId, orderTicketService.setGuestId(businessId, orderId, idType, idNumber));
+    }
+
     /** A booking's guests have arrived (a table), or a stay's guest checks in (a room). */
     @Transactional
     public OrderResponse seat(String businessId, String orderId, String userId) {
@@ -468,33 +673,20 @@ public class DineInService {
                     staffProfileService.ensureProfile(businessId, userId).getId(), null, null, null, null);
         }
         // Checking in charges the stay for all its nights at once: one room-night line, the rate
-        // frozen onto it now, so a later rate change never moves this folio (ADR 0028).
+        // frozen onto it now, so a later rate change never moves this folio (ADR 0028). The room is
+        // re-checked here, not just at booking: a room taken out of use or out for repair between
+        // booking and arrival must not take the guest in (ADR 0030).
         if (OrderTicketService.CHANNEL_LODGING.equals(order.channel())) {
+            if (order.tableResourceId() != null) {
+                requireRoom(businessId, order.branchId(), order.tableResourceId());
+            }
             addRoomNightLine(businessId, order);
         }
         OrderTicketService.Order seated = orderTicketService.seatBooking(businessId, orderId);
         return toResponse(businessId, seated);
     }
 
-    /** Africa/Nairobi: a stay's nights are counted by the calendar dates it spans, local time. */
-    private static final java.time.ZoneId STAY_ZONE = java.time.ZoneId.of("Africa/Nairobi");
-
-    /**
-     * The whole number of nights of a stay, at least one. A night is a calendar date slept, so a
-     * guest in on the 18th and out on the 20th is charged two nights even if that is under 48 hours
-     * (a 2pm check-in to an 11am check-out) — counted by local date, not by 24-hour blocks.
-     */
-    static long nightsBetween(Instant checkIn, Instant checkOut) {
-        if (checkIn == null || checkOut == null) {
-            return 1;
-        }
-        java.time.LocalDate in = checkIn.atZone(STAY_ZONE).toLocalDate();
-        java.time.LocalDate out = checkOut.atZone(STAY_ZONE).toLocalDate();
-        long nights = java.time.temporal.ChronoUnit.DAYS.between(in, out);
-        return Math.max(1, nights);
-    }
-
-    /** Adds the one ROOM line for a stay, if it has not been added already (check-in is idempotent). */
+    /** Adds the ROOM line(s) for a stay, if none has been added already (check-in is idempotent). */
     private void addRoomNightLine(String businessId, OrderTicketService.Order order) {
         String roomId = order.tableResourceId();
         if (roomId == null) {
@@ -507,11 +699,21 @@ public class DineInService {
         }
         ServiceResourceService.RoomRecord room = resourceService.room(businessId, roomId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "This stay's room is gone"));
-        long nights = nightsBetween(order.scheduledStart(), order.scheduledEnd());
-        String label = nights == 1 ? room.name() + " — 1 night" : room.name() + " — " + nights + " nights";
-        orderTicketService.addLines(businessId, order.id(), List.of(new OrderTicketService.NewLine(
-                "ROOM", null, null, label, java.math.BigDecimal.valueOf(nights), room.nightlyRate(),
-                null, null, null, false)));
+        // Resolve the room's rate card to the exact nights now, and freeze each onto its own ROOM
+        // line (ADR 0030): one line when every night is the same rate, two when a weekend rate
+        // applies to some of them. A later rate or rate-card change never moves this folio (ADR 0028).
+        List<ServiceResourceService.RoomNightTier> tiers =
+                resourceService.resolveRoomNights(businessId, roomId, order.scheduledStart(), order.scheduledEnd());
+        List<OrderTicketService.NewLine> lines = new ArrayList<>();
+        for (ServiceResourceService.RoomNightTier tier : tiers) {
+            String kind = tier.weekend() && tiers.size() > 1 ? "weekend night" : "night";
+            String label = tier.nights() == 1
+                    ? room.name() + " — 1 " + kind
+                    : room.name() + " — " + tier.nights() + " " + kind + "s";
+            lines.add(new OrderTicketService.NewLine("ROOM", null, null, label,
+                    java.math.BigDecimal.valueOf(tier.nights()), tier.rate(), null, null, null, false));
+        }
+        orderTicketService.addLines(businessId, order.id(), lines);
     }
 
     /** Everything the kitchen has finished has reached the table (or the customer). */
@@ -562,6 +764,54 @@ public class DineInService {
         }
         return toResponse(businessId,
                 orderTicketService.takeDeposit(businessId, orderId, amount, method, userId, tillDeviceKey));
+    }
+
+    /**
+     * A deposit paid online by M-Pesa STK, recorded once the gateway confirms the receipt (ADR 0031).
+     * The money has already landed in M-Pesa clearing, so there is no drawer and no till; the held
+     * deposit is kept in the guest's name exactly as a desk deposit, so release/forfeit/refund all
+     * work unchanged. Idempotent: a second confirmation of the same amount is a no-op (the underlying
+     * {@code takeDeposit} returns the existing held deposit), so a replayed callback never double-holds.
+     */
+    @Transactional
+    public OrderResponse takeOnlineDeposit(String businessId, String orderId, BigDecimal amount) {
+        gate.requireEnabled(businessId);
+        OrderTicketService.Order order = orderTicketService.lock(businessId, orderId);
+        if (order.customerId() == null) {
+            // Online deposits must not hit the match-or-throw path: an ambiguous phone there raises a
+            // CONFLICT that would roll back the gateway callback forever (the money is already received).
+            // Match an existing customer only when the phone is unambiguous; otherwise make a fresh one
+            // from the booking's name and phone, which staff can merge later.
+            String customerId = resolveOnlineDepositCustomer(businessId, order);
+            orderTicketService.setDetails(businessId, orderId, null, null, customerId, null, null, null);
+        }
+        return toResponse(businessId, orderTicketService.takeDeposit(businessId, orderId, amount,
+                zelisline.ub.sales.SalesConstants.PAYMENT_METHOD_MPESA_STK, ONLINE_DEPOSIT_ACTOR, null));
+    }
+
+    private static final String ONLINE_DEPOSIT_ACTOR = "online";
+
+    /**
+     * The customer an online deposit is held for. Unlike {@link #ensureCustomerForDeposit}, an
+     * ambiguous phone never throws — the online guest gets a fresh record rather than blocking a
+     * received payment. A blank phone (should not happen: the booking requires one) also makes a
+     * record keyed on the name so the money is never stranded.
+     */
+    private String resolveOnlineDepositCustomer(String businessId, OrderTicketService.Order order) {
+        String phone = blankToNull(order.customerPhone());
+        String name = blankToNull(order.customerName());
+        if (phone != null) {
+            zelisline.ub.credits.application.CustomerDirectoryService.PhoneMatch match =
+                    customerDirectoryService.findByPhone(businessId, phone);
+            if (!match.ambiguous() && match.customerId() != null) {
+                return match.customerId();
+            }
+        }
+        java.util.List<zelisline.ub.credits.api.dto.CustomerPhoneDraft> phones = phone != null
+                ? java.util.List.of(new zelisline.ub.credits.api.dto.CustomerPhoneDraft(phone, true))
+                : java.util.List.of();
+        return customerDirectoryService.create(businessId, new zelisline.ub.credits.api.dto.CreateCustomerRequest(
+                name != null ? name : (phone != null ? phone : "Guest"), null, null, null, phones, null)).id();
     }
 
     /** A booking whose guests never arrived; the deposit is kept as income, or as the customer's credit. */
@@ -710,7 +960,7 @@ public class DineInService {
                 OrderTicketService.CHANNEL_DELIVERY.equals(order.channel())
                         ? (order.deliveryFee() != null ? order.deliveryFee() : settings.getDeliveryFee()) : null,
                 order.riderName(), order.dispatchedAt(), order.deliveredAt(), order.source(),
-                order.depositAmount(), order.depositState());
+                order.depositAmount(), order.depositState(), order.guestIdType(), order.guestIdNumber());
     }
 
     /** What a quantity of a line costs. */
@@ -749,7 +999,8 @@ public class DineInService {
                 order.customerName(), order.createdAt(), total.setScale(2, RoundingMode.HALF_UP), unsent, inKitchen,
                 ready, order.billRequestedAt(), order.isBooked(), order.scheduledStart(), order.scheduledEnd(),
                 !order.isOpen(), order.dispatchedAt(),
-                total.subtract(settledValue).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP));
+                total.subtract(settledValue).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP),
+                order.source());
     }
 
     private Map<String, String> staffNames(String businessId, List<OrderTicketService.Order> orders) {
@@ -788,14 +1039,23 @@ public class DineInService {
         if (!room.active()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, room.name() + " is not in use");
         }
+        // A room out for repair takes no stay, however its dates look (ADR 0030). Clean/dirty
+        // turnaround is a same-day matter left to the staff, not a booking-time block.
+        if (ServiceResourceService.HOUSEKEEPING_MAINTENANCE.equals(room.housekeepingStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, room.name() + " is out for repair");
+        }
     }
 
-    /** Two stays cannot hold one room over the same nights. Uses the same overlap query as a table booking. */
+    /**
+     * Two stays cannot hold one room over the same nights. Unlike a table, a seated (checked-in)
+     * stay still holds its room, so the room-specific overlap query counts in-house stays too — a
+     * guest can never be moved or booked onto a room another guest is in (ADR 0030).
+     */
     private void requireRoomFreeForStay(
             String businessId, String branchId, String roomId, Instant from, Instant to, String exceptOrderId) {
-        for (OrderTicketService.Order other : orderTicketService.bookingsOverlapping(businessId, branchId, from, to)) {
+        for (OrderTicketService.Order other : orderTicketService.roomStaysOverlapping(businessId, branchId, from, to)) {
             if (roomId.equals(other.tableResourceId()) && !other.id().equals(exceptOrderId)) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "That room is already booked for those nights");
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "That room is taken for those nights");
             }
         }
     }
@@ -804,6 +1064,20 @@ public class DineInService {
         if (staffProfileService.displayNamesByIds(businessId, List.of(staffProfileId)).get(staffProfileId) == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Staff member not found");
         }
+    }
+
+    /** A staff member of this business must exist for the given id — for naming a room's cleaner. */
+    public void requireStaffMember(String businessId, String staffProfileId) {
+        requireStaff(businessId, staffProfileId);
+    }
+
+    /** The display name of a staff profile, or null when none or since left — for a room's cleaner. */
+    @Transactional(readOnly = true)
+    public String staffName(String businessId, String staffProfileId) {
+        if (staffProfileId == null || staffProfileId.isBlank()) {
+            return null;
+        }
+        return staffProfileService.displayNamesByIds(businessId, List.of(staffProfileId)).get(staffProfileId);
     }
 
     /** The names of the waiters assigned to these tables, by staff profile id. */

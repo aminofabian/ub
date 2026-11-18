@@ -24,6 +24,8 @@ public final class SalesConstants {
 
     public static final String PAYMENT_METHOD_CASH = "cash";
     public static final String PAYMENT_METHOD_MPESA_MANUAL = "mpesa_manual";
+    /** An online M-Pesa STK receipt that settled against the gateway — clears to M-Pesa clearing, no drawer. */
+    public static final String PAYMENT_METHOD_MPESA_STK = "mpesa_stk";
     /** Card terminal / POS card reader — clears to card clearing, not drawer cash. */
     public static final String PAYMENT_METHOD_CARD = "card";
     /** Tab / pay-later — posts to customer AR and credit_accounts.balance_owed (Phase 5). */

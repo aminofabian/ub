@@ -231,7 +231,13 @@ public final class RestaurantDtos {
             /** {@code BUSINESS}: the service charge is the restaurant's income. {@code STAFF}: it is shared like a tip. */
             String serviceChargeTo,
             /** Whether the menu is shown on the restaurant's public web page. */
-            boolean menuOnline) {
+            boolean menuOnline,
+            /** Default room check-in time, "HH:mm" Nairobi, for a lodging tenant (ADR 0031). */
+            String checkInTime,
+            /** Default room check-out time, "HH:mm" Nairobi, for a lodging tenant (ADR 0031). */
+            String checkOutTime,
+            /** Whether rooms are shown and bookable on the public storefront (ADR 0031). */
+            boolean roomsOnline) {
     }
 
     /** Null leaves a field as it is; zero switches a charge off. */
@@ -243,12 +249,17 @@ public final class RestaurantDtos {
             @Min(0) @Max(1439) Integer dayStartsAtMinute,
             Boolean qrOrdering,
             @jakarta.validation.constraints.Pattern(regexp = "BUSINESS|STAFF") String serviceChargeTo,
-            Boolean menuOnline) {
+            Boolean menuOnline,
+            /** "HH:mm" Nairobi, or null to leave as is; empty string clears to the 2pm default. */
+            @jakarta.validation.constraints.Pattern(regexp = "|([01]\\d|2[0-3]):[0-5]\\d") String checkInTime,
+            @jakarta.validation.constraints.Pattern(regexp = "|([01]\\d|2[0-3]):[0-5]\\d") String checkOutTime,
+            Boolean roomsOnline) {
 
         public SettingsRequest(
                 BigDecimal serviceChargePercent, Boolean tipsPooled, BigDecimal packagingCharge,
                 BigDecimal deliveryFee, Integer dayStartsAtMinute, Boolean qrOrdering) {
-            this(serviceChargePercent, tipsPooled, packagingCharge, deliveryFee, dayStartsAtMinute, qrOrdering, null, null);
+            this(serviceChargePercent, tipsPooled, packagingCharge, deliveryFee, dayStartsAtMinute, qrOrdering,
+                    null, null, null, null, null);
         }
     }
 

@@ -55,6 +55,14 @@ public class PosDraft {
     @Column(name = "customer_id", length = 36)
     private String customerId;
 
+    /** For a lodging stay: the guest's ID type (National ID, Passport…), captured at check-in. PII. */
+    @Column(name = "guest_id_type", length = 32)
+    private String guestIdType;
+
+    /** For a lodging stay: the guest's ID number. Sensitive PII — keep out of logs and fixtures. */
+    @Column(name = "guest_id_number", length = 64)
+    private String guestIdNumber;
+
     @Column(name = "client_draft_id", length = 64)
     private String clientDraftId;
 

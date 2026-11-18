@@ -69,6 +69,18 @@ public class RestaurantSettings {
     @Column(name = "menu_online", nullable = false)
     private boolean menuOnline = true;
 
+    /** The business default check-in time for rooms, or null to use 14:00 (ADR 0031). */
+    @Column(name = "check_in_time")
+    private java.time.LocalTime checkInTime;
+
+    /** The business default check-out time for rooms, or null to use 11:00 (ADR 0031). */
+    @Column(name = "check_out_time")
+    private java.time.LocalTime checkOutTime;
+
+    /** Whether the rooms are shown and bookable on the public storefront (ADR 0031). Off by default. */
+    @Column(name = "rooms_online", nullable = false)
+    private boolean roomsOnline = false;
+
     /** Who switched QR ordering on; orders opened from a QR code are recorded as opened by them. */
     @Column(name = "qr_enabled_by", length = 36)
     private String qrEnabledBy;

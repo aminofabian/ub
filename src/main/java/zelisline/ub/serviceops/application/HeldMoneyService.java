@@ -48,9 +48,11 @@ public class HeldMoneyService {
     private final DrawerPaidOutService drawerPaidOutService;
 
     /**
-     * Receives money into a liability account. Cash goes into the open shift's drawer.
+     * Receives money into a liability account. Cash goes into the open shift's drawer. An online
+     * M-Pesa STK receipt ({@code mpesa_stk}) has already landed in M-Pesa clearing at the gateway and
+     * has no drawer — it posts the same clearing debit as a manual M-Pesa tender but carries no pay-in.
      *
-     * @param method {@code cash} or {@code mpesa_manual}
+     * @param method {@code cash}, {@code mpesa_manual} or {@code mpesa_stk}
      * @return the journal entry id
      */
     @Transactional
@@ -63,7 +65,8 @@ public class HeldMoneyService {
         if (SalesConstants.PAYMENT_METHOD_CASH.equals(method)) {
             drawerPaidOutService.payIn(businessId, branchId, tillDeviceKey, money, sourceId, userId);
             debit = LedgerAccountCodes.OPERATING_CASH;
-        } else if (SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(method)) {
+        } else if (SalesConstants.PAYMENT_METHOD_MPESA_MANUAL.equals(method)
+                || SalesConstants.PAYMENT_METHOD_MPESA_STK.equals(method)) {
             debit = LedgerAccountCodes.MPESA_CLEARING;
         } else {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Pay by cash or M-Pesa");

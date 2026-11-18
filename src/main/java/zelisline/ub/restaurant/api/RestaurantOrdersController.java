@@ -23,6 +23,7 @@ import zelisline.ub.platform.security.CurrentUserPermissions;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.restaurant.api.dto.OrderDtos.AddLinesRequest;
+import zelisline.ub.restaurant.api.dto.OrderDtos.GuestIdRequest;
 import zelisline.ub.restaurant.api.dto.OrderDtos.BillRequestedRequest;
 import zelisline.ub.restaurant.api.dto.OrderDtos.CancelOrderRequest;
 import zelisline.ub.restaurant.api.dto.OrderDtos.DepositRequest;
@@ -32,6 +33,9 @@ import zelisline.ub.restaurant.api.dto.OrderDtos.CloseBillRequest;
 import zelisline.ub.restaurant.api.dto.OrderDtos.CreateBillRequest;
 import zelisline.ub.restaurant.api.dto.OrderDtos.FloorResponse;
 import zelisline.ub.restaurant.api.dto.OrderDtos.MoveRequest;
+import zelisline.ub.restaurant.api.dto.RoomDtos.ChangeStayDatesRequest;
+import zelisline.ub.restaurant.api.dto.RoomDtos.InHouseStaysResponse;
+import zelisline.ub.restaurant.api.dto.RoomDtos.MoveStayRequest;
 import zelisline.ub.restaurant.api.dto.OrderDtos.OpenOrderRequest;
 import zelisline.ub.restaurant.api.dto.OrderDtos.OrderDetailsRequest;
 import zelisline.ub.restaurant.api.dto.OrderDtos.OrderResponse;
@@ -143,6 +147,49 @@ public class RestaurantOrdersController {
     public OrderResponse addLines(
             @PathVariable String orderId, @Valid @RequestBody AddLinesRequest body, HttpServletRequest request) {
         return dineInService.addLines(orderBranchChecked(request, orderId), orderId, body.lines());
+    }
+
+    /** The checked-in stays a cashier can charge a drink or a meal to (ADR 0030, charge to the room). */
+    @GetMapping("/in-house-stays")
+    @PreAuthorize(SEE_FLOOR)
+    public InHouseStaysResponse inHouseStays(@RequestParam String branchId, HttpServletRequest request) {
+        return dineInService.inHouseStays(business(request), branch(request, branchId));
+    }
+
+    /**
+     * Charge a drink or a meal to a checked-in stay's folio (ADR 0030). The obligation moves to the
+     * guest's room; no sale is rung now — the folio settles once, at checkout. Idempotent per line
+     * through the same client line ids the counter already uses.
+     */
+    @PostMapping("/open-orders/{orderId}/charge-to-room")
+    @PreAuthorize(SERVE)
+    public OrderResponse chargeToRoom(
+            @PathVariable String orderId, @Valid @RequestBody AddLinesRequest body, HttpServletRequest request) {
+        return dineInService.chargeToStay(orderBranchChecked(request, orderId), orderId, body.lines());
+    }
+
+    /** Record (or clear) a lodging guest's ID on their stay (ADR 0031). Sensitive PII. */
+    @PostMapping("/open-orders/{orderId}/guest-id")
+    @PreAuthorize(SERVE)
+    public OrderResponse setGuestId(
+            @PathVariable String orderId, @Valid @RequestBody GuestIdRequest body, HttpServletRequest request) {
+        return dineInService.setGuestId(orderBranchChecked(request, orderId), orderId, body.idType(), body.idNumber());
+    }
+
+    /** Move a stay to another room; the guest's folio travels with them (ADR 0030). */
+    @PostMapping("/open-orders/{orderId}/move-room")
+    @PreAuthorize(SERVE)
+    public OrderResponse moveStayToRoom(
+            @PathVariable String orderId, @Valid @RequestBody MoveStayRequest body, HttpServletRequest request) {
+        return dineInService.moveStayToRoom(orderBranchChecked(request, orderId), orderId, body.roomId());
+    }
+
+    /** Extend, shorten or shift a booking's dates before the guest arrives (ADR 0030). */
+    @PostMapping("/open-orders/{orderId}/stay-dates")
+    @PreAuthorize(SERVE)
+    public OrderResponse changeStayDates(
+            @PathVariable String orderId, @Valid @RequestBody ChangeStayDatesRequest body, HttpServletRequest request) {
+        return dineInService.changeStayDates(orderBranchChecked(request, orderId), orderId, body.checkIn(), body.checkOut());
     }
 
     @PatchMapping("/open-orders/{orderId}/lines/{lineId}")

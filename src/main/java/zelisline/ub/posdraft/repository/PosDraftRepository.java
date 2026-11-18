@@ -50,6 +50,41 @@ public interface PosDraftRepository extends JpaRepository<PosDraft, String> {
             @Param("from") java.time.Instant from, @Param("to") java.time.Instant to);
 
     /**
+     * Lodging stays holding a room over a window at a branch, whether still booked or already
+     * checked in. Unlike a table — where a walk-in is deliberately not blocked — a room cannot hold
+     * two guests at once, so a seated stay ({@code service_stage} cleared at check-in) counts too
+     * (ADR 0030). A settled stay no longer holds the room.
+     */
+    @Query("""
+            select d from PosDraft d
+             where d.businessId = :businessId
+               and d.branchId = :branchId
+               and d.draftKind = 'ORDER'
+               and d.status = 'pending'
+               and d.orderChannel = 'LODGING'
+               and (d.serviceStage = 'BOOKED' or d.serviceStage is null)
+               and d.scheduledStart < :to
+               and d.scheduledEnd > :from
+             order by d.scheduledStart asc
+            """)
+    List<PosDraft> findRoomStaysOverlapping(
+            @Param("businessId") String businessId, @Param("branchId") String branchId,
+            @Param("from") java.time.Instant from, @Param("to") java.time.Instant to);
+
+    /** A customer's lodging stays, newest first — their stay history (ADR 0030), capped by the caller. */
+    @Query("""
+            select d from PosDraft d
+             where d.businessId = :businessId
+               and d.draftKind = 'ORDER'
+               and d.orderChannel = 'LODGING'
+               and d.customerId = :customerId
+             order by coalesce(d.scheduledStart, d.createdAt) desc
+            """)
+    List<PosDraft> findLodgingStaysForCustomer(
+            @Param("businessId") String businessId, @Param("customerId") String customerId,
+            org.springframework.data.domain.Pageable page);
+
+    /**
      * Delivery orders at a branch that have been paid or otherwise closed but not yet handed to
      * the customer, newest closing first. Bounded by when they closed, so one nobody ever marked
      * as delivered does not stay on the floor for good.

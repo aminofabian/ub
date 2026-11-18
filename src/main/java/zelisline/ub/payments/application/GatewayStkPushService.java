@@ -139,6 +139,7 @@ public class GatewayStkPushService {
     private final ObjectProvider<zelisline.ub.billing.application.SubscriptionRenewalService> subscriptionRenewalService;
     private final ObjectProvider<zelisline.ub.domainoffer.application.DomainOfferService> domainOfferService;
     private final ObjectProvider<zelisline.ub.finance.application.ProfitPocketService> profitPocketService;
+    private final ObjectProvider<zelisline.ub.restaurant.application.DineInService> dineInService;
     /** Own proxy, so gateway polling can open a transaction only to write the result. */
     private final ObjectProvider<GatewayStkPushService> self;
     private final AuditEventPublisher auditEventPublisher;
@@ -1461,6 +1462,7 @@ public class GatewayStkPushService {
             case SUBSCRIPTION_RENEWAL -> confirmSubscriptionRenewal(push);
             case DOMAIN_THEME_OFFER -> confirmDomainThemeOffer(push);
             case PROFIT_POCKET -> confirmProfitPocket(push);
+            case ROOM_BOOKING_DEPOSIT -> confirmRoomBookingDeposit(push);
             case PROFIT_POCKET_TEST, ONBOARDING_RECEIVE_TEST -> log.info(
                     "Destination test STK confirmed push={} txn={}",
                     push.getId(), gatewayTxnId);
@@ -1749,6 +1751,33 @@ public class GatewayStkPushService {
 
         publishStkRealtime(push, true, "Order paid");
         log.info("Web order marked paid: orderId={} checkoutId={}", order.getId(), push.getGatewayCheckoutId());
+    }
+
+    /**
+     * An online room-booking deposit (ADR 0031) settled. The money is already in M-Pesa clearing; we
+     * record it as a held deposit on the booked stay so the front desk sees it and release/forfeit/
+     * refund work unchanged. {@code takeOnlineDeposit} is idempotent on the same amount, so a replayed
+     * callback never double-holds.
+     *
+     * <p>A failure here is <b>re-thrown</b>, not swallowed: it propagates out of {@code confirmPush}
+     * and rolls back the SUCCESS this transaction just wrote, leaving the push PENDING so the poller
+     * and later webhooks reconcile it. Swallowing would commit a received payment with no deposit on
+     * the folio and no retry — money the house can never see. The only expected failures here are
+     * transient (lock contention), because {@code takeOnlineDeposit} no longer throws on an ambiguous
+     * guest phone, and a same-amount replay is a no-op in {@code takeDeposit}.
+     */
+    private void confirmRoomBookingDeposit(GatewayStkPush push) {
+        if (push.getContextId() == null) {
+            return;
+        }
+        zelisline.ub.restaurant.application.DineInService desk = dineInService.getIfAvailable();
+        if (desk == null) {
+            // Leave the push PENDING by failing the transaction; the poller will retry once the context loads.
+            throw new IllegalStateException("Front-desk service unavailable for room deposit push=" + push.getId());
+        }
+        desk.takeOnlineDeposit(push.getBusinessId(), push.getContextId(), push.getAmount());
+        publishStkRealtime(push, true, "Deposit received");
+        log.info("Room booking deposit held: stay={} push={}", push.getContextId(), push.getId());
     }
 
     private void confirmWalletIntent(GatewayStkPush push) {

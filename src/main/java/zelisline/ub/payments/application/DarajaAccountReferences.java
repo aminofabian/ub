@@ -27,6 +27,14 @@ public final class DarajaAccountReferences {
         return truncate(compact, MAX_LEN);
     }
 
+    /** Room-deposit reference {@code RM} + compacted stay id, trimmed to 12 chars (ADR 0031). */
+    public static String forRoomDeposit(String stayId) {
+        if (stayId == null || stayId.isBlank()) {
+            return "ROOMDEPOSIT";
+        }
+        return truncate("RM" + stayId.replaceAll("[^A-Za-z0-9]", "").toUpperCase(), MAX_LEN);
+    }
+
     public static boolean groceryBarcodeMatches(String billRef, String barcodeCode) {
         if (billRef == null || billRef.isBlank() || barcodeCode == null) {
             return false;

@@ -49,7 +49,7 @@ class BusinessFormatsServiceTest {
         return new OrderTicketService.Order(
                 "o1", "branch-1", 1L, null, channel, Instant.now(), List.of(), "PENDING", null, null, null,
                 null, null, null, null, null, null, null, null, null, 0L, BigDecimal.ZERO, null, null, null,
-                null, BigDecimal.ZERO, null, null);
+                null, BigDecimal.ZERO, null, null, null, null);
     }
 
     @Test

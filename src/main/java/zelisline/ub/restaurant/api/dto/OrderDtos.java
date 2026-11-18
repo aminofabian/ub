@@ -109,7 +109,9 @@ public final class OrderDtos {
             /** A delivery: when it left with the rider. */
             Instant dispatchedAt,
             /** What of {@code total} is on no closed bill yet — the money still owed at close. */
-            BigDecimal unsettled) {
+            BigDecimal unsettled,
+            /** Where the order came from: {@code STAFF}, {@code QR}, {@code ONLINE} (ADR 0031). */
+            String source) {
     }
 
     public record FloorTable(TableResponse table, List<OrderCard> orders) {
@@ -246,7 +248,15 @@ public final class OrderDtos {
             /** {@code STAFF}, or {@code QR} when a customer started it from a table's QR code. */
             String source,
             /** A deposit held against a booking: its amount, and its state ({@code HELD}, {@code APPLIED}, {@code CREDITED}, {@code FORFEITED}, {@code REFUNDED}), or null when none. */
-            BigDecimal depositAmount, String depositState) {
+            BigDecimal depositAmount, String depositState,
+            /** A lodging guest's ID type and number, captured at check-in (ADR 0031). Sensitive PII. */
+            String guestIdType, String guestIdNumber) {
+    }
+
+    /** Record (or clear) a lodging guest's ID on their stay (ADR 0031). */
+    public record GuestIdRequest(
+            @Size(max = 32) String idType,
+            @Size(max = 64) String idNumber) {
     }
 
     public record DepositRequest(

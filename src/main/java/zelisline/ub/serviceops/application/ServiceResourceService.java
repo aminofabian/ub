@@ -19,6 +19,7 @@ import zelisline.ub.posdraft.repository.PosDraftLineRepository;
 import zelisline.ub.serviceops.api.dto.ResourceDtos.CreateResourceRequest;
 import zelisline.ub.serviceops.api.dto.ResourceDtos.ResourceResponse;
 import zelisline.ub.serviceops.api.dto.ResourceDtos.UpdateResourceRequest;
+import zelisline.ub.serviceops.domain.RoomType;
 import zelisline.ub.serviceops.domain.ServiceOffering;
 import zelisline.ub.serviceops.domain.ServiceResource;
 import zelisline.ub.serviceops.repository.ServiceOfferingRepository;
@@ -44,7 +45,27 @@ public class ServiceResourceService {
     public static final String TYPE_ROOM = "ROOM";
     private static final int MAX_RESOURCES = 200;
 
+    // Housekeeping states of a room (ADR 0030), separate from occupancy and from `active`.
+    /** Turned round and ready to let. A room with no stored status reads as CLEAN. */
+    public static final String HOUSEKEEPING_CLEAN = "CLEAN";
+    /** Just vacated (or marked by staff); needs turning round before the next guest. */
+    public static final String HOUSEKEEPING_DIRTY = "DIRTY";
+    /** Being turned round now. */
+    public static final String HOUSEKEEPING_CLEANING = "CLEANING";
+    /** Cleaned and checked; ready to let, for properties that inspect. */
+    public static final String HOUSEKEEPING_INSPECTED = "INSPECTED";
+    /** Out for repair; not bookable until cleared, whatever its occupancy. */
+    public static final String HOUSEKEEPING_MAINTENANCE = "MAINTENANCE";
+
+    private static final java.util.Set<String> HOUSEKEEPING_STATES = java.util.Set.of(
+            HOUSEKEEPING_CLEAN, HOUSEKEEPING_DIRTY, HOUSEKEEPING_CLEANING, HOUSEKEEPING_INSPECTED,
+            HOUSEKEEPING_MAINTENANCE);
+    /** The states in which a room may take a new stay; the rest hold it back (ADR 0030). */
+    private static final java.util.Set<String> HOUSEKEEPING_BOOKABLE = java.util.Set.of(
+            HOUSEKEEPING_CLEAN, HOUSEKEEPING_INSPECTED);
+
     private final ServiceResourceRepository resourceRepository;
+    private final zelisline.ub.serviceops.repository.RoomTypeRepository roomTypeRepository;
     private final BranchRepository branchRepository;
     private final PosDraftLineRepository lineRepository;
     private final ServiceOfferingRepository serviceRepository;
@@ -383,22 +404,51 @@ public class ServiceResourceService {
      */
     public record RoomRecord(
             String id, String branchId, String name, java.math.BigDecimal nightlyRate, String area,
-            boolean active, int sortOrder, String businessId) {
+            boolean active, int sortOrder, String businessId, String housekeepingStatus,
+            boolean readyToLet, String roomTypeId,
+            /** The rate a guest is actually charged a weekday night: the type's, or the room's own. */
+            java.math.BigDecimal effectiveNightlyRate,
+            /** What a weekend night costs, when the type sets one; else the same as the weekday rate. */
+            java.math.BigDecimal effectiveWeekendRate,
+            /** A short housekeeping note (damage, missing amenity), or null. */
+            String housekeepingNote,
+            /** The staff member responsible for cleaning this room now, or null. */
+            String cleanerStaffProfileId) {
+    }
+
+    /** A room with no stored housekeeping status reads as CLEAN (ADR 0030). */
+    public static String housekeepingOf(ServiceResource row) {
+        String stored = row.getHousekeepingStatus();
+        return stored == null || stored.isBlank() ? HOUSEKEEPING_CLEAN : stored;
+    }
+
+    /**
+     * Whether a room may take a new stay on its housekeeping and active axes alone (dates are a
+     * separate, order-level check). A room out of use, or not yet turned round, is held back.
+     */
+    public static boolean roomReadyToLet(ServiceResource row) {
+        return row.isActive() && HOUSEKEEPING_BOOKABLE.contains(housekeepingOf(row));
     }
 
     /** The rooms of a branch. Like {@link #tables}, never creates the numbered chairs. */
     @Transactional(readOnly = true)
     public List<RoomRecord> rooms(String businessId, String branchId) {
-        return resourceRepository
-                .findByBusinessIdAndBranchIdAndResourceTypeOrderBySortOrderAscNameAsc(businessId, branchId.trim(), TYPE_ROOM)
-                .stream().map(ServiceResourceService::toRoom).toList();
+        List<ServiceResource> rows = resourceRepository
+                .findByBusinessIdAndBranchIdAndResourceTypeOrderBySortOrderAscNameAsc(businessId, branchId.trim(), TYPE_ROOM);
+        // Load the branch's types once, so each room's effective rate is resolved without an N+1.
+        java.util.Map<String, RoomType> types = new HashMap<>();
+        for (RoomType t : roomTypeRepository.findByBusinessIdAndBranchIdOrderBySortOrderAscNameAsc(businessId, branchId.trim())) {
+            types.put(t.getId(), t);
+        }
+        return rows.stream().map(r -> toRoom(r, r.getRoomTypeId() == null ? null : types.get(r.getRoomTypeId()))).toList();
     }
 
     @Transactional(readOnly = true)
     public java.util.Optional<RoomRecord> room(String businessId, String roomId) {
         return resourceRepository.findByIdAndBusinessId(roomId, businessId)
                 .filter(r -> TYPE_ROOM.equals(r.getResourceType()))
-                .map(ServiceResourceService::toRoom);
+                .map(r -> toRoom(r, r.getRoomTypeId() == null ? null
+                        : roomTypeRepository.findByIdAndBusinessId(r.getRoomTypeId(), businessId).orElse(null)));
     }
 
     @Transactional
@@ -415,10 +465,11 @@ public class ServiceResourceService {
         row.setName(name.trim());
         row.setResourceType(TYPE_ROOM);
         row.setNightlyRate(requireRate(nightlyRate));
+        row.setHousekeepingStatus(HOUSEKEEPING_CLEAN);
         row.setArea(area == null || area.isBlank() ? null : area.trim());
         row.setSortOrder(rows.stream().mapToInt(ServiceResource::getSortOrder).max().orElse(0) + 1);
         saveUnique(row);
-        return toRoom(row);
+        return toRoomResolved(row);
     }
 
     /** Null leaves a field as it is; a blank area clears it. */
@@ -441,7 +492,245 @@ public class ServiceResourceService {
             row.setActive(active);
         }
         saveUnique(row);
-        return toRoom(row);
+        return toRoomResolved(row);
+    }
+
+    /** Assigns a room to a type (its rate card), or clears it with a null/blank type id (ADR 0030). */
+    @Transactional
+    public RoomRecord setRoomType(String businessId, String roomId, String roomTypeId) {
+        ServiceResource row = resourceRepository.findByIdAndBusinessIdForUpdate(roomId, businessId)
+                .filter(r -> TYPE_ROOM.equals(r.getResourceType()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Room not found"));
+        String typeId = roomTypeId == null || roomTypeId.isBlank() ? null : roomTypeId.trim();
+        if (typeId != null) {
+            RoomType type = roomTypeRepository.findByIdAndBusinessId(typeId, businessId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Room type not found"));
+            if (!type.getBranchId().equals(row.getBranchId())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That room type is at another branch");
+            }
+        }
+        row.setRoomTypeId(typeId);
+        resourceRepository.save(row);
+        return toRoomResolved(row);
+    }
+
+    // ------------------------------------------------------------------ room types (rate cards)
+
+    public record RoomTypeRecord(
+            String id, String branchId, String name, java.math.BigDecimal defaultNightlyRate,
+            java.math.BigDecimal weekendNightlyRate, Integer capacity, String bedConfig, String amenities,
+            int sortOrder) {
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.Optional<RoomTypeRecord> roomType(String businessId, String typeId) {
+        return roomTypeRepository.findByIdAndBusinessId(typeId, businessId).map(ServiceResourceService::toRoomType);
+    }
+
+    @Transactional(readOnly = true)
+    public List<RoomTypeRecord> roomTypes(String businessId, String branchId) {
+        return roomTypeRepository.findByBusinessIdAndBranchIdOrderBySortOrderAscNameAsc(businessId, branchId.trim())
+                .stream().map(ServiceResourceService::toRoomType).toList();
+    }
+
+    @Transactional
+    public RoomTypeRecord createRoomType(String businessId, String branchId, String name,
+            java.math.BigDecimal defaultRate, java.math.BigDecimal weekendRate, Integer capacity,
+            String bedConfig, String amenities) {
+        if (name == null || name.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Give the room type a name");
+        }
+        if (roomTypeRepository.countByBusinessIdAndBranchId(businessId, branchId.trim()) >= MAX_RESOURCES) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This branch already has too many room types");
+        }
+        RoomType type = new RoomType();
+        type.setBusinessId(businessId);
+        type.setBranchId(branchId.trim());
+        type.setName(name.trim());
+        type.setDefaultNightlyRate(requireRate(defaultRate));
+        type.setWeekendNightlyRate(weekendRate == null ? null : requireRate(weekendRate));
+        type.setCapacity(capacity == null || capacity <= 0 ? null : capacity);
+        type.setBedConfig(blankToNull(bedConfig));
+        type.setAmenities(blankToNull(amenities));
+        type.setSortOrder((int) roomTypeRepository.countByBusinessIdAndBranchId(businessId, branchId.trim()) + 1);
+        saveUniqueType(type);
+        return toRoomType(type);
+    }
+
+    /** Null leaves a field unchanged; a weekend rate of 0 clears it (weekends cost the weekday rate). */
+    @Transactional
+    public RoomTypeRecord updateRoomType(String businessId, String typeId, String name,
+            java.math.BigDecimal defaultRate, java.math.BigDecimal weekendRate, Integer capacity,
+            String bedConfig, String amenities) {
+        RoomType type = roomTypeRepository.findByIdAndBusinessId(typeId, businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Room type not found"));
+        if (name != null && !name.isBlank()) {
+            type.setName(name.trim());
+        }
+        if (defaultRate != null) {
+            type.setDefaultNightlyRate(requireRate(defaultRate));
+        }
+        if (weekendRate != null) {
+            type.setWeekendNightlyRate(weekendRate.signum() == 0 ? null : requireRate(weekendRate));
+        }
+        if (capacity != null) {
+            type.setCapacity(capacity <= 0 ? null : capacity);
+        }
+        if (bedConfig != null) {
+            type.setBedConfig(blankToNull(bedConfig));
+        }
+        if (amenities != null) {
+            type.setAmenities(blankToNull(amenities));
+        }
+        saveUniqueType(type);
+        return toRoomType(type);
+    }
+
+    private static RoomTypeRecord toRoomType(RoomType t) {
+        return new RoomTypeRecord(t.getId(), t.getBranchId(), t.getName(), t.getDefaultNightlyRate(),
+                t.getWeekendNightlyRate(), t.getCapacity(), t.getBedConfig(), t.getAmenities(), t.getSortOrder());
+    }
+
+    private void saveUniqueType(RoomType type) {
+        try {
+            roomTypeRepository.saveAndFlush(type);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "A room type here already has that name");
+        }
+    }
+
+    private static String blankToNull(String raw) {
+        return raw == null || raw.isBlank() ? null : raw.trim();
+    }
+
+    // ------------------------------------------------------------------ rate resolution (ADR 0030)
+
+    private static final java.time.ZoneId STAY_ZONE = java.time.ZoneId.of("Africa/Nairobi");
+
+    /** One tier of a stay's room charge: a count of nights at one frozen rate, with a label suffix. */
+    public record RoomNightTier(long nights, java.math.BigDecimal rate, boolean weekend) {
+    }
+
+    /**
+     * The room-night charge for a stay, resolved and ready to freeze at check-in (ADR 0030). A room's
+     * own {@code nightly_rate} is the rate unless it has a type, in which case the type's rate card
+     * applies: a weekday night at the default rate, a weekend night (Friday or Saturday, Nairobi) at
+     * the weekend rate when the type sets one. The result is one tier when every night is the same
+     * rate, or two (weekday + weekend) when they differ — each a whole number of nights at one frozen
+     * rate. The nights of the stay are the calendar dates slept (check-out morning excluded).
+     */
+    @Transactional(readOnly = true)
+    public List<RoomNightTier> resolveRoomNights(String businessId, String roomId,
+            java.time.Instant checkIn, java.time.Instant checkOut) {
+        ServiceResource room = resourceRepository.findByIdAndBusinessId(roomId, businessId)
+                .filter(r -> TYPE_ROOM.equals(r.getResourceType()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "This stay's room is gone"));
+        RoomType type = room.getRoomTypeId() == null ? null
+                : roomTypeRepository.findByIdAndBusinessId(room.getRoomTypeId(), businessId).orElse(null);
+        // A room with a type takes its rate card; the type leads so a weekend rate can apply. A room
+        // with no type falls back to its own nightly rate. (A per-room override of a typed room's rate
+        // is a later refinement — today a type is authoritative for the rooms assigned to it.)
+        java.math.BigDecimal weekdayRate = type != null ? type.getDefaultNightlyRate() : room.getNightlyRate();
+        if (weekdayRate == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This room has no rate set");
+        }
+        java.math.BigDecimal weekendRate = (type != null && type.getWeekendNightlyRate() != null)
+                ? type.getWeekendNightlyRate() : weekdayRate;
+
+        java.time.LocalDate in = checkIn == null ? java.time.LocalDate.now(STAY_ZONE)
+                : checkIn.atZone(STAY_ZONE).toLocalDate();
+        java.time.LocalDate out = checkOut == null ? in.plusDays(1) : checkOut.atZone(STAY_ZONE).toLocalDate();
+        long totalNights = Math.max(1, java.time.temporal.ChronoUnit.DAYS.between(in, out));
+
+        long weekendNights = 0;
+        for (long i = 0; i < totalNights; i++) {
+            java.time.DayOfWeek day = in.plusDays(i).getDayOfWeek();
+            if (day == java.time.DayOfWeek.FRIDAY || day == java.time.DayOfWeek.SATURDAY) {
+                weekendNights++;
+            }
+        }
+        long weekdayNights = totalNights - weekendNights;
+
+        // One tier when the rates are equal (no weekend rate, or none of the nights are weekends).
+        if (weekdayRate.compareTo(weekendRate) == 0 || weekendNights == 0 || weekdayNights == 0) {
+            java.math.BigDecimal rate = weekendNights == totalNights ? weekendRate : weekdayRate;
+            return List.of(new RoomNightTier(totalNights, rate, weekendNights == totalNights));
+        }
+        return List.of(
+                new RoomNightTier(weekdayNights, weekdayRate, false),
+                new RoomNightTier(weekendNights, weekendRate, true));
+    }
+
+    /**
+     * Sets a room's housekeeping state (ADR 0030) — the cleaning cycle, not occupancy and not the
+     * owner's {@code active} switch. The caller passes one of the HOUSEKEEPING_* states.
+     */
+    @Transactional
+    public RoomRecord setRoomHousekeeping(String businessId, String roomId, String status) {
+        return setRoomHousekeeping(businessId, roomId, status, null, null, false, false);
+    }
+
+    /**
+     * Sets a room's housekeeping state, and optionally who is cleaning it and a note about it (ADR
+     * 0030). A null cleaner/note leaves it; {@code clearCleaner}/{@code clearNote} remove it. When a
+     * room is turned CLEAN its note and cleaner are cleared, so a cleaned room starts fresh.
+     */
+    @Transactional
+    public RoomRecord setRoomHousekeeping(String businessId, String roomId, String status,
+            String cleanerStaffProfileId, String note, boolean clearCleaner, boolean clearNote) {
+        String next = normalizeHousekeeping(status);
+        ServiceResource row = resourceRepository.findByIdAndBusinessIdForUpdate(roomId, businessId)
+                .filter(r -> TYPE_ROOM.equals(r.getResourceType()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Room not found"));
+        row.setHousekeepingStatus(next);
+        if (clearCleaner) {
+            row.setAssignedStaffProfileId(null);
+        } else if (cleanerStaffProfileId != null && !cleanerStaffProfileId.isBlank()) {
+            row.setAssignedStaffProfileId(cleanerStaffProfileId.trim());
+        }
+        if (clearNote) {
+            row.setHousekeepingNote(null);
+        } else if (note != null && !note.isBlank()) {
+            row.setHousekeepingNote(note.trim());
+        }
+        // A room turned round starts fresh: its note and the cleaner on it are cleared.
+        if (HOUSEKEEPING_CLEAN.equals(next) || HOUSEKEEPING_INSPECTED.equals(next)) {
+            row.setHousekeepingNote(null);
+            row.setAssignedStaffProfileId(null);
+        }
+        resourceRepository.save(row);
+        return toRoomResolved(row);
+    }
+
+    /**
+     * Sends a room to DIRTY at check-out (ADR 0030): a settled stay does not free the room, it goes
+     * to housekeeping. Lenient — does nothing if the room is gone or is already out for repair (a
+     * maintenance flag outranks a routine turnaround). Internal; no permission of its own.
+     */
+    @Transactional
+    public void markRoomDirtyOnCheckout(String businessId, String roomId) {
+        if (roomId == null) {
+            return;
+        }
+        resourceRepository.findByIdAndBusinessIdForUpdate(roomId, businessId)
+                .filter(r -> TYPE_ROOM.equals(r.getResourceType()))
+                .filter(r -> !HOUSEKEEPING_MAINTENANCE.equals(housekeepingOf(r)))
+                .ifPresent(r -> {
+                    r.setHousekeepingStatus(HOUSEKEEPING_DIRTY);
+                    resourceRepository.save(r);
+                });
+    }
+
+    /** Upper-cases and checks a housekeeping state; rejects anything outside the known set. */
+    private static String normalizeHousekeeping(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a housekeeping state");
+        }
+        String status = raw.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!HOUSEKEEPING_STATES.contains(status)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That is not a housekeeping state");
+        }
+        return status;
     }
 
     /** A positive KES amount with at most two decimal places, under a million a night. */
@@ -458,9 +747,22 @@ public class ServiceResourceService {
         return rate.setScale(2, java.math.RoundingMode.UNNECESSARY);
     }
 
-    private static RoomRecord toRoom(ServiceResource row) {
+    /** Maps a room row to its record, resolving the rate a guest actually pays from its type (ADR 0030). */
+    private static RoomRecord toRoom(ServiceResource row, RoomType type) {
+        // A typed room is charged from its type's rate card; an untyped room from its own nightly rate.
+        java.math.BigDecimal weekday = type != null ? type.getDefaultNightlyRate() : row.getNightlyRate();
+        java.math.BigDecimal weekend = (type != null && type.getWeekendNightlyRate() != null)
+                ? type.getWeekendNightlyRate() : weekday;
         return new RoomRecord(row.getId(), row.getBranchId(), row.getName(), row.getNightlyRate(), row.getArea(),
-                row.isActive(), row.getSortOrder(), row.getBusinessId());
+                row.isActive(), row.getSortOrder(), row.getBusinessId(), housekeepingOf(row), roomReadyToLet(row),
+                row.getRoomTypeId(), weekday, weekend, row.getHousekeepingNote(), row.getAssignedStaffProfileId());
+    }
+
+    /** {@link #toRoom} for a single row, looking its type up when it has one. */
+    private RoomRecord toRoomResolved(ServiceResource row) {
+        RoomType type = row.getRoomTypeId() == null ? null
+                : roomTypeRepository.findByIdAndBusinessId(row.getRoomTypeId(), row.getBusinessId()).orElse(null);
+        return toRoom(row, type);
     }
 
     private void saveUnique(ServiceResource row) {

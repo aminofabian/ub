@@ -78,6 +78,29 @@ public class ServiceResource {
     @Column(name = "nightly_rate", precision = 14, scale = 2)
     private java.math.BigDecimal nightlyRate;
 
+    /**
+     * For a lodging room: its housekeeping state, separate from occupancy and from {@link #active}
+     * (ADR 0030). One of {@code CLEAN}, {@code DIRTY}, {@code CLEANING}, {@code INSPECTED},
+     * {@code MAINTENANCE}. Null on every other kind of resource; a room with null reads as CLEAN.
+     */
+    @Column(name = "housekeeping_status", length = 16)
+    private String housekeepingStatus;
+
+    /**
+     * For a lodging room: a short housekeeping note — damage found, an amenity missing (ADR 0030
+     * Phase 2). Set by whoever turns the room round, cleared when it is dealt with. The cleaner
+     * responsible reuses {@link #assignedStaffProfileId}.
+     */
+    @Column(name = "housekeeping_note", length = 300)
+    private String housekeepingNote;
+
+    /**
+     * For a lodging room: the room type whose rate card it inherits (ADR 0030), or null for a room
+     * priced only by its own {@link #nightlyRate}. Null on every non-room resource.
+     */
+    @Column(name = "room_type_id", length = 36)
+    private String roomTypeId;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

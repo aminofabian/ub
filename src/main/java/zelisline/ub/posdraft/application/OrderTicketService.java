@@ -119,7 +119,8 @@ public class OrderTicketService {
             String deliveryAddress, Instant billRequestedAt, Instant scheduledStart, Instant scheduledEnd,
             String createdBy, long version, BigDecimal deliveryFee, String riderName, Instant dispatchedAt,
             Instant deliveredAt, String source,
-            BigDecimal depositAmount, String depositState, String depositMethod) {
+            BigDecimal depositAmount, String depositState, String depositMethod,
+            String guestIdType, String guestIdNumber) {
 
         public boolean isOpen() {
             return PosDraftConstants.STATUS_PENDING.equals(status);
@@ -292,11 +293,49 @@ public class OrderTicketService {
                 .map(this::toOrder).toList();
     }
 
+    /**
+     * The open order already created for a client order id, if any — so a caller can recognise a
+     * replay (the same booking requested twice) before it validates it as a new one.
+     */
+    @Transactional(readOnly = true)
+    public Optional<Order> findByClientOrderId(String businessId, String clientOrderId) {
+        if (clientOrderId == null || clientOrderId.isBlank()) {
+            return Optional.empty();
+        }
+        return draftRepository.findByBusinessIdAndClientDraftId(businessId, "order-" + clientOrderId.trim())
+                .filter(d -> PosDraftConstants.KIND_ORDER.equals(d.getDraftKind()))
+                .map(this::toOrder);
+    }
+
     /** Bookings at a branch that overlap a window. */
     @Transactional(readOnly = true)
     public List<Order> bookingsOverlapping(String businessId, String branchId, Instant from, Instant to) {
         return draftRepository.findOrderBookingsOverlapping(businessId, branchId, from, to).stream()
                 .map(this::toOrder).toList();
+    }
+
+    /** Lodging stays holding a room over a window — booked or already checked in (ADR 0030). */
+    @Transactional(readOnly = true)
+    public List<Order> roomStaysOverlapping(String businessId, String branchId, Instant from, Instant to) {
+        return draftRepository.findRoomStaysOverlapping(businessId, branchId, from, to).stream()
+                .map(this::toOrder).toList();
+    }
+
+    /** Records (or clears) a lodging guest's ID on their stay (ADR 0031). Sensitive PII; not logged. */
+    @Transactional
+    public Order setGuestId(String businessId, String orderId, String idType, String idNumber) {
+        PosDraft order = requireOpen(lockRow(businessId, orderId));
+        order.setGuestIdType(idType == null || idType.isBlank() ? null : idType.trim());
+        order.setGuestIdNumber(idNumber == null || idNumber.isBlank() ? null : idNumber.trim());
+        return touch(order);
+    }
+
+    /** A customer's lodging stays, newest first, up to {@code limit} — their stay history (ADR 0030). */
+    @Transactional(readOnly = true)
+    public List<Order> lodgingStaysForCustomer(String businessId, String customerId, int limit) {
+        return draftRepository.findLodgingStaysForCustomer(businessId, customerId,
+                        org.springframework.data.domain.PageRequest.of(0, Math.max(1, Math.min(limit, 100))))
+                .stream().map(this::toOrder).toList();
     }
 
     /** Takes the order's row lock and returns it; everything that changes an order starts here. */
@@ -439,6 +478,26 @@ public class OrderTicketService {
     public Order moveToTable(String businessId, String orderId, String tableResourceId) {
         PosDraft order = requireOpen(lockRow(businessId, orderId));
         order.setTableResourceId(blankToNull(tableResourceId));
+        return touch(order);
+    }
+
+    /**
+     * Changes a booking's scheduled window (ADR 0030): a guest's stay is moved or its length
+     * changed before they arrive. Only a booking not yet seated can be rescheduled here — once a
+     * guest is checked in the folio is frozen, so a date change there is a separate concern.
+     */
+    @Transactional
+    public Order rescheduleBooking(String businessId, String orderId, Instant start, Instant end) {
+        PosDraft order = requireOpen(lockRow(businessId, orderId));
+        if (!ORDER_BOOKED.equals(order.getServiceStage())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "This stay has started; its dates can no longer be changed here");
+        }
+        if (start == null || end == null || !end.isAfter(start)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Check-out must be after check-in");
+        }
+        order.setScheduledStart(start);
+        order.setScheduledEnd(end);
         return touch(order);
     }
 
@@ -962,7 +1021,8 @@ public class OrderTicketService {
                 order.getScheduledStart(), order.getScheduledEnd(), order.getCreatedBy(), order.getVersion(),
                 order.getDeliveryFee(), order.getRiderName(), order.getDispatchedAt(), order.getDeliveredAt(),
                 order.getBookingSource(),
-                order.getDepositAmount(), order.getDepositState(), order.getDepositMethod());
+                order.getDepositAmount(), order.getDepositState(), order.getDepositMethod(),
+                order.getGuestIdType(), order.getGuestIdNumber());
     }
 
     private static OrderLine toLine(PosDraftLine row) {

@@ -22,12 +22,19 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.restaurant.api.dto.RoomDtos.CreateRoomRequest;
+import zelisline.ub.restaurant.api.dto.RoomDtos.CreateRoomTypeRequest;
 import zelisline.ub.restaurant.api.dto.RoomDtos.FrontDeskResponse;
+import zelisline.ub.restaurant.api.dto.RoomDtos.HousekeepingRequest;
 import zelisline.ub.restaurant.api.dto.RoomDtos.RoomRequest;
 import zelisline.ub.restaurant.api.dto.RoomDtos.RoomResponse;
+import zelisline.ub.restaurant.api.dto.RoomDtos.RoomTypeListResponse;
+import zelisline.ub.restaurant.api.dto.RoomDtos.RoomTypeRequest;
+import zelisline.ub.restaurant.api.dto.RoomDtos.RoomTypeResponse;
+import zelisline.ub.restaurant.api.dto.RoomDtos.SetRoomTypeRequest;
 import zelisline.ub.restaurant.application.DineInService;
 import zelisline.ub.serviceops.application.ServiceResourceService;
 import zelisline.ub.serviceops.application.ServiceResourceService.RoomRecord;
+import zelisline.ub.serviceops.application.ServiceResourceService.RoomTypeRecord;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.application.BranchResolutionService;
 
@@ -51,13 +58,14 @@ public class RoomsController {
 
     private final ServiceResourceService resourceService;
     private final DineInService dineInService;
+    private final zelisline.ub.restaurant.application.AccommodationReportService reportService;
     private final BranchResolutionService branchResolutionService;
 
     @GetMapping
     @PreAuthorize(SEE)
     public List<RoomResponse> rooms(@RequestParam String branchId, HttpServletRequest request) {
         return resourceService.rooms(business(request), branch(request, branchId)).stream()
-                .map(RoomsController::toResponse).toList();
+                .map(this::toResponse).toList();
     }
 
     /** The front desk: every room with its stays (in-house and booked for later). */
@@ -65,6 +73,27 @@ public class RoomsController {
     @PreAuthorize(SEE)
     public FrontDeskResponse frontDesk(@RequestParam String branchId, HttpServletRequest request) {
         return dineInService.frontDesk(business(request), branch(request, branchId));
+    }
+
+    /** A guest's stay history: their past and present stays with this business (ADR 0030). */
+    @GetMapping("/guest-stays")
+    @PreAuthorize(SEE)
+    public zelisline.ub.restaurant.api.dto.RoomDtos.GuestStaysResponse guestStays(
+            @RequestParam String customerId, HttpServletRequest request) {
+        return dineInService.guestStays(business(request), customerId);
+    }
+
+    /** The accommodation dashboard: today's rooms, and occupancy / ADR / RevPAR over a period (ADR 0030). */
+    @GetMapping("/report")
+    @PreAuthorize(SEE)
+    public zelisline.ub.restaurant.api.dto.RoomDtos.AccommodationReportResponse report(
+            @RequestParam String branchId,
+            @RequestParam @org.springframework.format.annotation.DateTimeFormat(iso =
+                    org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate from,
+            @RequestParam @org.springframework.format.annotation.DateTimeFormat(iso =
+                    org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate to,
+            HttpServletRequest request) {
+        return reportService.report(business(request), branch(request, branchId), from, to);
     }
 
     @PostMapping
@@ -91,11 +120,88 @@ public class RoomsController {
         return toResponse(room);
     }
 
+    /**
+     * Set a room's housekeeping state (ADR 0030). Open to anyone who can see the front desk, not
+     * just a manager: turning a room round is a cleaner's job, and a small guest house's cleaner is
+     * front-desk staff. Taking a room out of use entirely stays the manager's {@code active} switch.
+     */
+    @PatchMapping("/{roomId}/housekeeping")
+    @PreAuthorize(SEE)
+    public RoomResponse setHousekeeping(
+            @PathVariable String roomId, @Valid @RequestBody HousekeepingRequest body, HttpServletRequest request) {
+        String businessId = business(request);
+        String roomBranch = resourceService.room(businessId, roomId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Room not found"))
+                .branchId();
+        branch(request, roomBranch);
+        // If a cleaner is named, they must be a real staff member of this business.
+        if (body.cleanerStaffProfileId() != null && !body.cleanerStaffProfileId().isBlank()) {
+            dineInService.requireStaffMember(businessId, body.cleanerStaffProfileId().trim());
+        }
+        return toResponse(resourceService.setRoomHousekeeping(businessId, roomId, body.status(),
+                body.cleanerStaffProfileId(), body.note(), Boolean.TRUE.equals(body.clearCleaner()),
+                Boolean.TRUE.equals(body.clearNote())));
+    }
+
+    /** Assign a room to a type (its rate card), or clear it (ADR 0030). A manager's job, like the rate. */
+    @PatchMapping("/{roomId}/type")
+    @PreAuthorize(MANAGE)
+    public RoomResponse setRoomType(
+            @PathVariable String roomId, @Valid @RequestBody SetRoomTypeRequest body, HttpServletRequest request) {
+        String businessId = business(request);
+        String roomBranch = resourceService.room(businessId, roomId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Room not found"))
+                .branchId();
+        branch(request, roomBranch);
+        return toResponse(resourceService.setRoomType(businessId, roomId, body.roomTypeId()));
+    }
+
+    // ------------------------------------------------------------------ room types (rate cards)
+
+    @GetMapping("/types")
+    @PreAuthorize(SEE)
+    public RoomTypeListResponse roomTypes(@RequestParam String branchId, HttpServletRequest request) {
+        String resolved = branch(request, branchId);
+        return new RoomTypeListResponse(resolved, resourceService.roomTypes(business(request), resolved).stream()
+                .map(RoomsController::toResponse).toList());
+    }
+
+    @PostMapping("/types")
+    @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize(MANAGE)
+    public RoomTypeResponse createRoomType(@Valid @RequestBody CreateRoomTypeRequest body, HttpServletRequest request) {
+        return toResponse(resourceService.createRoomType(business(request), branch(request, body.branchId()),
+                body.name(), body.defaultNightlyRate(), body.weekendNightlyRate(), body.capacity(),
+                body.bedConfig(), body.amenities()));
+    }
+
+    @PatchMapping("/types/{typeId}")
+    @PreAuthorize(MANAGE)
+    public RoomTypeResponse updateRoomType(
+            @PathVariable String typeId, @Valid @RequestBody RoomTypeRequest body, HttpServletRequest request) {
+        String businessId = business(request);
+        // The type's own branch decides what a branch-locked manager may act on.
+        branch(request, resourceService.roomType(businessId, typeId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Room type not found"))
+                .branchId());
+        return toResponse(resourceService.updateRoomType(businessId, typeId, body.name(), body.defaultNightlyRate(),
+                body.weekendNightlyRate(), body.capacity(), body.bedConfig(), body.amenities()));
+    }
+
     // ------------------------------------------------------------------ helpers
 
-    private static RoomResponse toResponse(RoomRecord room) {
+    private RoomResponse toResponse(RoomRecord room) {
+        String cleaner = room.cleanerStaffProfileId() == null ? null
+                : dineInService.staffName(room.businessId(), room.cleanerStaffProfileId());
         return new RoomResponse(room.id(), room.branchId(), room.name(), room.nightlyRate(),
-                room.area(), room.active(), room.sortOrder());
+                room.area(), room.active(), room.sortOrder(), room.housekeepingStatus(), room.readyToLet(),
+                room.roomTypeId(), room.effectiveNightlyRate(), room.effectiveWeekendRate(),
+                room.housekeepingNote(), room.cleanerStaffProfileId(), cleaner);
+    }
+
+    private static RoomTypeResponse toResponse(RoomTypeRecord t) {
+        return new RoomTypeResponse(t.id(), t.branchId(), t.name(), t.defaultNightlyRate(), t.weekendNightlyRate(),
+                t.capacity(), t.bedConfig(), t.amenities(), t.sortOrder());
     }
 
     private static String business(HttpServletRequest request) {

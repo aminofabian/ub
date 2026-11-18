@@ -29,5 +29,7 @@ public enum StkPushContextType {
     /** Profit Pocket confirm — Express STK to owner destination PartyB. */
     PROFIT_POCKET,
     /** Customer payment prompt sent from a WhatsApp conversation (M5). */
-    WHATSAPP_CHAT
+    WHATSAPP_CHAT,
+    /** Online room-booking deposit paid by a public guest via M-Pesa STK (ADR 0031). */
+    ROOM_BOOKING_DEPOSIT
 }

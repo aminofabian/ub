@@ -389,6 +389,8 @@ public class BillService {
         }
         if (anyLive) {
             orderTicketService.complete(businessId, orderId, lastSaleId, shiftId, now);
+            // Checking out a stay sends its room to housekeeping, not straight back to free (ADR 0030).
+            dineInService.onStayCompleted(businessId, order);
         }
     }
 

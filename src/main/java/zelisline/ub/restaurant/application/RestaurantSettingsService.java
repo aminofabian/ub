@@ -81,7 +81,26 @@ public class RestaurantSettingsService {
         if (request.menuOnline() != null) {
             settings.setMenuOnline(request.menuOnline());
         }
+        // A blank string clears the time to the code default; a null leaves it unchanged (ADR 0031).
+        if (request.checkInTime() != null) {
+            settings.setCheckInTime(parseTime(request.checkInTime()));
+        }
+        if (request.checkOutTime() != null) {
+            settings.setCheckOutTime(parseTime(request.checkOutTime()));
+        }
+        if (request.roomsOnline() != null) {
+            settings.setRoomsOnline(request.roomsOnline());
+        }
         return toResponse(repository.save(settings));
+    }
+
+    /** "HH:mm" to a LocalTime, or null for a blank (meaning "use the default"). */
+    private static java.time.LocalTime parseTime(String raw) {
+        return raw == null || raw.isBlank() ? null : java.time.LocalTime.parse(raw);
+    }
+
+    private static String timeOrNull(java.time.LocalTime t) {
+        return t == null ? null : String.format("%02d:%02d", t.getHour(), t.getMinute());
     }
 
     private static BigDecimal fixed(BigDecimal value, String what) {
@@ -99,6 +118,7 @@ public class RestaurantSettingsService {
         return new SettingsResponse(s.getServiceChargePercent(), s.isTipsPooled(), s.getPackagingCharge(),
                 s.getDeliveryFee(), s.getDayStartsAtMinute(), s.isQrOrdering(),
                 s.getServiceChargeTo() == null ? RestaurantSettings.CHARGE_TO_BUSINESS : s.getServiceChargeTo(),
-                s.isMenuOnline());
+                s.isMenuOnline(), timeOrNull(s.getCheckInTime()), timeOrNull(s.getCheckOutTime()),
+                s.isRoomsOnline());
     }
 }

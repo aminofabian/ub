@@ -43,6 +43,7 @@ import zelisline.ub.tenancy.api.dto.CreateBusinessRequest;
 import zelisline.ub.tenancy.api.dto.DomainResponse;
 import zelisline.ub.tenancy.api.dto.InventorySettingsResponse;
 import zelisline.ub.tenancy.api.dto.MetaCapiSettingsResponse;
+import zelisline.ub.tenancy.api.dto.OnboardingAnswersDto;
 import zelisline.ub.tenancy.api.dto.OnboardingPatchRequest;
 import zelisline.ub.tenancy.api.dto.OnboardingSettingsResponse;
 import zelisline.ub.tenancy.api.dto.PatchBranchRequest;
@@ -233,6 +234,44 @@ public class TenancyService {
         business.setSettings(settings);
         Business saved = businessRepository.save(business);
         return businessOnboardingSettingsService.readFromSettingsJson(saved.getSettings());
+    }
+
+    /** The business's current shop formats, profile first then onboarding answers (never null). */
+    @Transactional(readOnly = true)
+    public List<String> currentStoreTypesForTenant(String tenantBusinessId) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        List<String> fromProfile = businessProfileSettingsService
+                .readFromSettingsJson(business.getSettings())
+                .storeTypes();
+        if (fromProfile != null && !fromProfile.isEmpty()) {
+            return fromProfile;
+        }
+        OnboardingAnswersDto answers = businessOnboardingSettingsService
+                .readFromSettingsJson(business.getSettings())
+                .answers();
+        List<String> fromAnswers = answers == null ? null : answers.storeTypes();
+        return fromAnswers == null ? List.of() : fromAnswers;
+    }
+
+    /**
+     * Replace the business's shop formats with {@code desired} (the full new set — this is a replace,
+     * not an add). Writes both the profile (what tenant surfaces read) and the onboarding answers, and
+     * records the vertical-selection audit, exactly as {@link #updateOnboardingForTenant} does. The
+     * caller ({@code BusinessFormatsService}) owns validation and the remove-guard.
+     */
+    @Transactional
+    public List<String> changeStoreTypesForTenant(String tenantBusinessId, List<String> desired) {
+        Business business = requireTenantBusiness(tenantBusinessId);
+        OnboardingPatchRequest patch = new OnboardingPatchRequest(
+                null, null, new OnboardingAnswersDto(
+                        null, null, null, List.copyOf(desired), null, null, null, null, null, null,
+                        null, null, null, null, null, null, null));
+        String settings = businessOnboardingSettingsService.merge(business.getSettings(), patch);
+        settings = businessProfileSettingsService.mergeStoreTypes(settings, desired);
+        regionCatalogAuditService.verticalSelected(tenantBusinessId, desired);
+        business.setSettings(settings);
+        businessRepository.save(business);
+        return currentStoreTypesForTenant(tenantBusinessId);
     }
 
     @Transactional

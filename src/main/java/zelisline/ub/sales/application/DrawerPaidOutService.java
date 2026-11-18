@@ -85,9 +85,11 @@ public class DrawerPaidOutService {
         if (openShiftResolver.findOpen(businessId, branchId, tillDeviceKey).isEmpty()) {
             autoShiftService.openIfShiftsDisabled(businessId, branchId, tillDeviceKey, userId);
         }
+        // Tag the gap as setup_required (like a sale does) so the app opens its "open the day"
+        // dialog on the spot instead of throwing a bare error at the booking desk.
         Shift shift = openShiftResolver.findOpenForUpdate(businessId, branchId, tillDeviceKey)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.CONFLICT, "Open a shift on this till before taking cash"));
+                .orElseThrow(() -> openShiftResolver.noOpenShift(
+                        businessId, branchId, tillDeviceKey, "Open a shift on this till before taking cash"));
         shift.setExpectedClosingCash(shift.getExpectedClosingCash().add(cash).setScale(2, RoundingMode.HALF_UP));
         shiftRepository.save(shift);
         cashDrawerLedgerService.recordAmount(

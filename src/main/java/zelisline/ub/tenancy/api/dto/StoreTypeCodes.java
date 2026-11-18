@@ -1,6 +1,7 @@
 package zelisline.ub.tenancy.api.dto;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -14,6 +15,19 @@ public final class StoreTypeCodes {
                     + "|barbershop|salon|spa|nail-studio|beauty-parlour"
                     + "|restaurant|cafe|fast-food|bar"
                     + "|lodging";
+
+    /** Every valid code, derived from {@link #PATTERN} so the two never drift. */
+    public static final List<String> ALL = List.of(PATTERN.split("\\|"));
+
+    private static final Set<String> ALL_SET = Set.copyOf(ALL);
+
+    /** True when {@code code} is a known store-format code (case-insensitive, trimmed). */
+    public static boolean isValidCode(String code) {
+        if (code == null) {
+            return false;
+        }
+        return ALL_SET.contains(code.trim().toLowerCase(Locale.ROOT));
+    }
 
     /**
      * Shop formats that take orders and prepare food or drink (ADR 0020). As with service formats,

@@ -31,7 +31,13 @@ import zelisline.ub.restaurant.api.dto.RoomDtos.RoomTypeListResponse;
 import zelisline.ub.restaurant.api.dto.RoomDtos.RoomTypeRequest;
 import zelisline.ub.restaurant.api.dto.RoomDtos.RoomTypeResponse;
 import zelisline.ub.restaurant.api.dto.RoomDtos.SetRoomTypeRequest;
+import zelisline.ub.restaurant.api.dto.RoomDtos.MaintenanceIssueListResponse;
+import zelisline.ub.restaurant.api.dto.RoomDtos.MaintenanceIssueRequest;
+import zelisline.ub.restaurant.api.dto.RoomDtos.MaintenanceIssueResponse;
+import zelisline.ub.restaurant.api.dto.RoomDtos.MaintenanceIssueUpdate;
 import zelisline.ub.restaurant.application.DineInService;
+import zelisline.ub.serviceops.application.RoomMaintenanceService;
+import zelisline.ub.serviceops.application.RoomMaintenanceService.IssueRecord;
 import zelisline.ub.serviceops.application.ServiceResourceService;
 import zelisline.ub.serviceops.application.ServiceResourceService.RoomRecord;
 import zelisline.ub.serviceops.application.ServiceResourceService.RoomTypeRecord;
@@ -58,14 +64,19 @@ public class RoomsController {
 
     private final ServiceResourceService resourceService;
     private final DineInService dineInService;
+    private final RoomMaintenanceService maintenanceService;
     private final zelisline.ub.restaurant.application.AccommodationReportService reportService;
     private final BranchResolutionService branchResolutionService;
 
     @GetMapping
     @PreAuthorize(SEE)
     public List<RoomResponse> rooms(@RequestParam String branchId, HttpServletRequest request) {
-        return resourceService.rooms(business(request), branch(request, branchId)).stream()
-                .map(this::toResponse).toList();
+        String businessId = business(request);
+        String resolvedBranch = branch(request, branchId);
+        var openIssues = maintenanceService.openCountsByRoom(businessId, resolvedBranch);
+        return resourceService.rooms(businessId, resolvedBranch).stream()
+                .map(room -> toResponse(room, openIssues.getOrDefault(room.id(), 0)))
+                .toList();
     }
 
     /** The front desk: every room with its stays (in-house and booked for later). */
@@ -188,15 +199,90 @@ public class RoomsController {
                 body.weekendNightlyRate(), body.capacity(), body.bedConfig(), body.amenities()));
     }
 
+    // ---------------------------------------------------------------- maintenance issues (ADR 0030 Phase 2)
+
+    /** Raise a maintenance issue on a room; it moves the room to MAINTENANCE and is kept as history. */
+    @PostMapping("/{roomId}/issues")
+    @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize(SEE)
+    public MaintenanceIssueResponse openIssue(
+            @PathVariable String roomId, @Valid @RequestBody MaintenanceIssueRequest body, HttpServletRequest request) {
+        String businessId = business(request);
+        // A branch-locked operator may only act on their own branch's room.
+        branch(request, resourceService.room(businessId, roomId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Room not found"))
+                .branchId());
+        IssueRecord issue = maintenanceService.open(businessId, roomId, body.description(), body.photoUrl(),
+                body.assignedStaffProfileId(), CurrentTenantUser.requireHuman(request).userId());
+        return toResponse(businessId, issue);
+    }
+
+    /** A room's maintenance history, newest first. */
+    @GetMapping("/{roomId}/issues")
+    @PreAuthorize(SEE)
+    public MaintenanceIssueListResponse roomIssues(@PathVariable String roomId, HttpServletRequest request) {
+        String businessId = business(request);
+        String roomBranch = resourceService.room(businessId, roomId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Room not found"))
+                .branchId();
+        branch(request, roomBranch);
+        List<MaintenanceIssueResponse> issues = maintenanceService.forRoom(businessId, roomId).stream()
+                .map(issue -> toResponse(businessId, issue)).toList();
+        return new MaintenanceIssueListResponse(roomBranch, issues);
+    }
+
+    /** Every open (not-yet-done) maintenance issue at a branch — the front desk's maintenance list. */
+    @GetMapping("/issues")
+    @PreAuthorize(SEE)
+    public MaintenanceIssueListResponse issues(
+            @RequestParam String branchId,
+            @RequestParam(required = false, defaultValue = "true") boolean openOnly,
+            HttpServletRequest request) {
+        String businessId = business(request);
+        String resolvedBranch = branch(request, branchId);
+        List<MaintenanceIssueResponse> issues = maintenanceService.list(businessId, resolvedBranch, openOnly).stream()
+                .map(issue -> toResponse(businessId, issue)).toList();
+        return new MaintenanceIssueListResponse(resolvedBranch, issues);
+    }
+
+    /** Move an issue's status, (re)assign it, or set/clear its photo. */
+    @PatchMapping("/issues/{issueId}")
+    @PreAuthorize(SEE)
+    public MaintenanceIssueResponse updateIssue(
+            @PathVariable String issueId, @Valid @RequestBody MaintenanceIssueUpdate body, HttpServletRequest request) {
+        String businessId = business(request);
+        if (body.assignedStaffProfileId() != null && !body.assignedStaffProfileId().isBlank()) {
+            dineInService.requireStaffMember(businessId, body.assignedStaffProfileId().trim());
+        }
+        IssueRecord issue = maintenanceService.update(businessId, issueId, body.status(),
+                body.assignedStaffProfileId(), body.photoUrl(),
+                Boolean.TRUE.equals(body.clearAssignee()), Boolean.TRUE.equals(body.clearPhoto()));
+        return toResponse(businessId, issue);
+    }
+
     // ------------------------------------------------------------------ helpers
 
+    /** A single room: counts its own open issues. Use the batch overload when mapping a list. */
     private RoomResponse toResponse(RoomRecord room) {
+        return toResponse(room, (int) maintenanceService.openCount(room.businessId(), room.id()));
+    }
+
+    private RoomResponse toResponse(RoomRecord room, int openIssueCount) {
         String cleaner = room.cleanerStaffProfileId() == null ? null
                 : dineInService.staffName(room.businessId(), room.cleanerStaffProfileId());
         return new RoomResponse(room.id(), room.branchId(), room.name(), room.nightlyRate(),
                 room.area(), room.active(), room.sortOrder(), room.housekeepingStatus(), room.readyToLet(),
                 room.roomTypeId(), room.effectiveNightlyRate(), room.effectiveWeekendRate(),
-                room.housekeepingNote(), room.cleanerStaffProfileId(), cleaner);
+                room.housekeepingNote(), room.cleanerStaffProfileId(), cleaner, openIssueCount);
+    }
+
+    /** Resolve an issue's assignee name for the response. */
+    private MaintenanceIssueResponse toResponse(String businessId, IssueRecord issue) {
+        String assignedName = issue.assignedStaffProfileId() == null ? null
+                : dineInService.staffName(businessId, issue.assignedStaffProfileId());
+        return new MaintenanceIssueResponse(issue.id(), issue.roomResourceId(), issue.roomName(),
+                issue.description(), issue.status(), issue.photoUrl(), issue.assignedStaffProfileId(),
+                assignedName, issue.openedAt(), issue.closedAt());
     }
 
     private static RoomTypeResponse toResponse(RoomTypeRecord t) {

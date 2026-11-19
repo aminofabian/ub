@@ -53,7 +53,9 @@ public final class RoomDtos {
             /** The staff member responsible for cleaning this room now, or null. */
             String cleanerStaffProfileId,
             /** That cleaner's display name, resolved; null when none or since left. */
-            String cleanerName
+            String cleanerName,
+            /** How many maintenance issues on this room are not yet done (ADR 0030 Phase 2). */
+            int openIssueCount
     ) {
     }
 
@@ -71,6 +73,43 @@ public final class RoomDtos {
     }
 
     public record RoomListResponse(String branchId, List<RoomResponse> rooms) {
+    }
+
+    // ---------------------------------------------------------------- maintenance issues (ADR 0030 Phase 2)
+
+    /** Raise a maintenance issue on a room: what broke, optionally a photo and who's on it. */
+    public record MaintenanceIssueRequest(
+            @NotBlank @Size(max = 500) String description,
+            @Size(max = 1024) String photoUrl,
+            @Size(max = 36) String assignedStaffProfileId) {
+    }
+
+    /** Update an issue: move its status, (re)assign it, or set/clear its photo. */
+    public record MaintenanceIssueUpdate(
+            @Size(max = 16) String status,
+            @Size(max = 36) String assignedStaffProfileId,
+            @Size(max = 1024) String photoUrl,
+            Boolean clearAssignee,
+            Boolean clearPhoto) {
+    }
+
+    /** A maintenance issue as the front desk sees it. */
+    public record MaintenanceIssueResponse(
+            String id,
+            String roomId,
+            String roomName,
+            String description,
+            /** OPEN, IN_PROGRESS or DONE. */
+            String status,
+            String photoUrl,
+            String assignedStaffProfileId,
+            /** The assignee's display name, resolved; null when none or since left. */
+            String assignedName,
+            Instant openedAt,
+            Instant closedAt) {
+    }
+
+    public record MaintenanceIssueListResponse(String branchId, List<MaintenanceIssueResponse> issues) {
     }
 
     /** A room and the stays on it: the one in-house now, plus any booked for later. */

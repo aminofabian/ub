@@ -57,6 +57,7 @@ public class DineInService {
     private final OrderTicketService orderTicketService;
     private final RestaurantSaleSupport saleSupport;
     private final ServiceResourceService resourceService;
+    private final zelisline.ub.serviceops.application.RoomMaintenanceService roomMaintenanceService;
     private final StaffProfileService staffProfileService;
     private final zelisline.ub.credits.application.CustomerDirectoryService customerDirectoryService;
     private final MenuItemRepository menuItemRepository;
@@ -184,11 +185,13 @@ public class DineInService {
                 byRoom.computeIfAbsent(stay.tableResourceId(), k -> new ArrayList<>()).add(card);
             }
         }
+        Map<String, Integer> openIssues = roomMaintenanceService.openCountsByRoom(businessId, branchId);
         List<zelisline.ub.restaurant.api.dto.RoomDtos.RoomWithStays> rooms = new ArrayList<>();
         for (ServiceResourceService.RoomRecord room : resourceService.rooms(businessId, branchId)) {
             List<OrderCard> cards = byRoom.remove(room.id());
             if (room.active() || cards != null) {
-                rooms.add(new zelisline.ub.restaurant.api.dto.RoomDtos.RoomWithStays(toRoomResponse(room),
+                rooms.add(new zelisline.ub.restaurant.api.dto.RoomDtos.RoomWithStays(
+                        toRoomResponse(room, openIssues.getOrDefault(room.id(), 0)),
                         cards == null ? List.of() : cards));
             }
         }
@@ -318,13 +321,13 @@ public class DineInService {
     }
 
     private zelisline.ub.restaurant.api.dto.RoomDtos.RoomResponse toRoomResponse(
-            ServiceResourceService.RoomRecord room) {
+            ServiceResourceService.RoomRecord room, int openIssueCount) {
         String cleaner = staffName(room.businessId(), room.cleanerStaffProfileId());
         return new zelisline.ub.restaurant.api.dto.RoomDtos.RoomResponse(
                 room.id(), room.branchId(), room.name(), room.nightlyRate(), room.area(), room.active(),
                 room.sortOrder(), room.housekeepingStatus(), room.readyToLet(), room.roomTypeId(),
                 room.effectiveNightlyRate(), room.effectiveWeekendRate(),
-                room.housekeepingNote(), room.cleanerStaffProfileId(), cleaner);
+                room.housekeepingNote(), room.cleanerStaffProfileId(), cleaner, openIssueCount);
     }
 
     // ------------------------------------------------------------------ an order

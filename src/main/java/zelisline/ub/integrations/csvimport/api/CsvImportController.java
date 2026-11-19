@@ -95,17 +95,21 @@ public class CsvImportController {
     public ResponseEntity<CsvImportResponse> importItems(
             @RequestPart("file") MultipartFile file,
             @RequestParam(defaultValue = "false") boolean dryRun,
+            @RequestParam(defaultValue = "false") boolean groupByName,
             HttpServletRequest http
     ) throws IOException {
         String businessId = resolveBusinessId(http);
         byte[] bytes = file.getBytes();
         if (dryRun) {
-            return ResponseEntity.ok(csvImportApplicationService.dryRunItems(businessId, bytes));
+            return ResponseEntity.ok(csvImportApplicationService.dryRunItems(
+                    businessId, bytes, groupByName, zelisline.ub.integrations.csvimport.support.CsvImportProgressSink.NONE));
         }
         CsvImportResponse res = csvImportApplicationService.commitItems(
                 businessId,
                 bytes,
-                CurrentTenantUser.requireHuman(http).userId()
+                CurrentTenantUser.requireHuman(http).userId(),
+                groupByName,
+                zelisline.ub.integrations.csvimport.support.CsvImportProgressSink.NONE
         );
         return toCommitResponse(res);
     }

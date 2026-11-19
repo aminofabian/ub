@@ -21,7 +21,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.catalog.api.dto.AttachVariantLineRequest;
 import zelisline.ub.catalog.api.dto.CreateCategoryRequest;
+import zelisline.ub.catalog.api.dto.CreateGroupFromItemsRequest;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.CatalogTaxonomyService;
@@ -59,6 +61,8 @@ import zelisline.ub.tenancy.repository.BranchRepository;
 @RequiredArgsConstructor
 public class CsvImportApplicationService {
 
+    /** Matches {@code items.variant_name} VARCHAR(255) and the attach-layer @Size(max=255). */
+    private static final int MAX_VARIANT_NAME_CHARS = 255;
     private static final BigDecimal QTY_EPS = new BigDecimal("0.00005");
     private static final BigDecimal MIN_UNIT_COST = new BigDecimal("0.0001");
     /** Matches {@code items.buying_price} / common money columns {@code DECIMAL(14,2)}. */
@@ -84,28 +88,88 @@ public class CsvImportApplicationService {
     private final PricingService pricingService;
 
     public CsvImportResponse dryRunItems(String businessId, byte[] csvBytes) {
-        return dryRunItems(businessId, csvBytes, CsvImportProgressSink.NONE);
+        return dryRunItems(businessId, csvBytes, false, CsvImportProgressSink.NONE);
     }
 
     public CsvImportResponse dryRunItems(String businessId, byte[] csvBytes, CsvImportProgressSink sink) {
+        return dryRunItems(businessId, csvBytes, false, sink);
+    }
+
+    public CsvImportResponse dryRunItems(
+            String businessId, byte[] csvBytes, boolean groupByName, CsvImportProgressSink sink) {
         CsvImportProgressSink s = sink == null ? CsvImportProgressSink.NONE : sink;
         List<SourceRow> rows = readCsv(csvBytes);
         s.onRowsParsed(rows.size());
         List<CsvImportLineError> errors = validateItemRows(businessId, rows);
         List<CsvImportLineError> warnings = supplierWarnings(businessId, rows);
+        if (groupByName && errors.isEmpty()) {
+            warnings.addAll(groupingPreview(rows));
+        }
         s.onRowCommitted(rows.size());
         return new CsvImportResponse(true, rows.size(), errors, null, warnings);
     }
 
-    public CsvImportResponse commitItems(String businessId, byte[] csvBytes, String actorUserId) {
-        return commitItems(businessId, csvBytes, actorUserId, CsvImportProgressSink.NONE);
+    /**
+     * Non-blocking preview of how many families {@code groupByName} would form and how many rows
+     * stay standalone — mirrors the bucketing rule used by {@link #commitItems}. Reported as a
+     * single line-0 warning so the operator sees the shape before committing.
+     */
+    private List<CsvImportLineError> groupingPreview(List<SourceRow> rows) {
+        Map<String, FamilyBucket> buckets = new java.util.LinkedHashMap<>();
+        for (SourceRow sr : rows) {
+            Map<String, String> c = sr.columns();
+            String name = itemName(c);
+            String variantLabel = firstPresent(c, "variant_name", "variant").trim();
+            buckets.computeIfAbsent(familyKey(categoryName(c), name),
+                            k -> new FamilyBucket(name, null, null))
+                    .add("", variantLabel);
+        }
+        int families = 0;
+        int variantsGrouped = 0;
+        for (FamilyBucket b : buckets.values()) {
+            if (b.qualifiesAsFamily()) {
+                families++;
+                // Only labelled members are folded in; blank-label rows stay standalone.
+                for (FamilyBucket.Member m : b.members) {
+                    if (!m.variantLabel().isEmpty()) {
+                        variantsGrouped++;
+                    }
+                }
+            }
+        }
+        int standalone = rows.size() - variantsGrouped;
+        return List.of(new CsvImportLineError(
+                0,
+                "grouping on: " + families + " product famil" + (families == 1 ? "y" : "ies")
+                        + " from " + variantsGrouped + " variant rows; "
+                        + standalone + " standalone item" + (standalone == 1 ? "" : "s")));
     }
 
+    public CsvImportResponse commitItems(String businessId, byte[] csvBytes, String actorUserId) {
+        return commitItems(businessId, csvBytes, actorUserId, false, CsvImportProgressSink.NONE);
+    }
+
+    public CsvImportResponse commitItems(
+            String businessId,
+            byte[] csvBytes,
+            String actorUserId,
+            CsvImportProgressSink sink
+    ) {
+        return commitItems(businessId, csvBytes, actorUserId, false, sink);
+    }
+
+    /**
+     * @param groupByName when true, rows sharing (category_name + name) are folded into a single
+     *        parent + variant family once the bucket has at least two <em>distinct</em> non-blank
+     *        {@code variant_name} values. Rows that are price-only duplicates (same variant name)
+     *        or lack a variant name stay standalone.
+     */
     @Transactional
     public CsvImportResponse commitItems(
             String businessId,
             byte[] csvBytes,
             String actorUserId,
+            boolean groupByName,
             CsvImportProgressSink sink
     ) {
         CsvImportProgressSink s = sink == null ? CsvImportProgressSink.NONE : sink;
@@ -132,10 +196,13 @@ public class CsvImportApplicationService {
         int n = 0;
         List<CsvImportLineError> warnings = new ArrayList<>();
         SupplierIndex suppliers = SupplierIndex.of(businessId, supplierRepository);
+        // Family buckets, built only when groupByName is on: key = normalized category|name,
+        // value = the created item ids + their raw variant labels, in file order.
+        Map<String, FamilyBucket> familyBuckets = groupByName ? new java.util.LinkedHashMap<>() : null;
         for (SourceRow sr : rows) {
             Map<String, String> c = sr.columns();
             String sku = col(c, "sku").trim();
-            String name = col(c, "name").trim();
+            String name = itemName(c);
             String typeKey = itemTypeKey(c);
             String itemTypeId = itemTypeRepository.findByBusinessIdAndTypeKey(businessId, typeKey)
                     .orElseThrow(() -> new IllegalStateException("missing item type after validation: " + typeKey))
@@ -153,7 +220,7 @@ public class CsvImportApplicationService {
                     parseMoney(firstPresent(c, "buying_price", "buy_price", "cost_price", "unit_cost")));
             String brand = blankToNull(col(c, "brand"));
             String size = blankToNull(col(c, "size"));
-            String categoryId = resolveOrCreateCategoryId(businessId, col(c, "category_name").trim(), categoryIdByNameLower);
+            String categoryId = resolveOrCreateCategoryId(businessId, categoryName(c), categoryIdByNameLower);
             String aisleId = resolveAisleId(businessId, col(c, "aisle_code").trim());
 
             // Optional supplier: exact code match, then exact name match. Unresolved supplier
@@ -196,6 +263,14 @@ public class CsvImportApplicationService {
                     null);
             ItemCreateResult created = itemCatalogService.createItem(businessId, req, null, actorUserId);
             String itemId = created.body().id();
+
+            if (familyBuckets != null) {
+                String variantLabel = firstPresent(c, "variant_name", "variant").trim();
+                String bucketKey = familyKey(categoryName(c), name);
+                familyBuckets
+                        .computeIfAbsent(bucketKey, k -> new FamilyBucket(name, itemTypeId, categoryId))
+                        .add(itemId, variantLabel);
+            }
 
             if (supplier != null) {
                 try {
@@ -246,7 +321,84 @@ public class CsvImportApplicationService {
             n++;
             s.onRowCommitted(n);
         }
+        if (familyBuckets != null) {
+            for (FamilyBucket bucket : familyBuckets.values()) {
+                if (!bucket.qualifiesAsFamily()) {
+                    continue;
+                }
+                // Only members that carry a variant label join the family; blank-label rows in a
+                // mixed bucket stay standalone (never attached under a "fallback" label).
+                List<AttachVariantLineRequest> lines = new ArrayList<>();
+                for (FamilyBucket.Member m : bucket.members) {
+                    if (!m.variantLabel().isEmpty()) {
+                        lines.add(new AttachVariantLineRequest(
+                                m.itemId(), m.variantLabel(), null, null, null));
+                    }
+                }
+                itemCatalogService.createGroupFromItems(
+                        businessId,
+                        new CreateGroupFromItemsRequest(
+                                bucket.name, bucket.itemTypeId, bucket.categoryId, null, lines),
+                        actorUserId);
+            }
+        }
         return new CsvImportResponse(false, rows.size(), List.of(), n, warnings);
+    }
+
+    /** Normalized bucket key for family grouping: lowercased category + name, whitespace collapsed. */
+    private static String familyKey(String categoryName, String name) {
+        return normalizeForKey(categoryName) + "|" + normalizeForKey(name);
+    }
+
+    private static String normalizeForKey(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        return raw.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
+    }
+
+    /**
+     * Rows sharing a normalized (category + name) key, collected during the item create loop so a
+     * post-pass can fold them into one parent + variant family. A bucket only becomes a family when
+     * it holds at least two distinct, non-blank variant labels — price-only duplicates (same label)
+     * and blank-label rows are left as standalone items.
+     */
+    private static final class FamilyBucket {
+        private record Member(String itemId, String variantLabel) {
+        }
+
+        private final String name;
+        private final String itemTypeId;
+        private final String categoryId;
+        private final List<Member> members = new ArrayList<>();
+
+        FamilyBucket(String name, String itemTypeId, String categoryId) {
+            this.name = name;
+            this.itemTypeId = itemTypeId;
+            this.categoryId = categoryId;
+        }
+
+        void add(String itemId, String variantLabel) {
+            members.add(new Member(itemId, variantLabel == null ? "" : variantLabel.trim()));
+        }
+
+        /**
+         * A bucket becomes a family only when at least two members carry <em>distinct</em>,
+         * non-blank variant labels. Blank-label members never count toward this threshold and
+         * are left standalone (see the grouping pass), so mixed buckets keep plain rows out.
+         */
+        boolean qualifiesAsFamily() {
+            if (members.size() < 2) {
+                return false;
+            }
+            Set<String> distinctLabels = new HashSet<>();
+            for (Member m : members) {
+                if (!m.variantLabel().isEmpty()) {
+                    distinctLabels.add(m.variantLabel().toLowerCase(Locale.ROOT));
+                }
+            }
+            return distinctLabels.size() >= 2;
+        }
     }
 
     public CsvImportResponse dryRunSuppliers(String businessId, byte[] csvBytes) {
@@ -278,7 +430,7 @@ public class CsvImportApplicationService {
         int n = 0;
         for (SourceRow sr : rows) {
             Map<String, String> c = sr.columns();
-            String name = col(c, "name").trim();
+            String name = itemName(c);
             String codeRaw = col(c, "code").trim();
             String code = codeRaw.isEmpty() ? null : codeRaw;
             String supplierType = col(c, "supplier_type").trim();
@@ -372,16 +524,24 @@ public class CsvImportApplicationService {
             Map<String, String> c = sr.columns();
             int line = sr.lineNumber();
             String sku = col(c, "sku").trim();
-            String name = col(c, "name").trim();
-            if (sku.isEmpty()) {
-                errors.add(new CsvImportLineError(line, "sku is required"));
-            }
+            String name = itemName(c);
+            // SKU is optional: a blank SKU is auto-allocated downstream from the category
+            // prefix by ItemCatalogService.createItem. Uniqueness is still enforced below,
+            // but only for rows that actually carry a SKU.
             if (name.isEmpty()) {
                 errors.add(new CsvImportLineError(line, "name is required"));
             } else if (isUuid(name)) {
                 errors.add(new CsvImportLineError(
                         line,
                         "name must be a human-readable product name, not a UUID"));
+            }
+            // variant_name is written into Item.variant_name (VARCHAR(255)) when grouping is on;
+            // bound it here so an over-long label is a clean per-line error, not a late DB flush
+            // failure that aborts the whole import.
+            String variantLabel = firstPresent(c, "variant_name", "variant").trim();
+            if (variantLabel.length() > MAX_VARIANT_NAME_CHARS) {
+                errors.add(new CsvImportLineError(
+                        line, "variant_name is too long (max " + MAX_VARIANT_NAME_CHARS + " characters)"));
             }
             String typeKey = itemTypeKey(c);
             if (itemTypeRepository.findByBusinessIdAndTypeKey(businessId, typeKey).isEmpty()) {
@@ -457,7 +617,7 @@ public class CsvImportApplicationService {
         for (SourceRow sr : rows) {
             Map<String, String> c = sr.columns();
             int line = sr.lineNumber();
-            String name = col(c, "name").trim();
+            String name = itemName(c);
             if (name.isEmpty()) {
                 errors.add(new CsvImportLineError(line, "name is required"));
                 continue;
@@ -670,6 +830,16 @@ public class CsvImportApplicationService {
     private static String itemTypeKey(Map<String, String> cols) {
         String raw = col(cols, "item_type_key").trim().toLowerCase(Locale.ROOT);
         return raw.isEmpty() ? "goods" : raw;
+    }
+
+    /** Product name, accepting common spreadsheet header variants alongside the canonical {@code name}. */
+    private static String itemName(Map<String, String> cols) {
+        return firstPresent(cols, "name", "item_name", "product_name");
+    }
+
+    /** Category, accepting {@code category} / {@code category_name} (the template uses category_name). */
+    private static String categoryName(Map<String, String> cols) {
+        return firstPresent(cols, "category_name", "category");
     }
 
     private static String col(Map<String, String> cols, String key) {

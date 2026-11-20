@@ -89,7 +89,7 @@ public class StaffEmailFanoutService {
         if (NotificationTypes.ABANDONED_CART.equals(notification.getType())) {
             return buildAbandonedCartEmail(notification.getBusinessId(), payload);
         }
-        String subject = payload.title() != null && !payload.title().isBlank() ? payload.title() : "Palmart";
+        String subject = payload.title() != null && !payload.title().isBlank() ? payload.title() : "Kiosk";
         String text = OpenInPalmartEmail.text(
                 frontendBaseUrl, payload.title(), payload.body(), payload.actionUrl());
         String html = OpenInPalmartEmail.html(
@@ -125,7 +125,7 @@ public class StaffEmailFanoutService {
 
     private ParsedPayload parsePayload(String json) {
         if (json == null || json.isBlank()) {
-            return new ParsedPayload("Palmart", "", "/business/reports", null, null);
+            return new ParsedPayload("Kiosk", "", "/business/reports", null, null);
         }
         try {
             var map = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
@@ -136,7 +136,7 @@ public class StaffEmailFanoutService {
                     stringVal(map.get("cartCount")),
                     stringVal(map.get("itemsJson")));
         } catch (Exception e) {
-            return new ParsedPayload("Palmart", "", "/business/reports", null, null);
+            return new ParsedPayload("Kiosk", "", "/business/reports", null, null);
         }
     }
 

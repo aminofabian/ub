@@ -68,7 +68,7 @@ class AbandonedCartDigestEmailRendererTest {
         assertTrue(html.contains("https://app.kiosk.ke/storefront/web-orders"));
         assertTrue(html.contains("DM Sans"));
         assertTrue(html.contains("Cormorant Garamond"));
-        assertFalse(html.contains("Open in Palmart"));
+        assertFalse(html.contains("Open in Kiosk"));
         assertFalse(html.contains("linear-gradient"));
     }
 

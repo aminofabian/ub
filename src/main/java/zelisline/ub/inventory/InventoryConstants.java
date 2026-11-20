@@ -108,6 +108,17 @@ public final class InventoryConstants {
     public static final String OVERSELL_BACKFILL_SOURCE_ID = "backfill";
     public static final String BATCH_STATUS_IN_TRANSIT = "in_transit";
     public static final String BATCH_STATUS_DEPLETED = "depleted";
+    /**
+     * Held off sale but still on the books (recall, damage, returned medicine). Every pick,
+     * sellable sum and the valuation snapshot filter on {@link #BATCH_STATUS_ACTIVE}, so a
+     * quarantined batch is excluded from all of them without a query change.
+     */
+    public static final String BATCH_STATUS_QUARANTINED = "quarantined";
+    /** Stock movement written when a batch is quarantined (negative: it leaves sellable on-hand). */
+    public static final String MOVEMENT_QUARANTINE = "quarantine";
+    /** Stock movement written when a quarantined batch is released or handed to disposal (positive). */
+    public static final String MOVEMENT_QUARANTINE_RELEASE = "quarantine_release";
+    public static final String STOCK_REF_BATCH_QUARANTINE = "batch_quarantine";
     public static final String BATCH_SOURCE_REFUND_RETURN = "refund_return";
 
     public static final String SUPPLY_BATCH_STATUS_ACTIVE = "active";

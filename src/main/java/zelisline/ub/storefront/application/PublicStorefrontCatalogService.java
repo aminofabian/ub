@@ -64,6 +64,7 @@ public class PublicStorefrontCatalogService {
     private final CategoryRepository categoryRepository;
     private final ItemTypeRepository itemTypeRepository;
     private final StorefrontCatalogStockService storefrontCatalogStockService;
+    private final zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry;
 
     public PublicStorefrontCatalogService(
             PublicStorefrontContextService storefrontContextService,
@@ -73,8 +74,10 @@ public class PublicStorefrontCatalogService {
             ItemImageRepository itemImageRepository,
             CategoryRepository categoryRepository,
             ItemTypeRepository itemTypeRepository,
-            StorefrontCatalogStockService storefrontCatalogStockService
+            StorefrontCatalogStockService storefrontCatalogStockService,
+            zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry
     ) {
+        this.medicineRegistry = medicineRegistry;
         this.storefrontContextService = storefrontContextService;
         this.itemRepository = itemRepository;
         this.pricingService = pricingService;
@@ -272,7 +275,7 @@ public class PublicStorefrontCatalogService {
                 onHand,
                 listImagesForItem(item, parent),
                 listPublishedVariants(ctx, parentId),
-                StorefrontOnlinePurchaseRules.resolveMode(item),
+                onlineMode(ctx, item),
                 item.isWeighed(),
                 blankToNull(item.getUnitType())
         );
@@ -312,7 +315,7 @@ public class PublicStorefrontCatalogService {
                 onHand,
                 listImagesForItem(item, parent),
                 listPublishedVariants(ctx, parentId),
-                StorefrontOnlinePurchaseRules.resolveMode(item),
+                onlineMode(ctx, item),
                 item.isWeighed(),
                 blankToNull(item.getUnitType())
         );
@@ -454,6 +457,8 @@ public class PublicStorefrontCatalogService {
         Map<String, BigDecimal> buyingPrices = pricingService.getLatestBuyingPricesForItems(
                 ctx.business().getId(), itemIds);
         Map<String, String> thumbs = resolveThumbnailUrlsForItems(items);
+        // Prescription-only, controlled and unclassified medicines are shown but not sold online.
+        java.util.Set<String> counterOnly = medicineRegistry.counterOnlyItemIds(ctx.business().getId(), items);
         return items.stream()
                 .map(i -> {
                     BigDecimal latestBuying = buyingPrices.get(i.getId());
@@ -471,7 +476,9 @@ public class PublicStorefrontCatalogService {
                             resolved != null && resolved.discount() != null ? resolved.discount().name() : null,
                             qty.getOrDefault(i.getId(), BigDecimal.ZERO).setScale(4, RoundingMode.HALF_UP),
                             fallbackBuying,
-                            StorefrontOnlinePurchaseRules.resolveMode(i),
+                            counterOnly.contains(i.getId())
+                                    ? StorefrontOnlinePurchaseRules.IN_STORE_ONLY
+                                    : StorefrontOnlinePurchaseRules.resolveMode(i),
                             i.isWeighed(),
                             blankToNull(i.getUnitType())
                     );
@@ -591,6 +598,13 @@ public class PublicStorefrontCatalogService {
         return null;
     }
 
+    /** {@code in_store_only} for a medicine the storefront may show but not sell; otherwise the normal mode. */
+    private String onlineMode(PublicStorefrontContext ctx, Item item) {
+        return medicineRegistry.counterOnlyItemIds(ctx.business().getId(), List.of(item)).isEmpty()
+                ? StorefrontOnlinePurchaseRules.resolveMode(item)
+                : StorefrontOnlinePurchaseRules.IN_STORE_ONLY;
+    }
+
     private List<PublicCatalogVariantResponse> listPublishedVariants(PublicStorefrontContext ctx, String parentItemId) {
         List<Item> rows = itemRepository.findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
                 ctx.business().getId(), parentItemId);
@@ -609,6 +623,8 @@ public class PublicStorefrontCatalogService {
         List<String> inStockIds = publishedInStock.stream().map(Item::getId).toList();
         Map<String, ResolvedPriceResponse> resolvedPrices = loadResolvedPrices(ctx, inStockIds);
         Map<String, String> thumbs = resolveThumbnailUrlsForItems(publishedInStock);
+        java.util.Set<String> counterOnlyVariants =
+                medicineRegistry.counterOnlyItemIds(ctx.business().getId(), publishedInStock);
         return publishedInStock.stream()
                 .map(v -> new PublicCatalogVariantResponse(
                         v.getId(),
@@ -623,7 +639,9 @@ public class PublicStorefrontCatalogService {
                                 ? resolvedPrices.get(v.getId()).discount().name()
                                 : null,
                         qtyByItem.getOrDefault(v.getId(), BigDecimal.ZERO).setScale(4, RoundingMode.HALF_UP),
-                        StorefrontOnlinePurchaseRules.resolveMode(v),
+                        counterOnlyVariants.contains(v.getId())
+                                ? StorefrontOnlinePurchaseRules.IN_STORE_ONLY
+                                : StorefrontOnlinePurchaseRules.resolveMode(v),
                         v.isWeighed(),
                         blankToNull(v.getUnitType())
                 ))

@@ -133,7 +133,8 @@ public class SalesController {
                 body.customerId(),
                 body.cashReceived(),
                 allowOutOfStock,
-                body.tips());
+                body.tips(),
+                body.dispensing());
         var out = saleService.createSale(
                 TenantRequestIds.resolveBusinessId(request),
                 idempotencyKey,

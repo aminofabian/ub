@@ -56,7 +56,7 @@ public class ExpoPushSender {
         try {
             Map<String, Object> payload = new HashMap<>();
             payload.put("to", expoToken.trim());
-            payload.put("title", title != null && !title.isBlank() ? title : "Palmart");
+            payload.put("title", title != null && !title.isBlank() ? title : "Kiosk");
             payload.put("body", body != null ? body : "");
             payload.put("sound", "default");
             payload.put("channelId", "default");

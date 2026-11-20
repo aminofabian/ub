@@ -134,7 +134,7 @@ public class NotificationDeliveryTxnService {
             markSkipped(delivery, "no_email");
             return true;
         }
-        String subject = payload.title() != null && !payload.title().isBlank() ? payload.title() : "Palmart";
+        String subject = payload.title() != null && !payload.title().isBlank() ? payload.title() : "Kiosk";
         String text = OpenInPalmartEmail.text(
                 frontendBaseUrl, payload.title(), payload.body(), payload.actionUrl());
         String html = OpenInPalmartEmail.html(
@@ -295,7 +295,7 @@ public class NotificationDeliveryTxnService {
 
     private ParsedPayload parsePayload(String json) {
         if (json == null || json.isBlank()) {
-            return new ParsedPayload("Palmart", "", "/");
+            return new ParsedPayload("Kiosk", "", "/");
         }
         try {
             Map<String, Object> map = objectMapper.readValue(json, new TypeReference<>() {});
@@ -304,7 +304,7 @@ public class NotificationDeliveryTxnService {
                     stringVal(map.get("body")),
                     stringVal(map.get("actionUrl")));
         } catch (Exception e) {
-            return new ParsedPayload("Palmart", "", "/");
+            return new ParsedPayload("Kiosk", "", "/");
         }
     }
 

@@ -51,6 +51,10 @@ public class RawPurchaseLine {
     @Column(name = "draft_expiry_date")
     private LocalDate draftExpiryDate;
 
+    /** Manufacturer's lot number typed on the draft line; copied to the inventory batch on post. */
+    @Column(name = "draft_lot_number", length = 64)
+    private String draftLotNumber;
+
     /** Saved item pack option the buyer received in (null = unit / custom pack). */
     @Column(name = "pack_option_id", length = 36)
     private String packOptionId;

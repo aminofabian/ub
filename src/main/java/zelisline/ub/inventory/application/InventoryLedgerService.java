@@ -93,7 +93,9 @@ public class InventoryLedgerService {
                 opId,
                 inbound.stockQuantity(),
                 unitCost,
-                opId
+                opId,
+                req.lotNumber(),
+                req.expiryDate()
         );
         SupplyBatch sb = createSupplyBatchForSoloBatch(batch, opId, "Opening balance");
         batch.setSupplyBatchId(sb.getId());
@@ -147,7 +149,9 @@ public class InventoryLedgerService {
                 opId,
                 inbound.stockQuantity(),
                 unitCost,
-                opId
+                opId,
+                req.lotNumber(),
+                req.expiryDate()
         );
         SupplyBatch sb = createSupplyBatchForSoloBatch(batch, opId, "Stock gain");
         batch.setSupplyBatchId(sb.getId());
@@ -771,7 +775,25 @@ public class InventoryLedgerService {
             BigDecimal unitCost,
             String operationId
     ) {
+        return saveInboundBatch(
+                businessId, branchId, itemId, sourceType, sourceId, quantity, unitCost, operationId, null, null);
+    }
+
+    private InventoryBatch saveInboundBatch(
+            String businessId,
+            String branchId,
+            String itemId,
+            String sourceType,
+            String sourceId,
+            BigDecimal quantity,
+            BigDecimal unitCost,
+            String operationId,
+            String lotNumber,
+            java.time.LocalDate expiryDate
+    ) {
         InventoryBatch b = new InventoryBatch();
+        b.setLotNumber(zelisline.ub.pharmacy.application.MedicineReceivingGuard.normalizeLot(lotNumber));
+        b.setExpiryDate(expiryDate);
         b.setBusinessId(businessId);
         b.setBranchId(branchId);
         b.setItemId(itemId);

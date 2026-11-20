@@ -531,7 +531,7 @@ public class GroceryInvoiceService {
                 request.payments(),
                 null,
                 customerId,
-                null,
+                request.cashReceived(),
                 null
         );
 
@@ -869,7 +869,7 @@ public class GroceryInvoiceService {
                 new PostSalePaymentRequest(
                         SalesConstants.PAYMENT_METHOD_MPESA_MANUAL,
                         invoice.getGrandTotal(),
-                        reference)), null, null);
+                        reference)), null, null, null);
         try {
             payInvoice(businessId, invoiceId, payReq, userId, roleId);
             return true;

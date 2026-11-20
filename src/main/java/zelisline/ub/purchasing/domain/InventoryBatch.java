@@ -45,6 +45,13 @@ public class InventoryBatch {
     @Column(name = "batch_number", nullable = false, length = 64)
     private String batchNumber;
 
+    /**
+     * The manufacturer's lot number printed on the pack. {@link #batchNumber} is a generated
+     * system identifier, so recalls are matched on this field.
+     */
+    @Column(name = "lot_number", length = 64)
+    private String lotNumber;
+
     @Column(name = "source_type", nullable = false, length = 32)
     private String sourceType;
 
@@ -68,6 +75,16 @@ public class InventoryBatch {
 
     @Column(name = "status", nullable = false, length = 16)
     private String status = "active";
+
+    /** Why the batch was taken off sale; set while {@link #status} is {@code quarantined}. */
+    @Column(name = "quarantine_reason", length = 255)
+    private String quarantineReason;
+
+    @Column(name = "quarantined_at")
+    private Instant quarantinedAt;
+
+    @Column(name = "quarantined_by", length = 36)
+    private String quarantinedBy;
 
     @Version
     @Column(name = "version", nullable = false)

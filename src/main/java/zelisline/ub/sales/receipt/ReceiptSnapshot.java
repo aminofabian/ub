@@ -37,7 +37,7 @@ public record ReceiptSnapshot(
         String grandTotalDisplay,
         /** Cash handed over; null when not applicable. */
         String cashReceivedDisplay,
-        /** Change = cashReceived - grandTotal; null when cashReceived is null. */
+        /** Change = cash received − cash kept. On a split that is not the whole bill. */
         String changeGivenDisplay,
         String footerNote,
         /** Tips taken with the sale for staff, shown under the total; null when there were none. */

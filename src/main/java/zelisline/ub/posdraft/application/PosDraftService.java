@@ -424,7 +424,9 @@ public class PosDraftService {
                 request.clientSoldAt(),
                 customerId,
                 null,
-                null
+                null,
+                null,
+                request.dispensing()
         );
 
         SaleCreationOutcome outcome = saleService.createSale(

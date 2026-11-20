@@ -80,6 +80,7 @@ public class PathAPurchaseService {
     private static final int UNIT_SCALE = 4;
 
     private final BatchNumberGenerator batchNumberGenerator;
+    private final zelisline.ub.pharmacy.application.MedicineReceivingGuard medicineReceivingGuard;
 
     private final PurchaseOrderRepository purchaseOrderRepository;
     private final PurchaseOrderLineRepository purchaseOrderLineRepository;
@@ -437,6 +438,12 @@ public class PathAPurchaseService {
             PackageVariantStockResolver.StockPickResolution inbound = packageVariantStockResolver.resolveInbound(
                     businessId, pol.getItemId(), incoming);
             Item item = packageVariantStockResolver.requireInventoryHolder(businessId, inbound.stockItemId());
+            medicineReceivingGuard.requireLotAndExpiry(
+                    businessId,
+                    java.util.List.of(pol.getItemId(), inbound.stockItemId()),
+                    in.lotNumber(),
+                    in.expiryDate(),
+                    item.getName());
             // PO unit cost is per catalog unit (e.g. per tray); batch cost must be per base stock unit.
             BigDecimal lineMoney = PackageVariantStockResolver.catalogExtensionMoney(
                     incoming, pol.getUnitEstimatedCost());
@@ -464,6 +471,10 @@ public class PathAPurchaseService {
             batch.setQuantityRemaining(inbound.stockQuantity());
             batch.setUnitCost(unitCost);
             batch.setReceivedAt(grn.getReceivedAt());
+            batch.setLotNumber(zelisline.ub.pharmacy.application.MedicineReceivingGuard.normalizeLot(in.lotNumber()));
+            if (in.expiryDate() != null) {
+                batch.setExpiryDate(in.expiryDate());
+            }
             inventoryBatchRepository.save(batch);
             itemCount++;
             totalInitial = totalInitial.add(inbound.stockQuantity());

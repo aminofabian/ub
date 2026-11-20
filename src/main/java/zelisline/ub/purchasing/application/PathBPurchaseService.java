@@ -81,6 +81,7 @@ public class PathBPurchaseService {
     private static final int MAX_SEQUENCE_DIGITS = 6;
 
     private final BatchNumberGenerator batchNumberGenerator;
+    private final zelisline.ub.pharmacy.application.MedicineInboundCheck medicineInboundCheck;
 
     private final RawPurchaseSessionRepository sessionRepository;
     private final RawPurchaseLineRepository lineRepository;
@@ -349,7 +350,14 @@ public class PathBPurchaseService {
                     br.purchaseUnit()
             );
             CostSplit split = splitLine(line.getAmountMoney(), br.usableQty(), br.wastageQty());
-            plans.add(new LinePostPlan(line, item, br.itemId(), br.usableQty(), br.wastageQty(), split, br.expiryDate()));
+            String lot = zelisline.ub.pharmacy.application.MedicineReceivingGuard.normalizeLot(
+                    br.lotNumber() != null && !br.lotNumber().isBlank() ? br.lotNumber() : line.getDraftLotNumber());
+            LocalDate lineExpiry = br.expiryDate();
+            if (br.usableQty().signum() > 0) {
+                medicineInboundCheck.requireLotAndExpiry(businessId, item, lot, lineExpiry);
+            }
+            line.setDraftLotNumber(lot);
+            plans.add(new LinePostPlan(line, item, br.itemId(), br.usableQty(), br.wastageQty(), split, lineExpiry));
             sumInv = sumInv.add(split.inventoryMoney());
             sumWaste = sumWaste.add(split.wastageMoney());
             apTotal = apTotal.add(line.getAmountMoney());
@@ -487,6 +495,8 @@ public class PathBPurchaseService {
             if (p.expiryDate() != null) {
                 b.setExpiryDate(p.expiryDate());
             }
+            b.setLotNumber(zelisline.ub.pharmacy.application.MedicineReceivingGuard.normalizeLot(
+                    line.getDraftLotNumber()));
             inventoryBatchRepository.save(b);
 
             StockMovement sm = new StockMovement();
@@ -695,6 +705,8 @@ public class PathBPurchaseService {
         line.setDraftUnitCost(scaleNullable(req.draftUnitCost(), UNIT_SCALE));
         line.setDraftSellPrice(scaleNullable(req.draftSellPrice(), 2));
         line.setDraftExpiryDate(req.draftExpiryDate());
+        line.setDraftLotNumber(zelisline.ub.pharmacy.application.MedicineReceivingGuard.normalizeLot(
+                req.draftLotNumber()));
     }
 
     /**
@@ -746,7 +758,8 @@ public class PathBPurchaseService {
                 l.getDraftUnitCost(),
                 l.getDraftSellPrice(),
                 l.getDraftExpiryDate(),
-                l.getPackOptionId()
+                l.getPackOptionId(),
+                l.getDraftLotNumber()
         );
     }
 

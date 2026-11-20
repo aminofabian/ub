@@ -70,7 +70,7 @@ public class StaffWebPushFanoutService {
 
     private ParsedPayload parsePayload(String json) {
         if (json == null || json.isBlank()) {
-            return new ParsedPayload("Palmart", "", "/storefront/web-orders");
+            return new ParsedPayload("Kiosk", "", "/storefront/web-orders");
         }
         try {
             var map = objectMapper.readValue(json, new TypeReference<java.util.Map<String, Object>>() {});
@@ -79,7 +79,7 @@ public class StaffWebPushFanoutService {
                     stringVal(map.get("body")),
                     firstNonBlank(stringVal(map.get("actionUrl")), "/storefront/web-orders"));
         } catch (Exception e) {
-            return new ParsedPayload("Palmart", "", "/storefront/web-orders");
+            return new ParsedPayload("Kiosk", "", "/storefront/web-orders");
         }
     }
 

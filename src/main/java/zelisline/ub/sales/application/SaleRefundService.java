@@ -93,6 +93,7 @@ public class SaleRefundService {
     private final RefundPaymentRepository refundPaymentRepository;
     private final ShiftRepository shiftRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
+    private final zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry;
     private final StockMovementRepository stockMovementRepository;
     private final ItemRepository itemRepository;
     private final SupplyBatchRepository supplyBatchRepository;
@@ -397,6 +398,14 @@ public class SaleRefundService {
                 continue;
             }
             String stockHolderId = packageVariantStockResolver.stockHolderItemId(sold);
+            if (medicineRegistry.find(businessId, sold, stockHolderId)
+                    .map(zelisline.ub.pharmacy.domain.ItemMedicineDetails::quarantineOnRefund)
+                    .orElse(false)) {
+                // A returned medicine never goes back on the shelf (ADR 0033): it lands in a
+                // quarantined batch that keeps the original lot and expiry, for disposal.
+                recordQuarantinedMedicineReturn(businessId, sale, refundId, si, stockHolderId, row.quantity(), userId);
+                continue;
+            }
             if (!stockHolderId.equals(lastStockHolderId)) {
                 if (item != null) {
                     itemRepository.save(item);
@@ -456,6 +465,77 @@ public class SaleRefundService {
         sm.setWastageReason(WastageReason.CUSTOMER_RETURN.name());
         sm.setCreatedBy(userId);
         stockMovementRepository.save(sm);
+    }
+
+    /**
+     * Books a refunded medicine into a new quarantined batch. Two movements keep the ledger of
+     * movements equal to sellable on-hand: the refund brings the units back (+q) and the
+     * quarantine takes them off sale again (−q). {@code items.current_stock} is left untouched.
+     */
+    private void recordQuarantinedMedicineReturn(
+            String businessId,
+            Sale sale,
+            String refundId,
+            SaleItem si,
+            String stockHolderId,
+            BigDecimal quantity,
+            String userId
+    ) {
+        InventoryBatch orig = si.getBatchId() == null
+                ? null
+                : inventoryBatchRepository.findByIdAndBusinessId(si.getBatchId(), businessId).orElse(null);
+        BigDecimal q = quantity.setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal unitCost = (si.getUnitCost() == null ? BigDecimal.ZERO : si.getUnitCost())
+                .setScale(QTY_SCALE, RoundingMode.HALF_UP);
+        String reason = "Returned by customer" + (sale.getReceiptNo() == null ? "" : " (receipt " + sale.getReceiptNo() + ")");
+
+        InventoryBatch b = new InventoryBatch();
+        b.setBusinessId(businessId);
+        b.setBranchId(sale.getBranchId());
+        b.setItemId(stockHolderId);
+        b.setSupplierId(orig == null ? null : orig.getSupplierId());
+        b.setBatchNumber("RQ-" + refundId.replace("-", "").substring(0, 12));
+        b.setLotNumber(orig == null ? null : orig.getLotNumber());
+        b.setExpiryDate(orig == null ? null : orig.getExpiryDate());
+        b.setSourceType(InventoryConstants.BATCH_SOURCE_REFUND_RETURN);
+        b.setSourceId(refundId);
+        b.setInitialQuantity(q);
+        b.setQuantityRemaining(q);
+        b.setUnitCost(unitCost);
+        b.setReceivedAt(Instant.now());
+        b.setStatus(InventoryConstants.BATCH_STATUS_QUARANTINED);
+        b.setQuarantineReason(reason);
+        b.setQuarantinedAt(Instant.now());
+        b.setQuarantinedBy(userId);
+        inventoryBatchRepository.save(b);
+
+        StockMovement in = new StockMovement();
+        in.setBusinessId(businessId);
+        in.setBranchId(sale.getBranchId());
+        in.setItemId(stockHolderId);
+        in.setBatchId(b.getId());
+        in.setMovementType(InventoryConstants.MOVEMENT_REFUND);
+        in.setReferenceType(SalesConstants.STOCK_REFERENCE_TYPE_SALE_REFUND);
+        in.setReferenceId(refundId);
+        in.setQuantityDelta(q);
+        in.setUnitCost(unitCost);
+        in.setNotes("Sale refund");
+        in.setCreatedBy(userId);
+        stockMovementRepository.save(in);
+
+        StockMovement hold = new StockMovement();
+        hold.setBusinessId(businessId);
+        hold.setBranchId(sale.getBranchId());
+        hold.setItemId(stockHolderId);
+        hold.setBatchId(b.getId());
+        hold.setMovementType(InventoryConstants.MOVEMENT_QUARANTINE);
+        hold.setReferenceType(InventoryConstants.STOCK_REF_BATCH_QUARANTINE);
+        hold.setReferenceId(b.getId());
+        hold.setQuantityDelta(q.negate());
+        hold.setUnitCost(unitCost);
+        hold.setNotes(reason);
+        hold.setCreatedBy(userId);
+        stockMovementRepository.save(hold);
     }
 
     private StockTarget resolveReturnBatch(

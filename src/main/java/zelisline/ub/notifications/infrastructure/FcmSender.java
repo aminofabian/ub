@@ -54,7 +54,7 @@ public class FcmSender {
         }
         try {
             Map<String, Object> notification = new HashMap<>();
-            notification.put("title", title != null && !title.isBlank() ? title : "Palmart");
+            notification.put("title", title != null && !title.isBlank() ? title : "Kiosk");
             notification.put("body", body != null ? body : "");
             Map<String, Object> payload = new HashMap<>();
             payload.put("to", fcmToken.trim());

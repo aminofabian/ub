@@ -1136,6 +1136,15 @@ public class DesktopSyncPullService {
         try {
             return new SnapshotFetch(doFetch(client, mapping), mapping);
         } catch (Exception e) {
+            if (e instanceof org.springframework.web.client.HttpStatusCodeException http
+                    && DesktopConnectService.isMedicineShopRefusal(http)) {
+                // ADR 0033 B5: the shop now sells medicines; this till keeps uploading what it
+                // sold but no longer receives the catalogue.
+                throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    zelisline.ub.pharmacy.application.DesktopTillPolicy.REFUSAL_MESSAGE
+                );
+            }
             if (!isUnauthorized(e)) {
                 throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY,

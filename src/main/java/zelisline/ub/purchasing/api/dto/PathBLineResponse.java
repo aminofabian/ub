@@ -14,6 +14,24 @@ public record PathBLineResponse(
         BigDecimal draftUnitCost,
         BigDecimal draftSellPrice,
         LocalDate draftExpiryDate,
-        String packOptionId
+        String packOptionId,
+        String draftLotNumber
 ) {
+
+    public PathBLineResponse(
+            String id,
+            int sortOrder,
+            String descriptionText,
+            BigDecimal amountMoney,
+            String suggestedItemId,
+            String lineStatus,
+            BigDecimal draftQty,
+            BigDecimal draftUnitCost,
+            BigDecimal draftSellPrice,
+            LocalDate draftExpiryDate,
+            String packOptionId
+    ) {
+        this(id, sortOrder, descriptionText, amountMoney, suggestedItemId, lineStatus, draftQty,
+                draftUnitCost, draftSellPrice, draftExpiryDate, packOptionId, null);
+    }
 }

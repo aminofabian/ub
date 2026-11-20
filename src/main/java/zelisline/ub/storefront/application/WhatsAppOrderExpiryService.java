@@ -137,8 +137,12 @@ public class WhatsAppOrderExpiryService {
                             .orElse(null);
             InventoryBatch batch = batchId == null
                     ? null
-                    : inventoryBatchRepository.findById(batchId).orElse(null);
-            if (item != null) {
+                    : inventoryBatchRepository.findByIdAndBusinessId(batchId, order.getBusinessId()).orElse(null);
+            // Units going back into a batch that was quarantined meanwhile stay off sale, so
+            // sellable on-hand (current_stock) must not grow; releasing the batch adds them then.
+            boolean intoQuarantine = batch != null
+                    && InventoryConstants.BATCH_STATUS_QUARANTINED.equals(batch.getStatus());
+            if (item != null && !intoQuarantine) {
                 item.setCurrentStock(round(item.getCurrentStock().add(qtyBack)));
                 itemRepository.save(item);
             }
@@ -158,6 +162,20 @@ public class WhatsAppOrderExpiryService {
             release.setUnitCost(unitCost.get(entry.getKey()));
             release.setNotes(notes);
             stockMovementRepository.save(release);
+            if (intoQuarantine) {
+                StockMovement hold = new StockMovement();
+                hold.setBusinessId(order.getBusinessId());
+                hold.setBranchId(order.getCatalogBranchId());
+                hold.setItemId(itemId);
+                hold.setBatchId(batchId);
+                hold.setMovementType(InventoryConstants.MOVEMENT_QUARANTINE);
+                hold.setReferenceType(InventoryConstants.STOCK_REF_BATCH_QUARANTINE);
+                hold.setReferenceId(batchId);
+                hold.setQuantityDelta(qtyBack.negate());
+                hold.setUnitCost(unitCost.get(entry.getKey()));
+                hold.setNotes("Returned to a quarantined batch");
+                stockMovementRepository.save(hold);
+            }
         }
     }
 

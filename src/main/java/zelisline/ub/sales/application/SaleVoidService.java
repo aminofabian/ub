@@ -90,6 +90,7 @@ public class SaleVoidService {
     private final zelisline.ub.serviceops.application.StaffEarningsService staffEarningsService;
     private final zelisline.ub.restaurant.application.RestaurantSaleSupport restaurantSaleSupport;
     private final SaleVoidNotifier saleVoidNotifier;
+    private final zelisline.ub.pharmacy.application.DispensingGate dispensingGate;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -132,6 +133,8 @@ public class SaleVoidService {
         List<SaleItem> itemRows = saleItemRepository.findBySaleIdOrderByLineIndexAsc(saleId);
         List<SalePayment> payments = salePaymentRepository.findBySaleIdOrderBySortOrderAsc(saleId);
         restoreInventory(businessId, sale, itemRows, userId);
+        // The dispensing record of a voided sale is kept and stamped, never deleted (ADR 0033).
+        dispensingGate.markVoidedForSale(businessId, saleId, userId);
 
         BigDecimal cashBack = sumCashPayments(payments);
         if (cashBack.signum() > 0) {
@@ -307,7 +310,25 @@ public class SaleVoidService {
             sm.setNotes("Sale void");
             sm.setCreatedBy(userId);
             stockMovementRepository.save(sm);
-            applyStockDelta(item, q);
+            if (InventoryConstants.BATCH_STATUS_QUARANTINED.equals(b.getStatus())) {
+                // The batch was pulled off sale after this sale: the voided units rejoin it but
+                // stay off sale, so sellable on-hand (current_stock) must not grow.
+                StockMovement hold = new StockMovement();
+                hold.setBusinessId(businessId);
+                hold.setBranchId(sale.getBranchId());
+                hold.setItemId(lastStockHolderId);
+                hold.setBatchId(si.getBatchId());
+                hold.setMovementType(InventoryConstants.MOVEMENT_QUARANTINE);
+                hold.setReferenceType(InventoryConstants.STOCK_REF_BATCH_QUARANTINE);
+                hold.setReferenceId(si.getBatchId());
+                hold.setQuantityDelta(q.negate());
+                hold.setUnitCost(si.getUnitCost());
+                hold.setNotes("Voided sale returned to a quarantined batch");
+                hold.setCreatedBy(userId);
+                stockMovementRepository.save(hold);
+            } else {
+                applyStockDelta(item, q);
+            }
         }
         if (item != null) {
             itemRepository.save(item);

@@ -325,10 +325,15 @@ public class InventoryTransferService {
             if (returned.signum() <= 0) {
                 continue;
             }
-            boolean wasDepleted = !InventoryConstants.BATCH_STATUS_ACTIVE.equals(src.getStatus());
+            // A source batch quarantined since the send stays quarantined: cancelling a transfer
+            // must not put recalled stock back on sale.
+            boolean quarantined = InventoryConstants.BATCH_STATUS_QUARANTINED.equals(src.getStatus());
+            boolean wasDepleted = !quarantined && !InventoryConstants.BATCH_STATUS_ACTIVE.equals(src.getStatus());
             src.setQuantityRemaining(src.getQuantityRemaining().add(returned)
                     .setScale(QTY_SCALE, RoundingMode.HALF_UP));
-            src.setStatus(InventoryConstants.BATCH_STATUS_ACTIVE);
+            if (!quarantined) {
+                src.setStatus(InventoryConstants.BATCH_STATUS_ACTIVE);
+            }
             inventoryBatchRepository.save(src);
             if (wasDepleted && src.getSupplyBatchId() != null && !src.getSupplyBatchId().isBlank()) {
                 supplyBatchesToReopen.add(src.getSupplyBatchId());
@@ -548,6 +553,7 @@ public class InventoryTransferService {
         dest.setUnitCost(slice.unitCost().setScale(QTY_SCALE, RoundingMode.HALF_UP));
         dest.setReceivedAt(Instant.now());
         dest.setExpiryDate(src.getExpiryDate());
+        dest.setLotNumber(src.getLotNumber());
         dest.setStatus(destBatchStatus);
         return dest;
     }

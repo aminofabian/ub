@@ -146,6 +146,7 @@ public class DesktopSyncController {
     private final WebOrderRepository webOrderRepository;
     private final WebOrderLineRepository webOrderLineRepository;
     private final StockMovementRepository stockMovementRepository;
+    private final zelisline.ub.pharmacy.application.DesktopTillPolicy desktopTillPolicy;
 
     private static final Logger log = LoggerFactory.getLogger(DesktopSyncController.class);
 
@@ -177,6 +178,9 @@ public class DesktopSyncController {
                     "Business not found"
                 )
             );
+        // A shop with marked medicines cannot put its catalogue on a desktop till (ADR 0033 B5):
+        // the till would sell them with no dispensing check. Uploads from a till stay open.
+        desktopTillPolicy.assertDesktopTillAllowed(businessId);
 
         List<Item> items = itemRepository.findByBusinessIdAndDeletedAtIsNull(businessId);
         List<String> itemIds = items.stream().map(Item::getId).toList();

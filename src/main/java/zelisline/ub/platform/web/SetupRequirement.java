@@ -16,7 +16,12 @@ public enum SetupRequirement {
     SHIFT("shift"),
 
     /** This computer is not a registered till for a branch that only trusts registered tills. */
-    TILL("till");
+    TILL("till"),
+    /**
+     * The sale holds a medicine that cannot be sold as it stands: it needs a dispensing record,
+     * a pharmacist's approval, or a dispensing class. The hint says which.
+     */
+    DISPENSING("dispensing");
 
     private final String code;
 

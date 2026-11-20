@@ -48,6 +48,8 @@ public class PublicWebCartService {
     private final ItemImageRepository itemImageRepository;
     private final StorefrontCatalogStockService storefrontCatalogStockService;
 
+    private final zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry;
+
     public PublicWebCartService(
             PublicStorefrontContextService storefrontContextService,
             WebCartRepository webCartRepository,
@@ -55,8 +57,10 @@ public class PublicWebCartService {
             ItemRepository itemRepository,
             PricingService pricingService,
             ItemImageRepository itemImageRepository,
-            StorefrontCatalogStockService storefrontCatalogStockService
+            StorefrontCatalogStockService storefrontCatalogStockService,
+            zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry
     ) {
+        this.medicineRegistry = medicineRegistry;
         this.storefrontContextService = storefrontContextService;
         this.webCartRepository = webCartRepository;
         this.webCartLineRepository = webCartLineRepository;
@@ -171,6 +175,11 @@ public class PublicWebCartService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not available");
         }
         StorefrontOnlinePurchaseRules.requireWebCartEligible(item);
+        if (!medicineRegistry.counterOnlyItemIds(ctx.business().getId(), java.util.List.of(item)).isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "This item is only available at the counter");
+        }
         return item;
     }
 

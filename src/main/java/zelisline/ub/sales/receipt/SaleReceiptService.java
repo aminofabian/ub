@@ -26,6 +26,7 @@ import zelisline.ub.credits.domain.CustomerPhone;
 import zelisline.ub.credits.repository.CustomerPhoneRepository;
 import zelisline.ub.credits.repository.CustomerRepository;
 import zelisline.ub.sales.SalesConstants;
+import zelisline.ub.sales.application.CashTender;
 import zelisline.ub.sales.domain.Sale;
 import zelisline.ub.sales.domain.SaleItem;
 import zelisline.ub.sales.domain.SalePayment;
@@ -169,9 +170,11 @@ public class SaleReceiptService {
         String changeGivenDisplay = null;
         BigDecimal cashReceived = resolveCashReceivedForReceipt(
                 sale, pays, cashReceivedOverride);
-        if (cashReceived != null && cashReceived.compareTo(sale.amountDue()) >= 0) {
+        BigDecimal cashPaid = cashPaid(pays);
+        BigDecimal change = CashTender.changeGiven(cashReceived, cashPaid);
+        if (change != null && cashPaid.signum() > 0) {
             cashReceivedDisplay = money(cashReceived);
-            changeGivenDisplay = money(cashReceived.subtract(sale.amountDue()));
+            changeGivenDisplay = money(change);
         }
 
         boolean hasTips = sale.getTipTotal() != null && sale.getTipTotal().signum() > 0;
@@ -328,6 +331,17 @@ public class SaleReceiptService {
 
     private static String money(BigDecimal v) {
         return v.setScale(MONEY_SCALE, RoundingMode.HALF_UP).toPlainString();
+    }
+
+    /** Cash payment lines — the notes that stay in the drawer, after change. */
+    private static BigDecimal cashPaid(List<SalePayment> pays) {
+        BigDecimal cash = BigDecimal.ZERO;
+        for (SalePayment payment : pays) {
+            if (SalesConstants.PAYMENT_METHOD_CASH.equals(payment.getMethod()) && payment.getAmount() != null) {
+                cash = cash.add(payment.getAmount());
+            }
+        }
+        return cash.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
 
     /**

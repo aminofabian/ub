@@ -238,7 +238,7 @@ class CashDrawerLedgerIT {
 
         // Cash sale: 700 total, customer hands over 1,000 → 300 change.
         String saleId = java.util.UUID.randomUUID().toString();
-        ledgerService.recordSale(shiftId, saleId, new BigDecimal("1000.00"), new BigDecimal("700.00"),
+        ledgerService.recordSale(shiftId, saleId, new BigDecimal("1000.00"),
                 new BigDecimal("700.00"), cashier.getId());
 
         // The SaleService applyDrawerCash path bumps expected by the cash payment sum.
@@ -261,7 +261,7 @@ class CashDrawerLedgerIT {
 
         // Customer pays 1,000 for a 700 sale; 300 credited to wallet — no physical change.
         String saleId = java.util.UUID.randomUUID().toString();
-        ledgerService.recordSale(shiftId, saleId, null, new BigDecimal("700.00"),
+        ledgerService.recordSale(shiftId, saleId, null,
                 new BigDecimal("1000.00"), cashier.getId());
 
         Shift shift = shiftRepository.findById(shiftId).orElseThrow();
@@ -398,7 +398,7 @@ class CashDrawerLedgerIT {
 
         // Cash sale: 700 total, customer hands 1,000 → +1×1000, change −1×200 −1×100
         String saleId = java.util.UUID.randomUUID().toString();
-        ledgerService.recordSale(shiftId, saleId, new BigDecimal("1000.00"), new BigDecimal("700.00"),
+        ledgerService.recordSale(shiftId, saleId, new BigDecimal("1000.00"),
                 new BigDecimal("700.00"), cashier.getId());
         Shift afterSale = shiftRepository.findById(shiftId).orElseThrow();
         afterSale.setExpectedClosingCash(new BigDecimal("8700.00"));

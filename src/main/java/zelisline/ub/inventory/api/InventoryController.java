@@ -69,6 +69,7 @@ public class InventoryController {
     private final InventoryRoleAccessService inventoryRoleAccessService;
     private final RequestPermissionService requestPermissionService;
     private final BranchResolutionService branchResolutionService;
+    private final zelisline.ub.pharmacy.application.MedicineInboundCheck medicineInboundCheck;
 
     @GetMapping("/allocation-preview")
     @PreAuthorize("hasPermission(null, 'inventory.read')")
@@ -95,8 +96,10 @@ public class InventoryController {
             HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        medicineInboundCheck.requireLotAndExpiry(businessId, body.itemId(), body.lotNumber(), body.expiryDate());
         return inventoryLedgerService.recordOpeningBalance(
-                TenantRequestIds.resolveBusinessId(request),
+                businessId,
                 body,
                 user.userId()
         );
@@ -110,8 +113,10 @@ public class InventoryController {
             HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        medicineInboundCheck.requireLotAndExpiry(businessId, body.itemId(), body.lotNumber(), body.expiryDate());
         return inventoryLedgerService.recordStockIncrease(
-                TenantRequestIds.resolveBusinessId(request),
+                businessId,
                 body,
                 user.userId()
         );

@@ -256,4 +256,26 @@ public final class AuditEventTypes {
     public static final String EXPENSE_DISBURSEMENT_CONFIRMED = "expense_disbursement.confirmed";
     public static final String EXPENSE_DISBURSEMENT_FAILED = "expense_disbursement.failed";
     public static final String EXPENSE_DISBURSEMENT_CANCELLED = "expense_disbursement.cancelled";
+
+    // ── Pharmacy (ADR 0033) ─────────────────────────────────────────────
+    public static final String PHARMACY_MEDICINE_MARKED = "pharmacy.medicine_marked";
+    public static final String PHARMACY_MEDICINE_UNMARKED = "pharmacy.medicine_unmarked";
+    public static final String PHARMACY_CLASS_CHANGED = "pharmacy.class_changed";
+    public static final String PHARMACY_PROFILE_UPDATED = "pharmacy.profile_updated";
+    public static final String PHARMACY_DISPENSED = "pharmacy.dispensed";
+    public static final String PHARMACY_RECORD_VIEWED = "pharmacy.record_viewed";
+    public static final String PHARMACY_APPROVAL_GRANTED = "pharmacy.approval_granted";
+    public static final String PHARMACY_APPROVAL_FAILED = "pharmacy.approval_failed";
+    public static final String PHARMACY_RECORD_VERIFIED = "pharmacy.record_verified";
+    public static final String PHARMACY_RECORD_CORRECTED = "pharmacy.record_corrected";
+    public static final String PHARMACY_CLAIM_SAVED = "pharmacy.claim_saved";
+    public static final String PHARMACY_PATIENT_VIEWED = "pharmacy.patient_viewed";
+    public static final String PHARMACY_PATIENT_SAVED = "pharmacy.patient_saved";
+    public static final String PHARMACY_REGISTER_VIEWED = "pharmacy.controlled_register_viewed";
+    public static final String PHARMACY_TEMPERATURE_OUT_OF_RANGE = "pharmacy.temperature_out_of_range";
+    public static final String PHARMACY_ADVERSE_EVENT_RECORDED = "pharmacy.adverse_event_recorded";
+    public static final String INVENTORY_BATCH_QUARANTINED = "inventory.batch_quarantined";
+    public static final String INVENTORY_BATCH_RELEASED = "inventory.batch_released";
+    public static final String INVENTORY_BATCH_DISPOSED = "inventory.batch_disposed";
+    public static final String INVENTORY_BATCH_DETAILS_EDITED = "inventory.batch_details_edited";
 }

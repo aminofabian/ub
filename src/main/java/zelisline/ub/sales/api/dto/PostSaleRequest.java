@@ -18,8 +18,9 @@ public record PostSaleRequest(
         /** Required when any payment uses {@code customer_credit} (tab / AR). */
         String customerId,
         /**
-         * Cash handed over by the customer (full cash sales). Used for receipt
-         * "Received" / "Change". Must be &gt;= grand total when set.
+         * Notes the customer handed over. Used for receipt "Received" / "Change".
+         * On a cash sale this is at least the bill. On a split it only has to
+         * cover the cash share — M-Pesa or wallet may cover the rest.
          */
         @PositiveOrZero BigDecimal cashReceived,
         /**
@@ -32,8 +33,27 @@ public record PostSaleRequest(
          * Tips for staff who performed a service on this sale. Not part of the sale total and
          * never revenue; the payments must cover the total plus the tips.
          */
-        @Valid List<PostSaleTipRequest> tips
+        @Valid List<PostSaleTipRequest> tips,
+        /**
+         * Required when a line is a prescription-only or controlled medicine: who prescribed it,
+         * and the pharmacist's approval when the cashier may not dispense (ADR 0033).
+         */
+        @Valid PostSaleDispensingRequest dispensing
 ) {
+    /** Shape used before dispensing existed; older queued sales and internal callers still build it. */
+    public PostSaleRequest(
+            String branchId,
+            List<PostSaleLineRequest> lines,
+            List<PostSalePaymentRequest> payments,
+            Instant clientSoldAt,
+            String customerId,
+            BigDecimal cashReceived,
+            Boolean allowOutOfStock,
+            List<PostSaleTipRequest> tips
+    ) {
+        this(branchId, lines, payments, clientSoldAt, customerId, cashReceived, allowOutOfStock, tips, null);
+    }
+
     /** Shape used before tips existed; older queued sales and internal callers still build it. */
     public PostSaleRequest(
             String branchId,
@@ -44,6 +64,6 @@ public record PostSaleRequest(
             BigDecimal cashReceived,
             Boolean allowOutOfStock
     ) {
-        this(branchId, lines, payments, clientSoldAt, customerId, cashReceived, allowOutOfStock, null);
+        this(branchId, lines, payments, clientSoldAt, customerId, cashReceived, allowOutOfStock, null, null);
     }
 }

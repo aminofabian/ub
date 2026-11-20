@@ -66,6 +66,7 @@ public class PublicWebCheckoutService {
     private final ApplicationEventPublisher eventPublisher;
     private final zelisline.ub.support.application.SupportService supportService;
     private final PickupMtaaniCheckoutService pickupMtaaniCheckoutService;
+    private final zelisline.ub.pharmacy.application.DispensingGate dispensingGate;
 
     /**
      * How long an unpaid order holds stock before the expiry sweeper releases it, for channels
@@ -90,7 +91,8 @@ public class PublicWebCheckoutService {
             zelisline.ub.notifications.application.NotificationOutboxService notificationOutboxService,
             ApplicationEventPublisher eventPublisher,
             zelisline.ub.support.application.SupportService supportService,
-            PickupMtaaniCheckoutService pickupMtaaniCheckoutService
+            PickupMtaaniCheckoutService pickupMtaaniCheckoutService,
+            zelisline.ub.pharmacy.application.DispensingGate dispensingGate
     ) {
         this.publicWebCartService = publicWebCartService;
         this.inventoryBatchPickerService = inventoryBatchPickerService;
@@ -108,6 +110,7 @@ public class PublicWebCheckoutService {
         this.eventPublisher = eventPublisher;
         this.supportService = supportService;
         this.pickupMtaaniCheckoutService = pickupMtaaniCheckoutService;
+        this.dispensingGate = dispensingGate;
     }
 
     @Transactional
@@ -156,6 +159,11 @@ public class PublicWebCheckoutService {
         if (expiryMins > 0) {
             order.setExpiresAt(Instant.now().plus(expiryMins, ChronoUnit.MINUTES));
         }
+        // Online orders are not till sales, so the medicine rules are applied here too (ADR 0033):
+        // anything but an over-the-counter medicine is refused before stock is held.
+        dispensingGate.assertOnlineSellable(
+                businessId,
+                elig.lines().stream().map(l -> l.item().getId()).toList());
         webOrderRepository.save(order);
 
         if (pickupSelection.isPresent()) {

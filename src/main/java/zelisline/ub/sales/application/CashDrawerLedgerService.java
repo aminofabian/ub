@@ -168,13 +168,7 @@ public class CashDrawerLedgerService {
         BigDecimal received = sale.getCashReceived() != null ? sale.getCashReceived() : sumCash;
         recordAmount(sale.getShiftId(), EVENT_SALE_RECEIVED, REF_SALE, sale.getId(),
                 received, CONFIDENCE_INFERRED, sale.getSoldBy(), null);
-        if (sale.getCashReceived() != null) {
-            BigDecimal change = sale.getCashReceived().subtract(sale.amountDue());
-            if (change.signum() > 0) {
-                recordAmount(sale.getShiftId(), EVENT_SALE_CHANGE, REF_SALE, sale.getId(),
-                        change.negate(), CONFIDENCE_INFERRED, sale.getSoldBy(), null);
-            }
-        }
+        recordChange(sale.getShiftId(), sale.getId(), sale.getCashReceived(), sumCash, sale.getSoldBy());
     }
 
     // ========================================================================
@@ -183,22 +177,26 @@ public class CashDrawerLedgerService {
 
     /**
      * Records a completed cash sale. {@code cashReceived} is the physical cash handed
-     * over ({@code sales.cash_received}); when it is set, change is the difference to
-     * the total. When it is null (split tender / overpay-to-wallet), the received
-     * amount is the cash payment sum and no change movement exists — the wallet
-     * overpay path never moves physical change.
+     * over ({@code sales.cash_received}). Change is that amount minus the cash payment
+     * that stays in the drawer — on a split, not minus the whole bill. When it is null
+     * (exact cash share, or overpay-to-wallet), the received amount is the cash payment
+     * sum and no change movement exists.
      */
     public void recordSale(String shiftId, String saleId, BigDecimal cashReceived,
-                           BigDecimal grandTotal, BigDecimal sumCashPayments, String performedBy) {
+                           BigDecimal sumCashPayments, String performedBy) {
         BigDecimal received = cashReceived != null ? cashReceived : sumCashPayments;
         if (received.signum() > 0) {
             recordAmount(shiftId, EVENT_SALE_RECEIVED, REF_SALE, saleId, received, CONFIDENCE_INFERRED, performedBy, null);
         }
-        if (cashReceived != null) {
-            BigDecimal change = cashReceived.subtract(grandTotal);
-            if (change.signum() > 0) {
-                recordAmount(shiftId, EVENT_SALE_CHANGE, REF_SALE, saleId, change.negate(), CONFIDENCE_INFERRED, performedBy, null);
-            }
+        recordChange(shiftId, saleId, cashReceived, sumCashPayments, performedBy);
+    }
+
+    private void recordChange(String shiftId, String saleId, BigDecimal cashReceived,
+                              BigDecimal sumCashPayments, String performedBy) {
+        BigDecimal change = CashTender.changeGiven(cashReceived, sumCashPayments);
+        if (change != null && change.signum() > 0) {
+            recordAmount(shiftId, EVENT_SALE_CHANGE, REF_SALE, saleId,
+                    change.negate(), CONFIDENCE_INFERRED, performedBy, null);
         }
     }
 

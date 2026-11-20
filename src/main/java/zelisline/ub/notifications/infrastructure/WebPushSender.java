@@ -41,7 +41,7 @@ public class WebPushSender {
                     token.getEndpoint(),
                     new Subscription.Keys(token.getP256dh(), token.getAuthSecret()));
             String payload = objectMapper.writeValueAsString(new PushPayload(
-                    title != null ? title : "Palmart",
+                    title != null ? title : "Kiosk",
                     body != null ? body : "",
                     url != null ? url : "/"));
             Notification notification = new Notification(subscription, payload);

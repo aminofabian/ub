@@ -28,12 +28,12 @@ final class OpenInPalmartEmail {
     }
 
     static String html(String frontendBaseUrl, String title, String body, String actionUrl) {
-        String heading = hasText(title) ? title : "Palmart";
+        String heading = hasText(title) ? title : "Kiosk";
         String message = body == null ? "" : body;
         String link = absoluteUrl(frontendBaseUrl, actionUrl, "/");
         return """
                 <!DOCTYPE html><html><body style="font-family:sans-serif;line-height:1.5">
-                <h2>%s</h2><p>%s</p><p><a href="%s">Open in Palmart</a></p>
+                <h2>%s</h2><p>%s</p><p><a href="%s">Open in Kiosk</a></p>
                 </body></html>
                 """.formatted(escapeHtml(heading), escapeHtml(message), escapeHtml(link));
     }
@@ -43,7 +43,7 @@ final class OpenInPalmartEmail {
                 ? (title == null ? "" : title) + ": " + body
                 : (title == null ? "" : title);
         String link = absoluteUrl(frontendBaseUrl, actionUrl, "/");
-        return message + "\n\nOpen in Palmart: " + link;
+        return message + "\n\nOpen in Kiosk: " + link;
     }
 
     private static String escapeHtml(String raw) {

@@ -14,8 +14,11 @@ import zelisline.ub.catalog.domain.Item;
 public final class StorefrontOnlinePurchaseRules {
 
     public static final String WEB_CART = "web_cart";
-    /** @deprecated Weighed items are web-cart eligible; kept for older clients. */
-    @Deprecated
+    /**
+     * Shown in the public catalogue but not sold online. Weighed items no longer use it; it now
+     * marks medicines that must be dispensed at the counter (ADR 0033), which the catalogue
+     * service decides per item because it needs a lookup this static class cannot do.
+     */
     public static final String IN_STORE_ONLY = "in_store_only";
 
     /** Matches POS {@code SaleService} weighed quantity precision. */

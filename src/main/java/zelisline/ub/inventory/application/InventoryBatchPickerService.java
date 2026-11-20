@@ -67,6 +67,7 @@ public class InventoryBatchPickerService {
     private final SupplyBatchLifecycleService supplyBatchLifecycleService;
     private final PackageVariantStockResolver packageVariantStockResolver;
     private final InventoryLedgerService inventoryLedgerService;
+    private final zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry;
 
     @Transactional(readOnly = true)
     public List<BatchAllocationLine> previewAllocation(
@@ -240,6 +241,7 @@ public class InventoryBatchPickerService {
                 continue; // the ingredient was deleted since; there is nothing to put it back into
             }
             entityManager.lock(item, LockModeType.PESSIMISTIC_WRITE);
+            boolean intoQuarantine = false;
             if (used.getBatchId() != null) {
                 InventoryBatch batch = inventoryBatchRepository
                         .findByIdAndBusinessIdForUpdate(used.getBatchId(), businessId).orElse(null);
@@ -247,6 +249,7 @@ public class InventoryBatchPickerService {
                     batch.setQuantityRemaining(
                             batch.getQuantityRemaining().add(back).setScale(QTY_SCALE, RoundingMode.HALF_UP));
                     inventoryBatchRepository.save(batch);
+                    intoQuarantine = InventoryConstants.BATCH_STATUS_QUARANTINED.equals(batch.getStatus());
                 }
             }
             StockMovement sm = new StockMovement();
@@ -262,7 +265,24 @@ public class InventoryBatchPickerService {
             sm.setNotes("Sale void: ingredients put back");
             sm.setCreatedBy(userId);
             stockMovementRepository.save(sm);
-            applyStockDelta(item, back, true);
+            if (intoQuarantine) {
+                // The batch was pulled off sale since: the units rejoin it but stay off sale.
+                StockMovement hold = new StockMovement();
+                hold.setBusinessId(businessId);
+                hold.setBranchId(branchId);
+                hold.setItemId(item.getId());
+                hold.setBatchId(used.getBatchId());
+                hold.setMovementType(InventoryConstants.MOVEMENT_QUARANTINE);
+                hold.setReferenceType(InventoryConstants.STOCK_REF_BATCH_QUARANTINE);
+                hold.setReferenceId(used.getBatchId());
+                hold.setQuantityDelta(back.negate());
+                hold.setUnitCost(used.getUnitCost());
+                hold.setNotes("Returned to a quarantined batch");
+                hold.setCreatedBy(userId);
+                stockMovementRepository.save(hold);
+            } else {
+                applyStockDelta(item, back, true);
+            }
         }
     }
 
@@ -368,18 +388,46 @@ public class InventoryBatchPickerService {
         StockPickResolution pick = packageVariantStockResolver.resolvePick(businessId, itemId, quantity);
         Item item = requireStockedItem(businessId, pick.stockItemId());
         entityManager.lock(item, LockModeType.PESSIMISTIC_WRITE);
-        boolean allowNegativeStock = forceAllowNegativeStock
-                || allowNegativeStockForSale(businessId, movementType);
+        // A medicine is only ever sold from a real, unexpired batch (ADR 0033): no oversell
+        // against the deficit batch, no auto-seeded opening stock, no expired lots — whatever the
+        // shop's negative-stock setting says. Other movement types (stock-take write-downs,
+        // adjustments) keep the normal pool so expired medicine can still be counted and removed.
+        boolean strictMedicineSale = InventoryConstants.MOVEMENT_SALE.equals(movementType)
+                && medicineRegistry.isMedicine(businessId, catalogItem, pick.stockItemId());
+        boolean allowNegativeStock = !strictMedicineSale
+                && (forceAllowNegativeStock || allowNegativeStockForSale(businessId, movementType));
         List<InventoryBatch> locked = lockActiveBatchesForPool(
                 businessId, branchId, catalogItem);
         List<InventoryBatch> working = new ArrayList<>(locked);
+        if (strictMedicineSale) {
+            boolean hadStock = !working.isEmpty();
+            java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Africa/Nairobi"));
+            // Stock loaded before the product was marked as a medicine may carry no expiry
+            // date. An unknown date is treated like a passed one until someone records it.
+            boolean undated = working.stream().anyMatch(b -> b.getExpiryDate() == null);
+            working.removeIf(b -> b.getExpiryDate() == null || b.getExpiryDate().isBefore(today));
+            if (working.isEmpty()) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        undated
+                                ? "The stock of " + itemLabel(catalogItem) + " has no expiry date recorded. "
+                                        + "Add it under Pharmacy, Stock safety, Missing lot or expiry, then sell."
+                                : hadStock
+                                ? "Only expired stock is left for " + itemLabel(catalogItem)
+                                        + ". Write it off and receive new stock before selling."
+                                : "Out of stock for " + itemLabel(catalogItem)
+                                        + ". A medicine can only be sold from stock that has been received."
+                );
+            }
+        }
         // Keep expired lots in the pool. FEFO still sells freshest first; expired
         // remainder is what is physically on the shelf (produce 3-for-20 packs, etc.).
         // Excluding it made POS show stock while checkout failed.
 
         // Items never received at this branch (e.g. POS quick-create before opening stock)
         // have no active/depleted batches — seed opening stock for this sale so checkout can proceed.
-        if (working.isEmpty()
+        if (!strictMedicineSale
+                && working.isEmpty()
                 && resolveCostReferenceBatch(businessId, pick.stockItemId(), branchId) == null) {
             seedOpeningStockForFirstSale(
                     businessId,

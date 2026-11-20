@@ -30,7 +30,7 @@ class OpenInPalmartEmailTest {
                 "/business?pocket=1");
 
         assertEquals(
-                "Friday Pocket: Pocket KES 100.\n\nOpen in Palmart: https://kiosk.ke/business?pocket=1",
+                "Friday Pocket: Pocket KES 100.\n\nOpen in Kiosk: https://kiosk.ke/business?pocket=1",
                 text);
     }
 

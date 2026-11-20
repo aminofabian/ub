@@ -33,6 +33,12 @@ public enum WastageReason {
     /** Returned goods that cannot be put back on sale (e.g. butcher counter refunds). */
     CUSTOMER_RETURN,
 
+    /** Batch withdrawn after a manufacturer, supplier or regulator recall. */
+    RECALLED,
+
+    /** Quarantined stock destroyed for another reason (damaged, tampered, storage failure). */
+    QUARANTINE_DISPOSAL,
+
     /** Anything that doesn't fit the categories above. */
     OTHER;
 

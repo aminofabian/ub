@@ -1,9 +1,11 @@
 package zelisline.ub.grocery.api.dto;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.PositiveOrZero;
 import zelisline.ub.sales.api.dto.PostSaleLineRequest;
 import zelisline.ub.sales.api.dto.PostSalePaymentRequest;
 
@@ -15,6 +17,11 @@ public record PayGroceryInvoiceRequest(
          * Optional till lines added on top of the forwarded invoice (same checkout).
          * Included in the resulting sale; payments must cover invoice + these lines.
          */
-        @Valid List<PostSaleLineRequest> additionalLines
+        @Valid List<PostSaleLineRequest> additionalLines,
+        /**
+         * Notes handed over when the invoice is paid in cash, including a split.
+         * Change is this amount minus the cash payment.
+         */
+        @PositiveOrZero BigDecimal cashReceived
 ) {
 }

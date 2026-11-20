@@ -192,6 +192,17 @@ public class DesktopConnectService {
                 .header("X-Tenant-Id", cloudBusinessId)
                 .retrieve()
                 .body(MasterDataSnapshot.class);
+        } catch (org.springframework.web.client.HttpClientErrorException.Conflict e) {
+            if (isMedicineShopRefusal(e)) {
+                throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    zelisline.ub.pharmacy.application.DesktopTillPolicy.REFUSAL_MESSAGE
+                );
+            }
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "Connected, but could not download the shop data (" + e.getMessage() + ")"
+            );
         } catch (Exception e) {
             log.warn("[DesktopConnect] snapshot pull failed: {}", e.getMessage());
             throw new ResponseStatusException(
@@ -924,4 +935,12 @@ public class DesktopConnectService {
             String ownerUserId,
             List<DesktopMediaSyncService.PendingImage> pendingImages,
             List<DesktopMediaSyncService.PendingBrandingAsset> pendingBranding) {}
+
+    /** True when the online shop refused the catalogue because it sells medicines (ADR 0033 B5). */
+    static boolean isMedicineShopRefusal(org.springframework.web.client.HttpStatusCodeException e) {
+        String body = e.getResponseBodyAsString();
+        String code = zelisline.ub.pharmacy.application.DesktopTillPolicy.REFUSAL_CODE;
+        return (body != null && body.contains(code))
+            || (e.getMessage() != null && e.getMessage().contains(code));
+    }
 }

@@ -138,6 +138,7 @@ public class SaleService {
     private final zelisline.ub.restaurant.application.RestaurantSaleSupport restaurantSaleSupport;
     private final StaffProfileService staffProfileService;
     private final StaffEarningsService staffEarningsService;
+    private final zelisline.ub.pharmacy.application.DispensingGate dispensingGate;
 
     @Transactional
     public SaleCreationOutcome createSale(String businessId, String rawIdempotencyKey, PostSaleRequest req, String userId) {
@@ -207,6 +208,10 @@ public class SaleService {
     ) {
         var creditSettingsResolved = businessCreditSettingsService.resolveForBusiness(businessId);
         requireBranch(businessId, req.branchId());
+        // Medicines: refuse the sale before any stock or money moves when a line needs a
+        // dispensing record, a pharmacist's approval or a dispensing class (ADR 0033).
+        zelisline.ub.pharmacy.application.DispensingGate.Plan dispensingPlan =
+                dispensingGate.evaluate(businessId, req.lines(), req.dispensing(), userId, roleId);
         Map<Integer, EffectiveLinePricing> linePricing =
                 resolveAndValidateSaleLines(
                         businessId, req.branchId(), req.lines(), roleId, wasSoldOffline(req.clientSoldAt()));
@@ -280,6 +285,7 @@ public class SaleService {
                 tipTotal
         );
         saleItemRepository.saveAll(saleItems);
+        dispensingGate.record(businessId, dispensingPlan, saleId, req.branchId(), saleItems);
 
         creditSaleDebtService.applyDebtForNewSale(businessId, saleId, customerId, creditTenderTotal);
         if (creditTenderTotal.signum() > 0 && customerId != null && !customerId.isBlank()) {
@@ -330,7 +336,7 @@ public class SaleService {
         shiftRepository.save(shift);
 
         // Record the per-denomination ledger movement for this cash sale.
-        cashDrawerLedgerService.recordSale(shift.getId(), saleId, cashReceived, amountDue, cashIn, userId);
+        cashDrawerLedgerService.recordSale(shift.getId(), saleId, cashReceived, cashIn, userId);
 
         SaleResponse completed = toResponse(loadSaleOrThrow(saleId, businessId));
         publishSaleEvents(businessId, req.branchId(), shift.getId(), saleId, userId, grandTotal, resolved.normalized(), cashIn);
@@ -528,37 +534,17 @@ public class SaleService {
     }
 
     /**
-     * Persist cash tendered for receipt "Received" / "Change". Only accepted when
-     * the sale is a single cash payment covering the total (no split / wallet overpay).
-     * When cash payment amount exceeds the sale total, excess is wallet credit — do not
-     * store cashReceived (that would imply physical change was handed back).
+     * Persist the notes the customer handed over so the receipt can show
+     * "Received" / "Change". On a split the notes only have to cover the cash
+     * share. When the cash payment itself exceeds the amount due, the excess
+     * is wallet credit — do not store cashReceived.
      */
     private static BigDecimal resolveCashReceived(
             BigDecimal requested,
-            BigDecimal grandTotal,
+            BigDecimal amountDue,
             List<NormalizedPayment> paymentsNorm
     ) {
-        if (requested == null) {
-            return null;
-        }
-        BigDecimal cash = requested.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-        BigDecimal gp = grandTotal.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-        if (cash.compareTo(gp) < 0) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "cashReceived must be at least the sale total");
-        }
-        boolean singleCash = paymentsNorm.size() == 1
-                && SalesConstants.PAYMENT_METHOD_CASH.equals(paymentsNorm.get(0).method());
-        if (!singleCash) {
-            return null;
-        }
-        BigDecimal cashPayment = paymentsNorm.get(0).amount().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
-        if (cashPayment.compareTo(gp) > 0) {
-            // Overpay → wallet path: receipt should show wallet credit, not cash change.
-            return null;
-        }
-        return cash;
+        return CashTender.toStore(requested, amountDue, sumCashTender(paymentsNorm));
     }
 
     private void attachJournalToSale(String saleId, String businessId, String journalId) {

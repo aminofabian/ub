@@ -1,6 +1,7 @@
 package zelisline.ub.inventory.api.dto;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
@@ -12,6 +13,20 @@ public record PostOpeningBalanceRequest(
         @NotBlank String itemId,
         @NotNull @DecimalMin(value = "0.0001", inclusive = true) BigDecimal quantity,
         @NotNull @DecimalMin(value = "0.0001", inclusive = true) BigDecimal unitCost,
-        @Size(max = 2000) String notes
+        @Size(max = 2000) String notes,
+        /** Manufacturer's lot number; required when the item is a medicine. */
+        @Size(max = 64) String lotNumber,
+        /** Expiry date printed on the pack; required when the item is a medicine. */
+        LocalDate expiryDate
 ) {
+
+    public PostOpeningBalanceRequest(
+            String branchId,
+            String itemId,
+            BigDecimal quantity,
+            BigDecimal unitCost,
+            String notes
+    ) {
+        this(branchId, itemId, quantity, unitCost, notes, null, null);
+    }
 }

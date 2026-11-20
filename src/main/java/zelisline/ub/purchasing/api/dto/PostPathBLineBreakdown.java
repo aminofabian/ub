@@ -17,6 +17,20 @@ public record PostPathBLineBreakdown(
         LocalDate expiryDate,
         /** Optional purchase qty as entered by receiver — validated against supplier pack conversion. */
         @PositiveOrZero BigDecimal purchaseQty,
-        @Size(max = 32) String purchaseUnit
+        @Size(max = 32) String purchaseUnit,
+        /** Manufacturer's lot number; falls back to the draft line's. Required for medicines. */
+        @Size(max = 64) String lotNumber
 ) {
+
+    public PostPathBLineBreakdown(
+            String lineId,
+            String itemId,
+            BigDecimal usableQty,
+            BigDecimal wastageQty,
+            LocalDate expiryDate,
+            BigDecimal purchaseQty,
+            String purchaseUnit
+    ) {
+        this(lineId, itemId, usableQty, wastageQty, expiryDate, purchaseQty, purchaseUnit, null);
+    }
 }

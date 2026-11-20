@@ -20,6 +20,22 @@ public record AddPathBLineRequest(
         LocalDate draftExpiryDate,
         /** Saved item pack option. When set, {@code draftQty} is the number of packs
          *  and the server expands it to stock units + unit cost authoritatively. */
-        @Size(max = 36) String packOptionId
+        @Size(max = 36) String packOptionId,
+        /** Manufacturer's lot number; required at post time when the item is a medicine. */
+        @Size(max = 64) String draftLotNumber
 ) {
+
+    public AddPathBLineRequest(
+            String description,
+            BigDecimal amountMoney,
+            String suggestedItemId,
+            BigDecimal draftQty,
+            BigDecimal draftUnitCost,
+            BigDecimal draftSellPrice,
+            LocalDate draftExpiryDate,
+            String packOptionId
+    ) {
+        this(description, amountMoney, suggestedItemId, draftQty, draftUnitCost, draftSellPrice,
+                draftExpiryDate, packOptionId, null);
+    }
 }

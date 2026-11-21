@@ -21,7 +21,8 @@ public class MedicineReceivingGuard {
     public static final int LOT_MAX_LENGTH = 64;
 
     /** Where a person can enter both today; some stock screens have no field for them yet. */
-    private static final String WHERE = "Receive medicines under Supplies, using Lot & expiry.";
+    private static final String WHERE =
+            "Use Add stock under Pharmacy, Medicines, or receive it under Supplies using Lot & expiry.";
 
     private final MedicineRegistry medicineRegistry;
 

@@ -44,6 +44,7 @@ import zelisline.ub.globalcatalog.api.dto.GlobalCatalogMetaResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalCategoryResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductImageResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductPackDetailResponse;
+import zelisline.ub.globalcatalog.api.dto.GlobalProductPackSliceResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductPackSummaryResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductFamilyResponse;
 import zelisline.ub.globalcatalog.api.dto.GlobalProductResponse;
@@ -98,8 +99,13 @@ public class GlobalCatalogService {
         ResolvedGlobalCatalog resolved = globalCatalogResolver.resolveDetailedForBusiness(businessId);
         GlobalCatalog catalog = resolved.catalog();
         regionCatalogAuditService.catalogResolved(businessId, catalog, resolved.via());
-        List<GlobalCategoryResponse> categories = globalCategoryRepository
-                .findByCatalogIdAndActiveTrueOrderByPositionAsc(catalog.getId())
+        // What a shop is offered follows its formats here, on the server, so no client can show a
+        // chemist the mini-mart starter or the grocery aisles by forgetting to filter.
+        StoreKitScope scope = resolveStoreKitScope(businessId);
+        List<GlobalCategoryResponse> categories = visibleCategories(
+                        catalog.getId(),
+                        scope,
+                        globalCategoryRepository.findByCatalogIdAndActiveTrueOrderByPositionAsc(catalog.getId()))
                 .stream()
                 .map(this::toCategoryResponse)
                 .toList();
@@ -107,6 +113,7 @@ public class GlobalCatalogService {
         List<GlobalProductPackSummaryResponse> packs = globalProductPackRepository
                 .findByCatalogIdAndStatusOrderBySortOrderAsc(catalog.getId(), STATUS_PUBLISHED)
                 .stream()
+                .filter(p -> scope.showsPack(p.getStoreKitId()))
                 .map(p -> toPackSummaryResponse(p, catalog.getId()))
                 .toList();
 
@@ -148,6 +155,7 @@ public class GlobalCatalogService {
                     blankToNull(barcode),
                     scope.kits(),
                     scope.empty(),
+                    scope.includeUntagged(),
                     Pageable.unpaged());
 
             List<GlobalProduct> availableProducts = all.getContent().stream()
@@ -177,6 +185,7 @@ public class GlobalCatalogService {
                 blankToNull(barcode),
                 scope.kits(),
                 scope.empty(),
+                scope.includeUntagged(),
                 p);
 
         Map<String, List<GlobalProductImage>> imagesByProduct = imagesByProductId(page.getContent());
@@ -360,6 +369,7 @@ public class GlobalCatalogService {
                 barcode,
                 scope.kits(),
                 scope.empty(),
+                scope.includeUntagged(),
                 pageable
         ).getContent();
     }
@@ -368,28 +378,83 @@ public class GlobalCatalogService {
     private static final Set<String> SPECIALIZED_STORE_KITS =
             Set.of("pharmacy", "cosmetics", "wines-spirits");
 
-    /** Visible product verticals for a shop; {@code empty} means "do not scope". */
-    private record StoreKitScope(List<String> kits, boolean empty) {
+    /** General formats that share each other's starter packs. */
+    private static final Set<String> GENERAL_STARTER_KITS = Set.of("mini-mart", "mixed-shop");
+
+    /**
+     * Visible product verticals for a shop; {@code empty} means "do not scope". A specialized
+     * shop sees products tagged with its own verticals, and an untagged product only when it
+     * sits in one of that shop's own packs: otherwise an untagged product is general stock, not
+     * something every chemist should be offered.
+     */
+    record StoreKitScope(List<String> kits, boolean empty, boolean specialized, List<String> shopTypes) {
+
+        /** The scope for a shop with these formats; an empty list means the formats are unknown. */
+        static StoreKitScope forShopTypes(List<String> shopTypes) {
+            if (shopTypes == null || shopTypes.isEmpty()) {
+                // Unknown shop format: do not mix verticals — show the general grocery bucket only,
+                // never specialized content (pharmacy / cosmetics / wines) of another shop type.
+                return new StoreKitScope(List.of("grocery"), false, false, List.of());
+            }
+            LinkedHashSet<String> kits = new LinkedHashSet<>(shopTypes);
+            boolean specialized = shopTypes.stream().anyMatch(SPECIALIZED_STORE_KITS::contains);
+            if (!specialized) {
+                kits.add("grocery");
+            }
+            return new StoreKitScope(new ArrayList<>(kits), false, specialized, List.copyOf(shopTypes));
+        }
+
+        boolean includeUntagged() {
+            return !specialized;
+        }
+
+        /** Whether a starter pack belongs in front of this shop. */
+        boolean showsPack(String packStoreKitId) {
+            String kit = packStoreKitId == null || packStoreKitId.isBlank() ? null : packStoreKitId.trim();
+            if (specialized) {
+                if (kit == null) {
+                    return false;
+                }
+                // A chemist that is also a mini-mart keeps the general starters a mini-mart gets.
+                return shopTypes.contains(kit)
+                        || (GENERAL_STARTER_KITS.contains(kit)
+                                && shopTypes.stream().anyMatch(GENERAL_STARTER_KITS::contains));
+            }
+            return kit == null || !SPECIALIZED_STORE_KITS.contains(kit);
+        }
     }
 
     /**
-     * Product verticals visible to this shop. When the shop's formats are unknown, no scoping is
-     * applied (safer than hiding everything). A specialized shop (pharmacy / cosmetics / wines)
-     * sees only its own vertical; general formats also see the shared {@code grocery} bucket.
+     * Product verticals visible to this shop. A specialized shop (pharmacy / cosmetics / wines)
+     * sees only its own verticals; general formats also see the shared {@code grocery} bucket and
+     * untagged products. A shop whose formats are unknown is treated as a general shop.
      */
     private StoreKitScope resolveStoreKitScope(String businessId) {
-        List<String> shopTypes = readStoreTypes(businessId);
-        if (shopTypes.isEmpty()) {
-            // Unknown shop format: do not mix verticals — show the general grocery bucket only, never
-            // specialized content (pharmacy / cosmetics / wines) that belongs to another shop type.
-            return new StoreKitScope(List.of("grocery"), false);
+        return StoreKitScope.forShopTypes(readStoreTypes(businessId));
+    }
+
+    /**
+     * The categories worth showing this shop: those holding a product it may see, and their
+     * parents so the tree still hangs together. A chemist is not shown the grocery aisles.
+     */
+    private List<GlobalCategory> visibleCategories(String catalogId, StoreKitScope scope, List<GlobalCategory> all) {
+        if (scope.empty() || all.isEmpty()) {
+            return all;
         }
-        LinkedHashSet<String> kits = new LinkedHashSet<>(shopTypes);
-        boolean specialized = shopTypes.stream().anyMatch(SPECIALIZED_STORE_KITS::contains);
-        if (!specialized) {
-            kits.add("grocery");
+        java.util.Set<String> keep = new java.util.HashSet<>(globalProductRepository.findVisibleCategoryIds(
+                catalogId, STATUS_PUBLISHED, scope.kits(), scope.empty(), scope.includeUntagged()));
+        Map<String, GlobalCategory> byId = new HashMap<>();
+        for (GlobalCategory c : all) {
+            byId.put(c.getId(), c);
         }
-        return new StoreKitScope(new ArrayList<>(kits), false);
+        for (String id : List.copyOf(keep)) {
+            GlobalCategory c = byId.get(id);
+            int guard = 0;
+            while (c != null && c.getParentId() != null && guard++ < 16 && keep.add(c.getParentId())) {
+                c = byId.get(c.getParentId());
+            }
+        }
+        return all.stream().filter(c -> keep.contains(c.getId())).toList();
     }
 
     private List<String> readStoreTypes(String businessId) {
@@ -430,6 +495,10 @@ public class GlobalCatalogService {
         GlobalCatalog catalog = resolveCatalog(businessId);
         GlobalProductPack pack = globalProductPackRepository.findByIdAndCatalogId(packId, catalog.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Pack not found"));
+        // A pack from another vertical is not this shop's to open, even by a saved link.
+        if (!resolveStoreKitScope(businessId).showsPack(pack.getStoreKitId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Pack not found");
+        }
 
         List<String> productIds = globalProductPackRepository.findProductIdsByPackId(pack.getId());
         if (productIds.isEmpty()) {
@@ -453,6 +522,49 @@ public class GlobalCatalogService {
                 .toList();
 
         return new GlobalProductPackDetailResponse(pack.getId(), pack.getCode(), pack.getName(), pack.getDescription(), ordered);
+    }
+
+    /** Largest slice of a pack served in one request. */
+    static final int PACK_SLICE_MAX = 500;
+
+    /**
+     * One slice of a pack's products, in pack order. Same visibility rule as {@link #getPack}:
+     * a pack from another vertical is not found.
+     */
+    @Transactional(readOnly = true)
+    public GlobalProductPackSliceResponse getPackSlice(
+            String businessId,
+            String packId,
+            int offset,
+            int limit,
+            boolean onlyNotImported
+    ) {
+        GlobalCatalog catalog = resolveCatalog(businessId);
+        GlobalProductPack pack = globalProductPackRepository.findByIdAndCatalogId(packId, catalog.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Pack not found"));
+        if (!resolveStoreKitScope(businessId).showsPack(pack.getStoreKitId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Pack not found");
+        }
+        List<String> productIds = globalProductPackRepository.findProductIdsByPackId(pack.getId());
+        int total = productIds.size();
+        int from = Math.min(Math.max(0, offset), total);
+        int to = Math.min(total, from + Math.min(PACK_SLICE_MAX, Math.max(1, limit)));
+        List<String> sliceIds = productIds.subList(from, to);
+        if (sliceIds.isEmpty()) {
+            return new GlobalProductPackSliceResponse(pack.getId(), pack.getName(), total, from, to, true, List.of());
+        }
+        Map<String, GlobalProduct> byId = globalProductRepository.findAllById(sliceIds).stream()
+                .collect(Collectors.toMap(GlobalProduct::getId, gp -> gp, (a, b) -> a, LinkedHashMap::new));
+        List<GlobalProduct> ordered = sliceIds.stream().map(byId::get).filter(gp -> gp != null).toList();
+        TenantCatalogMatchIndex matchIndex = tenantCatalogMatchIndex(businessId);
+        Map<String, List<GlobalProductImage>> imagesByProduct = imagesByProductId(ordered);
+        List<GlobalProductResponse> products = ordered.stream()
+                .map(gp -> toProductResponse(
+                        gp, matchIndex, imagesByProduct.getOrDefault(gp.getId(), List.of())))
+                .filter(gp -> !onlyNotImported || !gp.alreadyImported())
+                .toList();
+        return new GlobalProductPackSliceResponse(
+                pack.getId(), pack.getName(), total, from, to, to >= total, products);
     }
 
     @Transactional(readOnly = true)

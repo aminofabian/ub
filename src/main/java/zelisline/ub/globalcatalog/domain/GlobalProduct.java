@@ -132,8 +132,9 @@ public class GlobalProduct {
 
     /**
      * Vertical this template belongs to (a store-kit id, e.g. {@code pharmacy}, or the general
-     * {@code grocery} bucket). {@code null} means unrestricted — visible to every shop. Browse/lookup
-     * are scoped to the shop's own verticals so a pharmacy never sees grocery SKUs and vice versa.
+     * {@code grocery} bucket). {@code null} is untagged: general shops see it; a specialized shop
+     * (pharmacy, cosmetics, wines) sees it only when it sits in one of that shop's own packs.
+     * Browse/lookup are scoped to the shop's verticals so a pharmacy never sees grocery SKUs.
      */
     @Column(name = "store_kit_id", length = 64)
     private String storeKitId;

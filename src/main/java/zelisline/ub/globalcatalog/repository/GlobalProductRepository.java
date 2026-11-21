@@ -34,8 +34,14 @@ public interface GlobalProductRepository extends JpaRepository<GlobalProduct, St
                     or lower(coalesce(gp.barcode, '')) like lower(concat('%', :q, '%')))
                and (:barcode is null or :barcode = '' or gp.barcode = :barcode)
                and (:storeKitsEmpty = true
-                    or gp.storeKitId is null
-                    or gp.storeKitId in :storeKits)
+                    or gp.storeKitId in :storeKits
+                    or (gp.storeKitId is null
+                        and (:includeUntagged = true
+                             or exists (select 1
+                                          from GlobalProductPackItem pi, GlobalProductPack pk
+                                         where pi.globalProductId = gp.id
+                                           and pk.id = pi.packId
+                                           and pk.storeKitId in :storeKits))))
             """)
     Page<GlobalProduct> search(
             @Param("catalogId") String catalogId,
@@ -46,7 +52,31 @@ public interface GlobalProductRepository extends JpaRepository<GlobalProduct, St
             @Param("barcode") String barcode,
             @Param("storeKits") Collection<String> storeKits,
             @Param("storeKitsEmpty") boolean storeKitsEmpty,
+            @Param("includeUntagged") boolean includeUntagged,
             Pageable pageable);
+
+    /** Categories that hold at least one published product the shop's verticals may see. */
+    @Query("""
+            select distinct gp.globalCategoryId from GlobalProduct gp
+             where gp.catalogId = :catalogId
+               and gp.status = :status
+               and gp.globalCategoryId is not null
+               and (:storeKitsEmpty = true
+                    or gp.storeKitId in :storeKits
+                    or (gp.storeKitId is null
+                        and (:includeUntagged = true
+                             or exists (select 1
+                                          from GlobalProductPackItem pi, GlobalProductPack pk
+                                         where pi.globalProductId = gp.id
+                                           and pk.id = pi.packId
+                                           and pk.storeKitId in :storeKits))))
+            """)
+    List<String> findVisibleCategoryIds(
+            @Param("catalogId") String catalogId,
+            @Param("status") String status,
+            @Param("storeKits") Collection<String> storeKits,
+            @Param("storeKitsEmpty") boolean storeKitsEmpty,
+            @Param("includeUntagged") boolean includeUntagged);
 
     /**
      * SA Curate search. {@code structure}: {@code all} | {@code parents} (no parent link) |

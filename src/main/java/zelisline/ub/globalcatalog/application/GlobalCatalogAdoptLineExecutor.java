@@ -266,7 +266,7 @@ public class GlobalCatalogAdoptLineExecutor {
         }
         String note = "Marked as a medicine. Confirm its class in Pharmacy before selling";
         if (openingQty != null && openingQty.compareTo(BigDecimal.ZERO) > 0) {
-            note += ". Opening stock was not added: receive it with its lot number and expiry date";
+            note += ". Opening stock was not added: use Add stock under Pharmacy, Medicines, where you enter its lot number and expiry date";
         }
         return base + "; " + note;
     }

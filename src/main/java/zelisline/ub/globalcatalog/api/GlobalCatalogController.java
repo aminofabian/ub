@@ -116,6 +116,21 @@ public class GlobalCatalogController {
         return globalCatalogService.lookup(TenantRequestIds.resolveBusinessId(request), barcode, q);
     }
 
+    /** A pack a slice at a time, so the page can show thousands of products as they arrive. */
+    @GetMapping("/packs/{id}/products")
+    @PreAuthorize("hasPermission(null, 'catalog.global.read')")
+    public zelisline.ub.globalcatalog.api.dto.GlobalProductPackSliceResponse getPackSlice(
+            @PathVariable String id,
+            @RequestParam(required = false, defaultValue = "0") int offset,
+            @RequestParam(required = false, defaultValue = "200") int limit,
+            @RequestParam(required = false, defaultValue = "true") boolean onlyNotImported,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return globalCatalogService.getPackSlice(
+                TenantRequestIds.resolveBusinessId(request), id, offset, limit, onlyNotImported);
+    }
+
     @GetMapping("/packs/{id}")
     @PreAuthorize("hasPermission(null, 'catalog.global.read')")
     @ResponseStatus(HttpStatus.OK)

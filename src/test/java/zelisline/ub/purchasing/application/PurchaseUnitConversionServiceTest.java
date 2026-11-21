@@ -17,6 +17,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.repository.ItemPackOptionRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.suppliers.domain.SupplierProduct;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
@@ -32,12 +33,15 @@ class PurchaseUnitConversionServiceTest {
     private ItemRepository itemRepository;
     @Mock
     private SupplierProductRepository supplierProductRepository;
+    @Mock
+    private ItemPackOptionRepository itemPackOptionRepository;
 
     private PurchaseUnitConversionService service;
 
     @BeforeEach
     void setUp() {
-        service = new PurchaseUnitConversionService(itemRepository, supplierProductRepository);
+        service = new PurchaseUnitConversionService(
+                itemRepository, supplierProductRepository, itemPackOptionRepository);
 
         Item item = new Item();
         item.setId(ITEM);

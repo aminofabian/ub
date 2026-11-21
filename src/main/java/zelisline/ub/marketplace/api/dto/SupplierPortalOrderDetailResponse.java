@@ -28,7 +28,13 @@ public record SupplierPortalOrderDetailResponse(
             BigDecimal unitEstimatedCost,
             String supplierLineStatus,
             BigDecimal qtyAccepted,
-            String supplierNote
+            String supplierNote,
+            /** Packaging as ordered (null for legacy orders). */
+            String purchaseUnit,
+            BigDecimal purchaseQty,
+            BigDecimal unitsPerPurchaseUnit,
+            BigDecimal packPrice,
+            String baseUnit
     ) {
     }
 }

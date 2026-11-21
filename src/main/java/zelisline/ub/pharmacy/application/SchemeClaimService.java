@@ -186,6 +186,54 @@ public class SchemeClaimService {
         return toResponses(businessId, List.of(c)).getFirst();
     }
 
+    /** What a claim with no dispensing record shows where the medicines would be. */
+    public static final String VISIT_CLAIM_LABEL = "Clinic visit";
+
+    /**
+     * A claim for a paid clinic visit (ADR 0034, decision 13). It stands on the sale; when the
+     * visit also dispensed medicines the claim points at that record too. One open claim per
+     * scheme per sale.
+     */
+    @Transactional
+    public ClaimResponse createClaimForSale(
+            String businessId, String schemeId, String saleId, String branchId, String memberNo,
+            String authorisationCode, BigDecimal amountClaimed, String userId) {
+        PharmacyScheme scheme = schemeRepository.findByIdAndBusinessId(schemeId.strip(), businessId)
+                .filter(PharmacyScheme::isActive)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a scheme"));
+        Sale sale = saleRepository.findById(saleId)
+                .filter(x -> businessId.equals(x.getBusinessId()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Sale not found"));
+        for (PharmacySchemeClaim existing : claimRepository.findByBusinessIdAndSaleId(businessId, sale.getId())) {
+            if (existing.getSchemeId().equals(scheme.getId()) && !PharmacySchemeClaim.REJECTED.equals(existing.getStatus())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "This visit already has a claim with " + scheme.getName());
+            }
+        }
+        BigDecimal amount = amountClaimed.setScale(2, RoundingMode.HALF_UP);
+        if (sale.getGrandTotal() != null && amount.compareTo(sale.getGrandTotal()) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The claim is more than the bill");
+        }
+        String recordId = recordRepository.findByBusinessIdAndSaleId(businessId, sale.getId()).stream()
+                .filter(r -> r.getVoidedAt() == null)
+                .map(DispensingRecord::getId)
+                .findFirst()
+                .orElse(null);
+        PharmacySchemeClaim c = new PharmacySchemeClaim();
+        c.setBusinessId(businessId);
+        c.setSchemeId(scheme.getId());
+        c.setRecordId(recordId);
+        c.setSaleId(sale.getId());
+        c.setBranchId(branchId);
+        c.setMemberNo(memberNo.strip());
+        c.setAuthorisationCode(authorisationCode == null || authorisationCode.isBlank() ? null : authorisationCode.strip());
+        c.setAmountClaimed(amount);
+        c.setCreatedBy(userId);
+        claimRepository.save(c);
+        audit(businessId, userId, AuditEventTypes.PHARMACY_CLAIM_SAVED, c.getId(), c.getStatus());
+        return toResponses(businessId, List.of(c)).getFirst();
+    }
+
     /**
      * Moves a claim on: submitted to the scheme, paid (in full or in part, by the total paid so
      * far), or rejected. A paid or rejected claim can still be corrected by setting it again.
@@ -259,7 +307,9 @@ public class SchemeClaimService {
         Set<String> recordIds = new LinkedHashSet<>();
         Set<String> saleIds = new LinkedHashSet<>();
         for (PharmacySchemeClaim c : claims) {
-            recordIds.add(c.getRecordId());
+            if (c.getRecordId() != null) {
+                recordIds.add(c.getRecordId());
+            }
             saleIds.add(c.getSaleId());
         }
         Map<String, String> schemeNames = new HashMap<>();
@@ -267,12 +317,15 @@ public class SchemeClaimService {
             schemeNames.put(s.getId(), s.getName());
         }
         Map<String, DispensingRecord> records = new HashMap<>();
-        for (DispensingRecord r : recordRepository.findByBusinessIdAndIdIn(businessId, recordIds)) {
+        for (DispensingRecord r : recordIds.isEmpty()
+                ? List.<DispensingRecord>of()
+                : recordRepository.findByBusinessIdAndIdIn(businessId, recordIds)) {
             records.put(r.getId(), r);
         }
         Map<String, List<String>> medicines = new LinkedHashMap<>();
-        for (DispensingRecordLine l : lineRepository
-                .findByBusinessIdAndRecordIdInOrderByCreatedAtAscIdAsc(businessId, recordIds)) {
+        for (DispensingRecordLine l : recordIds.isEmpty()
+                ? List.<DispensingRecordLine>of()
+                : lineRepository.findByBusinessIdAndRecordIdInOrderByCreatedAtAscIdAsc(businessId, recordIds)) {
             medicines.computeIfAbsent(l.getRecordId(), k -> new ArrayList<>())
                     .add(l.getItemName() + " x " + l.getQuantity().stripTrailingZeros().toPlainString());
         }
@@ -292,7 +345,9 @@ public class SchemeClaimService {
                     receiptNos.get(c.getSaleId()), c.getBranchId(),
                     r == null ? null : r.getPatientName(),
                     r == null ? null : r.getPrescriberName(),
-                    String.join(", ", medicines.getOrDefault(c.getRecordId(), List.of())),
+                    c.getRecordId() == null
+                            ? VISIT_CLAIM_LABEL
+                            : String.join(", ", medicines.getOrDefault(c.getRecordId(), List.of())),
                     c.getMemberNo(), c.getAuthorisationCode(), c.getAmountClaimed(), c.getAmountPaid(),
                     c.getStatus(), c.getStatusNote(), c.getCreatedAt(), c.getSubmittedAt(), c.getSettledAt(),
                     c.getCreatedAt() == null ? 0 : Math.max(0, ChronoUnit.DAYS.between(c.getCreatedAt(), until))));

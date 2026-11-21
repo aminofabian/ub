@@ -27,6 +27,13 @@ public class PharmacyProfile {
     @Column(name = "business_id", nullable = false, length = 36)
     private String businessId;
 
+    /** When someone who manages the pharmacy last confirmed that newly added products are not medicines. */
+    @Column(name = "products_reviewed_at")
+    private java.time.Instant productsReviewedAt;
+
+    @Column(name = "products_reviewed_by", length = 36)
+    private String productsReviewedBy;
+
     @Column(name = "premises_licence_no", length = 64)
     private String premisesLicenceNo;
 

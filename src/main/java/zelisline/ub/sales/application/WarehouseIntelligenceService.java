@@ -160,6 +160,7 @@ public class WarehouseIntelligenceService {
 
     private final JdbcTemplate jdbc;
     private final ItemRepository itemRepository;
+    private final zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry;
 
     @Transactional(readOnly = true)
     public CustomerItemRhythmResponse customerItemRhythm(
@@ -210,6 +211,14 @@ public class WarehouseIntelligenceService {
                 SalesConstants.SALE_STATUS_REFUNDED,
                 itemFilter,
                 itemFilter);
+
+        // What a named customer buys and how often: medicines are left out (health data).
+        if (!byItem.isEmpty()) {
+            byItem.keySet().removeAll(medicineRegistry.medicineItemIds(
+                    businessId,
+                    itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(
+                            new ArrayList<>(byItem.keySet()), businessId)));
+        }
 
         LocalDate asOf = LocalDate.now(ZoneOffset.UTC);
         List<CustomerItemRhythmRow> rows = new ArrayList<>();
@@ -374,6 +383,11 @@ public class WarehouseIntelligenceService {
             Integer limit
     ) {
         Item item = requireItem(businessId, itemId);
+        // "People who buy things like this medicine" is as much health data as who bought it.
+        if (!medicineRegistry.medicineItemIds(businessId, List.of(item)).isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, SalesIntelligenceService.MEDICINE_BUYERS_REFUSED);
+        }
         LocalDate toEx = toInclusive != null ? toInclusive : LocalDate.now(ZoneOffset.UTC);
         LocalDate fromEx = fromInclusive != null ? fromInclusive : toEx.minusDays(90);
         if (fromEx.isAfter(toEx)) {

@@ -34,7 +34,7 @@ public class ItemPackOptionService {
     @Transactional(readOnly = true)
     public List<ItemPackOptionResponse> listPackOptions(String businessId, String itemId) {
         requireItem(businessId, itemId);
-        return packOptionRepository.findByItemIdOrderBySortOrderAscIdAsc(itemId).stream()
+        return packOptionRepository.findByBusinessIdAndItemIdOrderBySortOrderAscIdAsc(businessId, itemId).stream()
                 .map(ItemPackOptionResponse::from)
                 .toList();
     }
@@ -47,6 +47,12 @@ public class ItemPackOptionService {
     ) {
         requireItem(businessId, itemId);
         validateUnitsPerPack(request.unitsPerPack());
+        validateInnerPackaging(
+                request.packUnit().trim(),
+                request.unitsPerPack(),
+                request.innerPackUnit(),
+                request.innerPackCount(),
+                request.baseUnitsPerInner());
         ensureUniqueShape(businessId, itemId, request.unitsPerPack(), request.packUnit().trim(), null);
 
         ItemPackOption option = new ItemPackOption();
@@ -60,6 +66,14 @@ public class ItemPackOptionService {
         option.setSkuSuffix(blankToNull(request.skuSuffix()));
         option.setSortOrder(request.sortOrder() != null ? request.sortOrder() : 0);
         option.setActive(request.active() == null || request.active());
+        option.setInnerPackUnit(blankToNull(request.innerPackUnit()));
+        option.setInnerPackCount(request.innerPackCount());
+        option.setBaseUnitsPerInner(request.baseUnitsPerInner());
+        boolean defaultPurchase = Boolean.TRUE.equals(request.defaultPurchase());
+        option.setDefaultPurchase(defaultPurchase);
+        if (defaultPurchase) {
+            clearOtherDefaults(businessId, itemId, option.getId());
+        }
         try {
             return ItemPackOptionResponse.from(packOptionRepository.save(option));
         } catch (DataIntegrityViolationException ex) {
@@ -104,6 +118,33 @@ public class ItemPackOptionService {
         if (request.active() != null) {
             option.setActive(request.active());
         }
+        if (request.innerPackUnit() != null) {
+            if (blankToNull(request.innerPackUnit()) == null) {
+                option.setInnerPackUnit(null);
+                option.setInnerPackCount(null);
+                option.setBaseUnitsPerInner(null);
+            } else {
+                option.setInnerPackUnit(blankToNull(request.innerPackUnit()));
+            }
+        }
+        if (request.innerPackCount() != null) {
+            option.setInnerPackCount(request.innerPackCount());
+        }
+        if (request.baseUnitsPerInner() != null) {
+            option.setBaseUnitsPerInner(request.baseUnitsPerInner());
+        }
+        validateInnerPackaging(
+                option.getPackUnit(),
+                option.getUnitsPerPack(),
+                option.getInnerPackUnit(),
+                option.getInnerPackCount(),
+                option.getBaseUnitsPerInner());
+        if (Boolean.TRUE.equals(request.defaultPurchase())) {
+            clearOtherDefaults(businessId, itemId, optionId);
+            option.setDefaultPurchase(true);
+        } else if (Boolean.FALSE.equals(request.defaultPurchase())) {
+            option.setDefaultPurchase(false);
+        }
         ensureUniqueShape(businessId, itemId, option.getUnitsPerPack(), option.getPackUnit(), optionId);
         try {
             return ItemPackOptionResponse.from(packOptionRepository.save(option));
@@ -134,6 +175,56 @@ public class ItemPackOptionService {
     private static void validateUnitsPerPack(BigDecimal unitsPerPack) {
         if (unitsPerPack.compareTo(BigDecimal.ONE) <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "unitsPerPack must be greater than 1");
+        }
+    }
+
+    /**
+     * Inner packaging is optional and all-or-none: when present, the inner package count
+     * multiplied by the base items per inner package must equal {@code unitsPerPack}.
+     */
+    private static void validateInnerPackaging(
+            String packUnit,
+            BigDecimal unitsPerPack,
+            String innerPackUnitRaw,
+            BigDecimal innerPackCount,
+            BigDecimal baseUnitsPerInner
+    ) {
+        String innerPackUnit = blankToNull(innerPackUnitRaw);
+        boolean anyPresent = innerPackUnit != null || innerPackCount != null || baseUnitsPerInner != null;
+        if (!anyPresent) {
+            return;
+        }
+        if (innerPackUnit == null || innerPackCount == null || baseUnitsPerInner == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Inner packaging needs a unit, how many inner packages one "
+                            + packUnit + " holds, and how many items one inner package holds");
+        }
+        if (innerPackCount.compareTo(BigDecimal.ONE) <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "innerPackCount must be greater than 1");
+        }
+        if (baseUnitsPerInner.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "baseUnitsPerInner must be positive");
+        }
+        BigDecimal total = innerPackCount.multiply(baseUnitsPerInner).setScale(4, java.math.RoundingMode.HALF_UP);
+        if (total.compareTo(unitsPerPack.setScale(4, java.math.RoundingMode.HALF_UP)) != 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Inner packaging does not add up: " + innerPackCount.stripTrailingZeros().toPlainString()
+                            + " × " + baseUnitsPerInner.stripTrailingZeros().toPlainString()
+                            + " = " + total.stripTrailingZeros().toPlainString()
+                            + ", but one " + packUnit + " holds "
+                            + unitsPerPack.stripTrailingZeros().toPlainString() + " base items");
+        }
+    }
+
+    private void clearOtherDefaults(String businessId, String itemId, String excludedId) {
+        for (ItemPackOption other : packOptionRepository
+                .findByBusinessIdAndItemIdAndDefaultPurchaseTrue(businessId, itemId)) {
+            if (!other.getId().equals(excludedId)) {
+                other.setDefaultPurchase(false);
+                packOptionRepository.save(other);
+            }
         }
     }
 

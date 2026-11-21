@@ -38,6 +38,14 @@ public class OrderBillLine {
     @Column(name = "quantity", nullable = false, precision = 14, scale = 4)
     private BigDecimal quantity;
 
+    /** The order line's price when this bill line was made; null on a bill made before V433. */
+    @Column(name = "unit_price", precision = 14, scale = 4)
+    private BigDecimal unitPrice;
+
+    /** What this line was charged, so a printed bill never changes after it was shown. */
+    @Column(name = "amount", precision = 14, scale = 2)
+    private BigDecimal amount;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

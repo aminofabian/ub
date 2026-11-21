@@ -55,6 +55,14 @@ public class PosDraft {
     @Column(name = "customer_id", length = 36)
     private String customerId;
 
+    /** Clinic (ADR 0034): who is being treated. The customer above stays "who pays". Health data. */
+    @Column(name = "patient_id", length = 36)
+    private String patientId;
+
+    /** Clinic: the sale of the earlier visit this one reviews; null for an ordinary visit. */
+    @Column(name = "review_of_sale_id", length = 36)
+    private String reviewOfSaleId;
+
     /** For a lodging stay: the guest's ID type (National ID, Passport…), captured at check-in. PII. */
     @Column(name = "guest_id_type", length = 32)
     private String guestIdType;

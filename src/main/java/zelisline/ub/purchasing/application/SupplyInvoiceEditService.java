@@ -198,6 +198,12 @@ public class SupplyInvoiceEditService {
                 // Path A GRN invoices have no wastage breakdown — treat received qty as usable.
                 usable = sil.getQty();
             }
+            String baseUnit = null;
+            if (sil.getItemId() != null) {
+                baseUnit = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(sil.getItemId(), businessId)
+                        .map(Item::getUnitType)
+                        .orElse(null);
+            }
             lines.add(new PathBSupplyInvoiceLineDto(
                     sil.getId(),
                     displayLineDescription(sil, catalogNames),
@@ -207,7 +213,12 @@ public class SupplyInvoiceEditService {
                     sil.getLineTotal().setScale(2, RoundingMode.HALF_UP),
                     sil.getSortOrder(),
                     usable,
-                    wastage));
+                    wastage,
+                    sil.getPurchaseUnit(),
+                    sil.getPurchaseQty(),
+                    sil.getUnitsPerPurchaseUnit(),
+                    sil.getPackPrice(),
+                    baseUnit));
         }
 
         return new PathBSupplyInvoiceDetailDto(

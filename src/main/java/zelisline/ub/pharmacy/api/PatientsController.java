@@ -49,7 +49,7 @@ public class PatientsController {
         return patientService.list(TenantRequestIds.resolveBusinessId(request), q, page, size, user.userId());
     }
 
-    /** Exact phone match, for the dispensing dialog at the till. */
+    /** Whole phone number or a patient number ("P-412"), for the till. Never a name search. */
     @GetMapping("/lookup")
     @PreAuthorize("hasPermission(null, 'sales.sell')")
     public List<PharmacyStandardDtos.PatientMatch> lookup(@RequestParam String phone, HttpServletRequest request) {

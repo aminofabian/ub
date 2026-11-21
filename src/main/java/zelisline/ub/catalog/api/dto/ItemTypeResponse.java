@@ -1,5 +1,7 @@
 package zelisline.ub.catalog.api.dto;
 
+import java.math.BigDecimal;
+
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public record ItemTypeResponse(
@@ -10,6 +12,7 @@ public record ItemTypeResponse(
         String color,
         int sortOrder,
         boolean active,
-        @JsonProperty("isDefault") boolean isDefault
+        @JsonProperty("isDefault") boolean isDefault,
+        BigDecimal defaultMarkupPct
 ) {
 }

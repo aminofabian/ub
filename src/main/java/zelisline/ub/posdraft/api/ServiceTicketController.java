@@ -63,7 +63,8 @@ public class ServiceTicketController {
         TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
         String branch = branchResolutionService.requireBranchForLockedRole(
                 caller.roleId(), caller.branchId(), branchId);
-        return serviceTicketService.board(TenantRequestIds.resolveBusinessId(request), branch);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return serviceTicketService.withoutClinicVisits(businessId, serviceTicketService.board(businessId, branch));
     }
 
     @PostMapping
@@ -293,7 +294,9 @@ public class ServiceTicketController {
         if (!to.isAfter(from) || java.time.Duration.between(from, to).toDays() > 62) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a period of up to two months");
         }
-        return serviceTicketService.appointments(TenantRequestIds.resolveBusinessId(request), branch, from, to);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return serviceTicketService.withoutClinicVisits(
+                businessId, serviceTicketService.appointments(businessId, branch, from, to));
     }
 
     /** The branch calendar for a window of up to two weeks. */
@@ -310,7 +313,9 @@ public class ServiceTicketController {
         if (!to.isAfter(from) || java.time.Duration.between(from, to).toDays() > 14) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a period of up to two weeks");
         }
-        return serviceTicketService.calendar(TenantRequestIds.resolveBusinessId(request), branch, from, to);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        return serviceTicketService.maskClinicVisits(
+                businessId, serviceTicketService.calendar(businessId, branch, from, to));
     }
 
     @PostMapping("/appointments")
@@ -365,6 +370,11 @@ public class ServiceTicketController {
             TenantPrincipal caller, HttpServletRequest request, String ticketId) {
         ServiceTicketService.TicketRef ticket =
                 serviceTicketService.ref(TenantRequestIds.resolveBusinessId(request), ticketId);
+        if (ticket.clinicVisit()) {
+            // A clinic visit (ADR 0034) is worked through /api/v1/clinic, which asks for a clinic hat
+            // and audits the read. From here it does not exist.
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Ticket not found");
+        }
         branchResolutionService.requireBranchForLockedRole(caller.roleId(), caller.branchId(), ticket.branchId());
         return ticket;
     }

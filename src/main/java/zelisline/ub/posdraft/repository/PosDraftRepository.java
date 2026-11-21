@@ -18,6 +18,14 @@ public interface PosDraftRepository extends JpaRepository<PosDraft, String> {
 
     Optional<PosDraft> findByBusinessIdAndClientDraftId(String businessId, String clientDraftId);
 
+    /** Clinic (ADR 0034): a patient's paid visits, newest first — for finding the visit a review follows. */
+    List<PosDraft> findTop20ByBusinessIdAndPatientIdAndStatusOrderByCompletedAtDesc(
+            String businessId, String patientId, String status);
+
+    /** Clinic: visits paid at a branch since a moment (today's "finished" count). */
+    long countByBusinessIdAndBranchIdAndStatusAndPatientIdIsNotNullAndCompletedAtGreaterThanEqual(
+            String businessId, String branchId, String status, java.time.Instant since);
+
     /** The restaurant order (or other ticket of that kind) a sale settled, if any. */
     Optional<PosDraft> findFirstByBusinessIdAndSaleIdAndDraftKind(String businessId, String saleId, String draftKind);
 

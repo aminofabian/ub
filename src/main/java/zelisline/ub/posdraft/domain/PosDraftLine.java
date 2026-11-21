@@ -80,8 +80,19 @@ public class PosDraftLine {
     @Column(name = "modifiers", length = 2000)
     private String modifiers;
 
+    /**
+     * The dish's tax rate as it was when the dish was ordered. Payment used to read it from the menu
+     * again, so deleting or re-rating a dish mid-service changed the VAT on food already cooked.
+     */
+    @Column(name = "tax_rate_id", length = 36)
+    private String taxRateId;
+
     @Column(name = "kitchen_note", length = 255)
     private String kitchenNote;
+
+    /** Clinic (ADR 0034): a medicine given to the patient in the clinic, not handed over to take home. */
+    @Column(name = "given_here", nullable = false)
+    private boolean givenHere;
 
     /** The kitchen station preparing the line; null is the branch's one implicit kitchen. */
     @Column(name = "station_id", length = 36)

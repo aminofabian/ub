@@ -325,6 +325,7 @@ public class DesktopSyncIngestService {
         supplier.setPayoutTillNumber(data.payoutTillNumber());
         supplier.setPayoutPaybillNumber(data.payoutPaybillNumber());
         supplier.setPayoutPaybillAccount(data.payoutPaybillAccount());
+        supplier.setDefaultMarkupPct(data.defaultMarkupPct());
         // Till-side edits bypass the portal/patch paths — a synced phone change must
         // not ride a stale OTP-verified flag into automated Send Money.
         SupplierPayoutPhoneVerificationService.clearIfPhoneChanged(supplier, prevPayoutPhone, prevPayoutType);

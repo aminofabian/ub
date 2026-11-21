@@ -45,6 +45,30 @@ public class SupplierInvoiceLine {
     @Column(name = "raw_line_id", length = 36)
     private String rawLineId;
 
+    /**
+     * Immutable snapshot of the packaging used when the receipt was posted.
+     * {@code qty} is always base stock units; these columns preserve "5 cartons × 24 @ 1,200".
+     * They are deliberately not foreign keys: a later pack-option edit or delete must never
+     * rewrite history.
+     */
+    @Column(name = "pack_option_id", length = 36)
+    private String packOptionId;
+
+    @Column(name = "purchase_unit", length = 32)
+    private String purchaseUnit;
+
+    @Column(name = "purchase_qty", precision = 14, scale = 4)
+    private BigDecimal purchaseQty;
+
+    @Column(name = "units_per_purchase_unit", precision = 14, scale = 4)
+    private BigDecimal unitsPerPurchaseUnit;
+
+    @Column(name = "pack_price", precision = 14, scale = 4)
+    private BigDecimal packPrice;
+
+    @Column(name = "base_unit", length = 16)
+    private String baseUnit;
+
     @PrePersist
     void onCreate() {
         if (id == null || id.isBlank()) {

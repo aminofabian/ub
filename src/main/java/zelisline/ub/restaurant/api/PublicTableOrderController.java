@@ -5,6 +5,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -16,6 +17,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.restaurant.api.dto.OrderDtos.PublicOrderConfirmation;
 import zelisline.ub.restaurant.api.dto.OrderDtos.PublicOrderRequest;
+import zelisline.ub.restaurant.api.dto.OrderDtos.PublicOrderStatus;
 import zelisline.ub.restaurant.api.dto.OrderDtos.PublicTableMenu;
 import zelisline.ub.restaurant.application.PublicTableOrderService;
 
@@ -44,6 +46,31 @@ public class PublicTableOrderController {
             HttpServletRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).cacheControl(CacheControl.noStore())
                 .body(service.order(slug, token, body, address(request)));
+    }
+
+    /** What the table has ordered, what is left to pay, and whether the bill has been asked for. */
+    @GetMapping("/status")
+    public ResponseEntity<PublicOrderStatus> status(
+            @PathVariable String slug, @PathVariable String token, HttpServletRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(service.status(slug, token, address(request)));
+    }
+
+    /** "Please bring the bill": sets the same flag on the floor that staff already act on. */
+    @PostMapping("/bill")
+    public ResponseEntity<PublicOrderStatus> askForBill(
+            @PathVariable String slug, @PathVariable String token, HttpServletRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(service.requestBill(slug, token, address(request)));
+    }
+
+    /** Takes off a line this phone added, while it has not gone to the kitchen. */
+    @DeleteMapping("/lines/{lineId}")
+    public ResponseEntity<PublicOrderStatus> removeLine(
+            @PathVariable String slug, @PathVariable String token, @PathVariable String lineId,
+            HttpServletRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(service.removeLine(slug, token, lineId, address(request)));
     }
 
     /**

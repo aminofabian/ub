@@ -80,13 +80,23 @@ public class OrderTicketService {
     public record NewLine(
             String lineKind, String itemId, String menuItemId, String name, BigDecimal quantity,
             BigDecimal unitPrice, String modifiers, String note, String stationId, boolean toKitchen,
-            Integer seatNo, String clientLineId) {
+            Integer seatNo, String clientLineId,
+            /** The dish's tax rate now, kept with the line so payment cannot change it later; null for a product. */
+            String taxRateId) {
 
         public NewLine(
                 String lineKind, String itemId, String menuItemId, String name, BigDecimal quantity,
                 BigDecimal unitPrice, String modifiers, String note, String stationId, boolean toKitchen) {
             this(lineKind, itemId, menuItemId, name, quantity, unitPrice, modifiers, note, stationId, toKitchen,
-                    null, null);
+                    null, null, null);
+        }
+
+        public NewLine(
+                String lineKind, String itemId, String menuItemId, String name, BigDecimal quantity,
+                BigDecimal unitPrice, String modifiers, String note, String stationId, boolean toKitchen,
+                Integer seatNo, String clientLineId) {
+            this(lineKind, itemId, menuItemId, name, quantity, unitPrice, modifiers, note, stationId, toKitchen,
+                    seatNo, clientLineId, null);
         }
     }
 
@@ -101,7 +111,9 @@ public class OrderTicketService {
             String id, String orderId, int lineIndex, String name, BigDecimal quantity, String modifiers,
             String note, String stationId, String stage, Instant sentAt, Instant readyAt, Instant servedAt,
             String lineKind, String itemId, String menuItemId, BigDecimal unitPrice, BigDecimal lineTotal,
-            Integer seatNo, String voidReason, boolean fromCustomer) {
+            Integer seatNo, String voidReason, boolean fromCustomer,
+            /** The dish's tax rate when it was ordered; null on a line made before V433 and on products. */
+            String taxRateId) {
 
         public boolean isVoided() {
             return STAGE_VOIDED.equals(stage);
@@ -160,7 +172,7 @@ public class OrderTicketService {
     @Transactional
     public Order createPaidCounterOrder(
             String businessId, String branchId, String userId, String shiftId, String saleId,
-            String customerId, List<NewLine> lines, Instant soldAt) {
+            String customerId, String customerName, List<NewLine> lines, Instant soldAt) {
         Optional<PosDraft> existing = draftRepository.findFirstByBusinessIdAndSaleIdAndDraftKind(
                 businessId, saleId, PosDraftConstants.KIND_ORDER);
         if (existing.isPresent()) {
@@ -178,6 +190,10 @@ public class OrderTicketService {
         order.setShiftId(shiftId);
         order.setSaleId(saleId);
         order.setCustomerId(customerId);
+        // The name the counter calls the order by. Not a customer record; no phone is kept here.
+        // Cleaned like a note because it reaches a kitchen printer: one line of plain text, bounded.
+        String cleanName = cleanNote(customerName);
+        order.setBookingName(cleanName == null ? null : trim(cleanName, 120));
         order.setClientDraftId("order-" + saleId);
         order.setCompletedAt(now);
         BigDecimal total = BigDecimal.ZERO;
@@ -968,6 +984,7 @@ public class OrderTicketService {
         row.setUnitPrice(line.unitPrice().setScale(PosDraftConstants.PRICE_SCALE, RoundingMode.HALF_UP));
         row.setLineTotal(lineTotal(line.quantity(), line.unitPrice()));
         row.setModifiers(line.modifiers());
+        row.setTaxRateId(blankToNull(line.taxRateId()));
         row.setKitchenNote(cleanNote(line.note()));
         row.setStationId(line.stationId());
         row.setSeatNo(line.seatNo() == null || line.seatNo() <= 0 ? null : line.seatNo());
@@ -1030,6 +1047,7 @@ public class OrderTicketService {
                 row.getModifiers(), row.getKitchenNote(), row.getStationId(), row.getLineStage(), row.getSentAt(),
                 row.getReadyAt(), row.getServedAt(), row.getLineKind(), row.getItemId(), row.getMenuItemId(),
                 row.getUnitPrice(), row.getLineTotal(), row.getSeatNo(), row.getVoidReason(),
-                row.getClientLineId() != null && row.getClientLineId().startsWith(CUSTOMER_LINE_PREFIX));
+                row.getClientLineId() != null && row.getClientLineId().startsWith(CUSTOMER_LINE_PREFIX),
+                row.getTaxRateId());
     }
 }

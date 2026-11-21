@@ -24,6 +24,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -795,6 +796,181 @@ class PathBPurchaseIT {
         SupplierProduct link = supplierProductRepository.findBySupplierIdAndItemId(supplierId, itemId).orElseThrow();
         assertThat(link.getDefaultCostPrice()).isEqualByComparingTo(expected);
         assertThat(link.getLastCostPrice()).isEqualByComparingTo(expected);
+    }
+
+    @Test
+    void addLineWithInlineCustomPack_expandsAndSnapshotsPackaging() throws Exception {
+        String sessionId = createSession();
+        String body = """
+                {"description":"2 cartons of tomatoes","amountMoney":2400.00,
+                 "suggestedItemId":"%s","purchaseUnit":"carton","purchaseQty":2,
+                 "unitsPerPurchaseUnit":24,"packPrice":1200.00}
+                """.formatted(itemId);
+
+        mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/lines")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.draftQty").value(48))
+                .andExpect(jsonPath("$.draftUnitCost").value(50.0))
+                .andExpect(jsonPath("$.purchaseUnit").value("carton"))
+                .andExpect(jsonPath("$.purchaseQty").value(2))
+                .andExpect(jsonPath("$.unitsPerPurchaseUnit").value(24))
+                .andExpect(jsonPath("$.packPrice").value(1200.0));
+    }
+
+    @Test
+    void postPackagedLine_snapshotsInvoiceAndRejectsMismatchedQuantity() throws Exception {
+        String sessionId = createSession();
+        String addBody = """
+                {"description":"2 cartons of tomatoes","amountMoney":2400.00,
+                 "suggestedItemId":"%s","purchaseUnit":"carton","purchaseQty":2,
+                 "unitsPerPurchaseUnit":24,"packPrice":1200.00}
+                """.formatted(itemId);
+        MvcResult added = mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/lines")
+                        .contentType(APPLICATION_JSON)
+                        .content(addBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String lineId = objectMapper.readTree(added.getResponse().getContentAsString()).get("id").asText();
+
+        String mismatch = """
+                {"lines":[{"lineId":"%s","itemId":"%s","usableQty":40,"wastageQty":0,
+                 "purchaseQty":2,"purchaseUnit":"carton","unitsPerPurchaseUnit":24}]}
+                """.formatted(lineId, itemId);
+        mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/post")
+                        .contentType(APPLICATION_JSON)
+                        .content(mismatch)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isBadRequest());
+        assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock())
+                .isEqualByComparingTo("0");
+
+        String changedSize = """
+                {"lines":[{"lineId":"%s","itemId":"%s","usableQty":48,"wastageQty":0,
+                 "purchaseQty":2,"purchaseUnit":"carton","unitsPerPurchaseUnit":20}]}
+                """.formatted(lineId, itemId);
+        mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/post")
+                        .contentType(APPLICATION_JSON)
+                        .content(changedSize)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isConflict());
+
+        String ok = """
+                {"lines":[{"lineId":"%s","itemId":"%s","usableQty":48,"wastageQty":0,
+                 "purchaseQty":2,"purchaseUnit":"carton","unitsPerPurchaseUnit":24}]}
+                """.formatted(lineId, itemId);
+        mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/post")
+                        .contentType(APPLICATION_JSON)
+                        .content(ok)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock())
+                .isEqualByComparingTo("48");
+        SupplierInvoiceLine invoiceLine = supplierInvoiceLineRepository.findAll().getFirst();
+        assertThat(invoiceLine.getPurchaseUnit()).isEqualTo("carton");
+        assertThat(invoiceLine.getPurchaseQty()).isEqualByComparingTo("2");
+        assertThat(invoiceLine.getUnitsPerPurchaseUnit()).isEqualByComparingTo("24");
+        assertThat(invoiceLine.getPackPrice()).isEqualByComparingTo("1200");
+    }
+
+    @Test
+    void packOptionChangeDoesNotRewritePostedHistory() throws Exception {
+        ItemPackOption option = new ItemPackOption();
+        option.setBusinessId(TENANT);
+        option.setItemId(itemId);
+        option.setPackUnit("carton");
+        option.setUnitsPerPack(new java.math.BigDecimal("24"));
+        option.setDefaultPackPrice(new java.math.BigDecimal("1200.00"));
+        itemPackOptionRepository.save(option);
+
+        String sessionId = createSession();
+        String addBody = """
+                {"description":"2 cartons of tomatoes","amountMoney":2400.00,
+                 "suggestedItemId":"%s","purchaseQty":2,"packOptionId":"%s"}
+                """.formatted(itemId, option.getId());
+        MvcResult added = mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/lines")
+                        .contentType(APPLICATION_JSON)
+                        .content(addBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.draftQty").value(48))
+                .andExpect(jsonPath("$.purchaseUnit").value("carton"))
+                .andReturn();
+        String lineId = objectMapper.readTree(added.getResponse().getContentAsString()).get("id").asText();
+
+        String ok = """
+                {"lines":[{"lineId":"%s","itemId":"%s","usableQty":48,"wastageQty":0}]}
+                """.formatted(lineId, itemId);
+        mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + sessionId + "/post")
+                        .contentType(APPLICATION_JSON)
+                        .content(ok)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        MockHttpServletRequestBuilder patchOption = patch(
+                "/api/v1/items/{id}/pack-options/{oid}", itemId, option.getId())
+                .contentType(APPLICATION_JSON)
+                .content("""
+                        {"unitsPerPack":20,"defaultPackPrice":1000.00}
+                        """);
+        patchOption.header("X-Tenant-Id", TENANT)
+                .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER);
+        mockMvc.perform(patchOption).andExpect(status().isOk());
+
+        SupplierInvoiceLine invoiceLine = supplierInvoiceLineRepository.findAll().getFirst();
+        assertThat(invoiceLine.getUnitsPerPurchaseUnit()).isEqualByComparingTo("24");
+        assertThat(invoiceLine.getPurchaseQty()).isEqualByComparingTo("2");
+        assertThat(invoiceLine.getPackPrice()).isEqualByComparingTo("1200");
+        assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock())
+                .isEqualByComparingTo("48");
+
+        // A new receipt uses the updated shape: 2 × 20 = 40 more units.
+        String secondSession = createSession();
+        MvcResult secondAdded = mockMvc.perform(post(
+                        "/api/v1/purchasing/path-b/sessions/" + secondSession + "/lines")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"description":"2 cartons of tomatoes","amountMoney":2000.00,
+                                 "suggestedItemId":"%s","purchaseQty":2,"packOptionId":"%s"}
+                                """.formatted(itemId, option.getId()))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.draftQty").value(40))
+                .andReturn();
+        String secondLineId = objectMapper.readTree(secondAdded.getResponse().getContentAsString())
+                .get("id").asText();
+        mockMvc.perform(post("/api/v1/purchasing/path-b/sessions/" + secondSession + "/post")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"lines":[{"lineId":"%s","itemId":"%s","usableQty":40,"wastageQty":0}]}
+                                """.formatted(secondLineId, itemId))
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+        assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock())
+                .isEqualByComparingTo("88");
     }
 
     private String createSession() throws Exception {

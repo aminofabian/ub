@@ -47,9 +47,24 @@ public class ItemPackOption {
     @Column(name = "pack_unit", nullable = false, length = 32)
     private String packUnit;
 
-    /** Pieces / kg / etc. per one pack. Must be &gt; 1 (DB CHECK). */
+    /** Base items (pieces / kg) per one purchase unit. Must be &gt; 1 (DB CHECK). */
     @Column(name = "units_per_pack", nullable = false, precision = 14, scale = 4)
     private BigDecimal unitsPerPack;
+
+    /**
+     * Optional inner package name for two-level packaging ("carton → packet → biscuit").
+     * {@code innerPackCount × baseUnitsPerInner} must equal {@code unitsPerPack}.
+     */
+    @Column(name = "inner_pack_unit", length = 32)
+    private String innerPackUnit;
+
+    /** Inner packages contained in one purchase unit (e.g. 12 packets per carton). */
+    @Column(name = "inner_pack_count", precision = 14, scale = 4)
+    private BigDecimal innerPackCount;
+
+    /** Base items contained in one inner package (e.g. 10 biscuits per packet). */
+    @Column(name = "base_units_per_inner", precision = 14, scale = 4)
+    private BigDecimal baseUnitsPerInner;
 
     /** Wholesale / buy price for ONE pack. Optional; null = ask. */
     @Column(name = "default_pack_price", precision = 14, scale = 4)
@@ -66,6 +81,10 @@ public class ItemPackOption {
 
     @Column(name = "active", nullable = false)
     private boolean active = true;
+
+    /** Pre-selected purchase unit on new receipts for this item. At most one per item. */
+    @Column(name = "is_default_purchase", nullable = false)
+    private boolean defaultPurchase;
 
     @Version
     @Column(name = "version", nullable = false)

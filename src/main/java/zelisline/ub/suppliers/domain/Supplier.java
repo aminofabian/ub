@@ -48,6 +48,10 @@ public class Supplier {
     @Column(name = "credit_limit", precision = 14, scale = 2)
     private BigDecimal creditLimit;
 
+    /** Markup on cost. 25 means the selling price is 125% of the buying price. Null means no override. */
+    @Column(name = "default_markup_pct", precision = 9, scale = 4)
+    private BigDecimal defaultMarkupPct;
+
     @Column(name = "rating", precision = 5, scale = 2)
     private BigDecimal rating;
 

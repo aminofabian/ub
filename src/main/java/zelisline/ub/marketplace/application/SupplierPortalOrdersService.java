@@ -317,7 +317,12 @@ public class SupplierPortalOrdersService {
                             line.getUnitEstimatedCost(),
                             line.getSupplierLineStatus(),
                             line.getQtyAccepted(),
-                            line.getSupplierNote());
+                            line.getSupplierNote(),
+                            line.getPurchaseUnit(),
+                            line.getPurchaseQty(),
+                            line.getUnitsPerPurchaseUnit(),
+                            line.getPackPrice(),
+                            line.getBaseUnit());
                 })
                 .toList();
         return new SupplierPortalOrderDetailResponse(

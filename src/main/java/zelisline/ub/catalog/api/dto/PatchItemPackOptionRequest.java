@@ -13,6 +13,11 @@ public record PatchItemPackOptionRequest(
         @Size(max = 191) String barcode,
         @Size(max = 64) String skuSuffix,
         Integer sortOrder,
-        Boolean active
+        Boolean active,
+        /** Blank string clears the inner packaging level. */
+        @Size(max = 32) String innerPackUnit,
+        @DecimalMin(value = "1.0001", message = "innerPackCount must be greater than 1") BigDecimal innerPackCount,
+        @DecimalMin(value = "0.0001", message = "baseUnitsPerInner must be positive") BigDecimal baseUnitsPerInner,
+        Boolean defaultPurchase
 ) {
 }

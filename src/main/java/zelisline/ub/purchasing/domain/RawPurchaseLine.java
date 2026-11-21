@@ -59,6 +59,24 @@ public class RawPurchaseLine {
     @Column(name = "pack_option_id", length = 36)
     private String packOptionId;
 
+    /**
+     * Packaging as the buyer entered it: purchase unit name ("carton", "bale", "pack"…),
+     * number of purchase units, base items per purchase unit, and price per purchase unit.
+     * {@code draftQty} stays the expanded base quantity the shelf receives; these columns keep
+     * the operator's view so reopening the draft shows packs, not pieces.
+     */
+    @Column(name = "purchase_unit", length = 32)
+    private String purchaseUnit;
+
+    @Column(name = "purchase_qty", precision = 14, scale = 4)
+    private BigDecimal purchaseQty;
+
+    @Column(name = "units_per_purchase_unit", precision = 14, scale = 4)
+    private BigDecimal unitsPerPurchaseUnit;
+
+    @Column(name = "pack_price", precision = 14, scale = 4)
+    private BigDecimal packPrice;
+
     @Column(name = "line_status", nullable = false, length = 16)
     private String lineStatus;
 

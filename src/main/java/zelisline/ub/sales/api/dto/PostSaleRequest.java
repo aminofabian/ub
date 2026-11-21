@@ -38,8 +38,28 @@ public record PostSaleRequest(
          * Required when a line is a prescription-only or controlled medicine: who prescribed it,
          * and the pharmacist's approval when the cashier may not dispense (ADR 0033).
          */
-        @Valid PostSaleDispensingRequest dispensing
+        @Valid PostSaleDispensingRequest dispensing,
+        /**
+         * The name a counter order is called by ("Kevin"). Not a customer record and never a phone
+         * number; it rides on the order and the kitchen docket so a takeaway can be called by name.
+         */
+        @jakarta.validation.constraints.Size(max = 120) String customerName
 ) {
+    /** Shape used before a counter order could carry a name; older queued sales still build it. */
+    public PostSaleRequest(
+            String branchId,
+            List<PostSaleLineRequest> lines,
+            List<PostSalePaymentRequest> payments,
+            Instant clientSoldAt,
+            String customerId,
+            BigDecimal cashReceived,
+            Boolean allowOutOfStock,
+            List<PostSaleTipRequest> tips,
+            PostSaleDispensingRequest dispensing
+    ) {
+        this(branchId, lines, payments, clientSoldAt, customerId, cashReceived, allowOutOfStock, tips, dispensing, null);
+    }
+
     /** Shape used before dispensing existed; older queued sales and internal callers still build it. */
     public PostSaleRequest(
             String branchId,
@@ -51,7 +71,7 @@ public record PostSaleRequest(
             Boolean allowOutOfStock,
             List<PostSaleTipRequest> tips
     ) {
-        this(branchId, lines, payments, clientSoldAt, customerId, cashReceived, allowOutOfStock, tips, null);
+        this(branchId, lines, payments, clientSoldAt, customerId, cashReceived, allowOutOfStock, tips, null, null);
     }
 
     /** Shape used before tips existed; older queued sales and internal callers still build it. */
@@ -64,6 +84,6 @@ public record PostSaleRequest(
             BigDecimal cashReceived,
             Boolean allowOutOfStock
     ) {
-        this(branchId, lines, payments, clientSoldAt, customerId, cashReceived, allowOutOfStock, null, null);
+        this(branchId, lines, payments, clientSoldAt, customerId, cashReceived, allowOutOfStock, null, null, null);
     }
 }

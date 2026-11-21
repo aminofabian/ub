@@ -350,12 +350,21 @@ public final class RestaurantDtos {
 
     public record KitchenLineResponse(
             String id, String orderLineId, String name, BigDecimal quantity, List<ChosenModifier> modifiers,
-            String note, String stage, Instant readyAt) {
+            String note, String stage, Instant readyAt,
+            /** Which guest at the table the dish is for; null when the order was not taken by seat. */
+            Integer seatNo) {
     }
 
+    /**
+     * @param orderChannel {@code DINE_IN}, {@code TAKEAWAY}, {@code DELIVERY}, {@code COUNTER} or
+     *                     {@code LODGING}; null on a ticket made before V433
+     * @param tableName    the table it was sent from, if any
+     * @param customerName the name the counter calls this order by, if one was given
+     */
     public record KitchenTicketResponse(
             String id, String orderId, long orderNumber, String stationId, String ticketType, String status,
-            int roundNo, Instant sentAt, Instant readyAt, List<KitchenLineResponse> lines) {
+            int roundNo, Instant sentAt, Instant readyAt, List<KitchenLineResponse> lines,
+            String orderChannel, String tableName, String customerName) {
     }
 
     public record KitchenBoardResponse(String branchId, Instant asOf, List<KitchenTicketResponse> tickets) {
@@ -389,7 +398,9 @@ public final class RestaurantDtos {
     /** An order as the counter sees it: its number and whether everything sent to the kitchen is ready. */
     public record OrderSummaryResponse(
             String orderId, long orderNumber, String saleId, Instant sentAt, boolean ready,
-            int linesTotal, int linesReady, List<String> lineNames) {
+            int linesTotal, int linesReady, List<String> lineNames,
+            /** The name the order is called by, if one was given at the counter. */
+            String customerName) {
     }
 
     public record OrderListResponse(String branchId, Instant asOf, List<OrderSummaryResponse> orders) {

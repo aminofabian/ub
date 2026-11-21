@@ -58,6 +58,7 @@ public final class BusinessTypeCatalogDefaults {
                 new RawEntry("fast-food", "Fast food / takeaway", "Chips, chicken, burgers — pay, then collect by number"),
                 new RawEntry("bar", "Bar", "Drinks and bites, made at the bar or in the kitchen"),
                 new RawEntry("lodging", "Guest house / rooms", "A few rooms to let — on their own, or above a bar"),
+                new RawEntry("clinic", "Clinic / consulting room", "Consultations, tests and procedures billed as one visit — on its own, or inside a chemist"),
                 new RawEntry("other", "Other", "A different kind of shop — add your own product sections"));
 
         java.util.ArrayList<Entry> out = new java.util.ArrayList<>(raw.size());

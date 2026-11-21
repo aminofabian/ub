@@ -60,6 +60,7 @@ public class BillService {
     private final RestaurantSettingsService settingsService;
     private final zelisline.ub.payroll.application.StaffProfileService staffProfileService;
     private final RestaurantGate gate;
+    private final OrderActivityService activity;
 
     /**
      * Opens a bill for the lines named, for one seat, or for everything not yet on a bill.
@@ -77,12 +78,12 @@ public class BillService {
                     "Some items have not been sent to the kitchen; send or remove them before the bill");
         }
         Map<String, BigDecimal> billed = dineInService.billedQuantity(businessId, orderId);
+        Map<String, OrderTicketService.OrderLine> byId = new HashMap<>();
+        for (OrderTicketService.OrderLine line : order.lines()) {
+            byId.put(line.id(), line);
+        }
         Map<String, BigDecimal> wanted = new LinkedHashMap<>();
         if (request != null && request.lines() != null && !request.lines().isEmpty()) {
-            Map<String, OrderTicketService.OrderLine> byId = new HashMap<>();
-            for (OrderTicketService.OrderLine line : order.lines()) {
-                byId.put(line.id(), line);
-            }
             for (BillLineRequest row : request.lines()) {
                 OrderTicketService.OrderLine line = byId.get(row.orderLineId());
                 if (line == null || line.isVoided()) {
@@ -127,12 +128,22 @@ public class BillService {
         bill.setCreatedBy(userId);
         billRepository.save(bill);
         for (Map.Entry<String, BigDecimal> entry : wanted.entrySet()) {
+            OrderTicketService.OrderLine line = byId.get(entry.getKey());
+            BigDecimal free = line.quantity().subtract(billed.getOrDefault(line.id(), BigDecimal.ZERO));
+            // The bill that takes the rest of a line takes the exact remainder, not the rounded
+            // number the client sent, so two bills of one line cannot add up to more than the line.
+            BigDecimal quantity = entry.getValue().compareTo(free) >= 0 ? free : entry.getValue();
+            quantity = quantity.setScale(4, RoundingMode.HALF_UP);
             OrderBillLine row = new OrderBillLine();
             row.setBusinessId(businessId);
             row.setBillId(bill.getId());
             row.setOrderId(orderId);
             row.setOrderLineId(entry.getKey());
-            row.setQuantity(entry.getValue().setScale(4, RoundingMode.HALF_UP));
+            row.setQuantity(quantity);
+            // What this line is charged, kept on the bill: a printed bill must not change later
+            // because the order line or the menu moved.
+            row.setUnitPrice(line.unitPrice().setScale(4, RoundingMode.HALF_UP));
+            row.setAmount(DineInService.amount(line, quantity));
             billLineRepository.save(row);
         }
         return dineInService.toResponse(businessId, dineInService.require(businessId, orderId));
@@ -191,9 +202,11 @@ public class BillService {
                 if (label.length() > 255) {
                     label = label.substring(0, 252) + "...";
                 }
-                // The dish's tax rate as it is now; a dish since removed from the menu carries none.
-                String taxRateId = menuItemRepository.findByIdAndBusinessId(line.menuItemId(), businessId)
-                        .map(MenuItem::getTaxRateId).orElse(null);
+                // The rate fixed when the dish was ordered. Only a line made before V433 has none,
+                // and then the menu is read as a fallback; a dish deleted since carries none either.
+                String taxRateId = line.taxRateId() != null ? line.taxRateId()
+                        : menuItemRepository.findByIdAndBusinessId(line.menuItemId(), businessId)
+                                .map(MenuItem::getTaxRateId).orElse(null);
                 dishes.put(saleLines.size(), new OrderSettlement.FrozenDish(line.menuItemId(), line.name(), label,
                         line.modifiers(), taxRateId, line.unitPrice().setScale(2, RoundingMode.HALF_UP), line.note()));
                 saleLines.add(new PostSaleLineRequest(null, row.getQuantity(), line.unitPrice(), SaleLineKinds.DISH,
@@ -210,6 +223,9 @@ public class BillService {
                 BigDecimal current = dineInService.shelfPrice(businessId, order.branchId(), line.itemId(), line.name());
                 if (current.compareTo(line.unitPrice()) != 0) {
                     orderTicketService.repriceLine(businessId, line.id(), current);
+                    // An open bill shows the old figure until it is re-made; keep its stored amounts
+                    // in step with the order line so the bill the customer reads is the one charged.
+                    updateOpenBillLinePrices(businessId, orderId, line.id(), current);
                     repriced.add(line.name());
                 }
                 saleLines.add(PostSaleLineRequest.catalogItem(line.itemId(), row.getQuantity(), current));
@@ -362,8 +378,33 @@ public class BillService {
         bill.setClosedBy(userId);
         bill.setClosedAt(now);
         billRepository.saveAndFlush(bill);
+        activity.record(orderId, userId,
+                OrderBill.COMP.equals(status) ? OrderActivityService.BILL_COMP : OrderActivityService.BILL_UNPAID, null,
+                "Bill " + bill.getBillNo() + (OrderBill.COMP.equals(status) ? " on the house" : " left unpaid")
+                        + " — " + bill.getReason());
         completeIfSettled(businessId, orderId, null, null, now);
         return dineInService.toResponse(businessId, dineInService.require(businessId, orderId));
+    }
+
+    /** An order line's price moved: what its open bills charge moves with it. A paid bill never changes. */
+    private void updateOpenBillLinePrices(String businessId, String orderId, String orderLineId, BigDecimal unitPrice) {
+        Map<String, OrderBill> bills = new HashMap<>();
+        for (OrderBill bill : billRepository.findByBusinessIdAndOrderIdOrderByBillNoAsc(businessId, orderId)) {
+            bills.put(bill.getId(), bill);
+        }
+        for (OrderBillLine row : billLineRepository.findByBusinessIdAndOrderId(businessId, orderId)) {
+            if (!orderLineId.equals(row.getOrderLineId())) {
+                continue;
+            }
+            OrderBill bill = bills.get(row.getBillId());
+            if (bill == null || !OrderBill.OPEN.equals(bill.getStatus())) {
+                continue;
+            }
+            BigDecimal price = unitPrice.setScale(4, RoundingMode.HALF_UP);
+            row.setUnitPrice(price);
+            row.setAmount(row.getQuantity().multiply(price).setScale(2, RoundingMode.HALF_UP));
+            billLineRepository.save(row);
+        }
     }
 
     /** The order is finished once nothing is unsent, no bill is open and every live line is fully on closed bills. */

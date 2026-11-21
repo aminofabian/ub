@@ -88,6 +88,7 @@ public class GroceryInvoiceService {
     private final StkPushRetryHelper stkPushRetryHelper;
     private final GatewayStkPushService gatewayStkPushService;
     private final UserRepository userRepository;
+    private final zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry;
 
     @Transactional
     public GroceryInvoiceResponse createInvoice(
@@ -180,9 +181,16 @@ public class GroceryInvoiceService {
 
         if (remote) {
             List<CreditSaleReminderLineItem> notifyItems = new ArrayList<>();
+            // A message to a customer never names a medicine (ADR 0033, ADR 0034 Phase 0).
+            java.util.Set<String> medicineIds = medicineRegistry.medicineItemIds(businessId,
+                    itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(
+                            savedLines.stream().map(GroceryInvoiceLine::getItemId)
+                                    .filter(java.util.Objects::nonNull).distinct().toList(),
+                            businessId));
             for (GroceryInvoiceLine line : savedLines) {
                 notifyItems.add(new CreditSaleReminderLineItem(
-                        line.getItemName() != null ? line.getItemName() : "Item",
+                        medicineIds.contains(line.getItemId()) ? "Pharmacy item"
+                                : line.getItemName() != null ? line.getItemName() : "Item",
                         line.getQuantity(),
                         line.getLineTotal()));
             }

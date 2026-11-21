@@ -32,11 +32,19 @@ public class PharmacyPatient {
     @Column(name = "business_id", nullable = false, length = 36)
     private String businessId;
 
+    /** Running number per business, shown as "P-0412". Never reused, even after removal. */
+    @Column(name = "patient_no")
+    private Long patientNo;
+
     @Column(name = "name", nullable = false, length = 191)
     private String name;
 
     @Column(name = "phone", length = 32)
     private String phone;
+
+    /** Who usually pays for this patient ({@code customers.id}); a parent for a child. Optional. */
+    @Column(name = "customer_id", length = 36)
+    private String customerId;
 
     @Column(name = "date_of_birth")
     private LocalDate dateOfBirth;

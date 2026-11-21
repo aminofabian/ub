@@ -294,6 +294,7 @@ class DesktopSyncIngestServiceTest {
                 null,
                 null,
                 null,
+                null,
                 List.of(new ShiftSyncRequest.SupplierContactData(
                     "contact-1", "Amina", "Sales rep", "254701222333", null, true)))));
         when(supplierRepository.findByIdAndBusinessId("supplier-1", "cloud-biz"))

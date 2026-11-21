@@ -148,11 +148,13 @@ public class KitchenPrintService {
         String stage = isVoid ? OrderTicketService.STAGE_VOIDED : OrderTicketService.STAGE_NEW;
         List<KitchenLineResponse> out = lines.stream()
                 .map(line -> new KitchenLineResponse(line.getId(), line.getOrderLineId(), line.getName(),
-                        line.getQuantity(), ModifierSnapshots.decode(line.getModifiers()), line.getNote(), stage, null))
+                        line.getQuantity(), ModifierSnapshots.decode(line.getModifiers()), line.getNote(), stage, null,
+                        line.getSeatNo()))
                 .toList();
         return new KitchenTicketResponse(ticket.getId(), ticket.getOrderId(), ticket.getOrderNumber(),
                 ticket.getStationId(), ticket.getTicketType(), ticket.getStatus(), ticket.getRoundNo(),
-                ticket.getSentAt(), ticket.getReadyAt(), out);
+                ticket.getSentAt(), ticket.getReadyAt(), out, ticket.getOrderChannel(), ticket.getTableName(),
+                ticket.getCustomerName());
     }
 
     private KitchenPrintJobResponse toResponse(KitchenPrintJob job) {

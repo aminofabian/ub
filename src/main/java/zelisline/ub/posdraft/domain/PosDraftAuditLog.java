@@ -40,6 +40,10 @@ public class PosDraftAuditLog {
     @Column(name = "new_value", columnDefinition = "JSON")
     private String newValue;
 
+    /** The change in words, for a manager reading the order's history: what was cancelled, comped or moved. */
+    @Column(name = "detail", length = 500)
+    private String detail;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

@@ -64,6 +64,14 @@ public class CustomerTabPurchasesService {
     private final SaleItemRepository saleItemRepository;
     private final ItemRepository itemRepository;
     private final AirtimeOrderRepository airtimeOrderRepository;
+    private final zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry;
+
+    /**
+     * What a medicine is called wherever a customer's purchases are listed by name: their tab,
+     * the link sent to them, their online account. What a named person bought from a chemist is
+     * health data; the receipt itself still says what it was.
+     */
+    static final String MEDICINE_LINE_NAME = "Pharmacy item";
 
     @Transactional(readOnly = true)
     public List<TabPurchaseRowResponse> list(String businessId, String customerId) {
@@ -129,6 +137,7 @@ public class CustomerTabPurchasesService {
                 itemIds.add(line.getItemId());
             }
         }
+        Set<String> medicineIds = new HashSet<>();
         Map<String, String> itemNames = new HashMap<>();
         if (!itemIds.isEmpty()) {
             List<Item> items = itemRepository.findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId);
@@ -136,6 +145,7 @@ public class CustomerTabPurchasesService {
             for (Item item : items) {
                 itemNames.put(item.getId(), shelfTitle(item, parentNames));
             }
+            medicineIds.addAll(medicineRegistry.medicineItemIds(businessId, items));
         }
         List<String> names = new ArrayList<>();
         for (SaleItem line : lines) {
@@ -146,7 +156,7 @@ public class CustomerTabPurchasesService {
                     ? (line.getLineLabel() != null && !line.getLineLabel().isBlank()
                             ? line.getLineLabel().trim()
                             : "Airtime")
-                    : lineName(line, itemNames);
+                    : medicineIds.contains(line.getItemId()) ? MEDICINE_LINE_NAME : lineName(line, itemNames);
             if (!name.isBlank()) {
                 names.add(name);
             }
@@ -261,6 +271,7 @@ public class CustomerTabPurchasesService {
             }
         }
 
+        Set<String> medicineIds = new HashSet<>();
         Map<String, String> itemNames = new HashMap<>();
         Map<String, String> itemSkus = new HashMap<>();
         Map<String, String> itemBarcodes = new HashMap<>();
@@ -276,6 +287,7 @@ public class CustomerTabPurchasesService {
                     itemBarcodes.put(item.getId(), item.getBarcode().trim());
                 }
             }
+            medicineIds.addAll(medicineRegistry.medicineItemIds(businessId, items));
         }
 
         List<TabPurchaseRowResponse> out = new ArrayList<>();
@@ -291,9 +303,9 @@ public class CustomerTabPurchasesService {
                                 ? (si.getLineLabel() != null && !si.getLineLabel().isBlank()
                                         ? si.getLineLabel()
                                         : "Airtime")
-                                : lineName(si, itemNames),
-                        si.getItemId() == null ? null : itemSkus.get(si.getItemId()),
-                        si.getItemId() == null ? null : itemBarcodes.get(si.getItemId()),
+                                : medicineIds.contains(si.getItemId()) ? MEDICINE_LINE_NAME : lineName(si, itemNames),
+                        si.getItemId() == null || medicineIds.contains(si.getItemId()) ? null : itemSkus.get(si.getItemId()),
+                        si.getItemId() == null || medicineIds.contains(si.getItemId()) ? null : itemBarcodes.get(si.getItemId()),
                         scaleQty(si.getQuantity()),
                         scaleUnitPrice(si.getUnitPrice()),
                         scaleMoney(si.getLineTotal())));

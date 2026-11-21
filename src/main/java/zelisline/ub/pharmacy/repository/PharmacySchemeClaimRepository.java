@@ -15,4 +15,6 @@ public interface PharmacySchemeClaimRepository extends JpaRepository<PharmacySch
     List<PharmacySchemeClaim> findByBusinessIdOrderByCreatedAtDescIdDesc(String businessId, Pageable pageable);
 
     List<PharmacySchemeClaim> findByBusinessIdAndRecordId(String businessId, String recordId);
+
+    List<PharmacySchemeClaim> findByBusinessIdAndSaleId(String businessId, String saleId);
 }

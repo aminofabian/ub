@@ -532,6 +532,7 @@ public class DesktopSyncPushService {
             supplier.getPayoutTillNumber(),
             supplier.getPayoutPaybillNumber(),
             supplier.getPayoutPaybillAccount(),
+            supplier.getDefaultMarkupPct(),
             contacts
         );
     }

@@ -124,6 +124,7 @@ public class SaleService {
     private final ApplicationEventPublisher eventPublisher;
     private final SaleActorNameService saleActorNameService;
     private final ItemRepository itemRepository;
+    private final zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry;
     private final CreditAccountRepository creditAccountRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
@@ -317,8 +318,8 @@ public class SaleService {
         // Settling a bill of an order that already exists (and is already in the kitchen) writes none.
         if (!OrderSettlement.isActive()) {
             restaurantSaleSupport.recordOrderForSale(
-                    businessId, req.branchId(), userId, shift.getId(), saleId, customerId, req.lines(), effectiveSoldAt,
-                    wasSoldOffline(req.clientSoldAt()));
+                    businessId, req.branchId(), userId, shift.getId(), saleId, customerId, req.customerName(),
+                    req.lines(), effectiveSoldAt, wasSoldOffline(req.clientSoldAt()));
         }
         if ((overpayAlloc.towardWallet().signum() > 0 || overpayAlloc.towardAr().signum() > 0)
                 && customerId != null
@@ -1884,6 +1885,9 @@ public class SaleService {
                 balanceOwed);
     }
 
+    /** What a credit reminder calls a medicine line, so the message does not say what was bought. */
+    static final String REMINDER_MEDICINE_NAME = "Pharmacy item";
+
     private List<CreditSaleReminderLineItem> buildReminderLineItems(String businessId, List<SaleItem> saleItems) {
         if (saleItems == null || saleItems.isEmpty()) {
             return List.of();
@@ -1893,12 +1897,15 @@ public class SaleService {
                 .filter(id -> id != null && !id.isBlank())
                 .distinct()
                 .toList();
+        final java.util.Set<String> medicineIds = new java.util.HashSet<>();
         final Map<String, String> itemNames;
         if (itemIds.isEmpty()) {
             itemNames = Map.of();
         } else {
             List<Item> catalogItems = itemRepository
                     .findByIdInAndBusinessIdAndDeletedAtIsNull(itemIds, businessId);
+            // A message to a customer never names a medicine (ADR 0033, ADR 0034 Phase 0).
+            medicineIds.addAll(medicineRegistry.medicineItemIds(businessId, catalogItems));
             java.util.LinkedHashSet<String> parentIds = new java.util.LinkedHashSet<>();
             for (Item item : catalogItems) {
                 if (item.getVariantOfItemId() != null && !item.getVariantOfItemId().isBlank()) {
@@ -1951,7 +1958,9 @@ public class SaleService {
                             ? (first.getLineLabel() != null && !first.getLineLabel().isBlank()
                                     ? first.getLineLabel()
                                     : "Airtime")
-                            : lineName(first, itemNames);
+                            : first.getItemId() != null && medicineIds.contains(first.getItemId())
+                                    ? REMINDER_MEDICINE_NAME
+                                    : lineName(first, itemNames);
                     return new CreditSaleReminderLineItem(name, qty, total);
                 })
                 .toList();

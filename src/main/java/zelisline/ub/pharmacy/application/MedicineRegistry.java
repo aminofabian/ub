@@ -66,6 +66,44 @@ public class MedicineRegistry {
         return isMedicine(businessId, candidateIds(soldItem, stockHolderItemId));
     }
 
+    /**
+     * Which of these products are medicines, by their own id or the product they are a pack of.
+     * Used to keep what a named customer bought out of analytics, audiences and messages
+     * (ADR 0034, Phase 0): a medicine tied to a name is health data whatever its class.
+     */
+    @Transactional(readOnly = true)
+    public Set<String> medicineItemIds(String businessId, Collection<Item> items) {
+        Set<String> out = new LinkedHashSet<>();
+        if (businessId == null || items == null || items.isEmpty()) {
+            return out;
+        }
+        Set<String> candidates = new LinkedHashSet<>();
+        for (Item item : items) {
+            if (item != null) {
+                candidates.addAll(candidateIds(item, null));
+            }
+        }
+        if (candidates.isEmpty()) {
+            return out;
+        }
+        Set<String> marked = new LinkedHashSet<>();
+        for (ItemMedicineDetails d : repository.findByBusinessIdAndItemIdIn(businessId, candidates)) {
+            marked.add(d.getItemId());
+        }
+        for (Item item : items) {
+            if (item == null || item.getId() == null) {
+                continue;
+            }
+            for (String id : candidateIds(item, null)) {
+                if (marked.contains(id)) {
+                    out.add(item.getId());
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+
     /** Medicine rows keyed by item id, for the ids given (no parent or holder resolution). */
     @Transactional(readOnly = true)
     public Map<String, ItemMedicineDetails> byItemId(String businessId, Collection<String> itemIds) {

@@ -258,6 +258,12 @@ public final class AuditEventTypes {
     public static final String EXPENSE_DISBURSEMENT_CANCELLED = "expense_disbursement.cancelled";
 
     // ── Pharmacy (ADR 0033) ─────────────────────────────────────────────
+    public static final String CLINIC_VISIT_OPENED = "clinic.visit_opened";
+    public static final String CLINIC_VISIT_VIEWED = "clinic.visit_viewed";
+    public static final String CLINIC_PRESCRIPTION_SAVED = "clinic.prescription_saved";
+    public static final String CLINIC_PRESCRIPTION_VIEWED = "clinic.prescription_viewed";
+    public static final String CLINIC_PRESCRIPTION_PREPARED = "clinic.prescription_prepared";
+    public static final String CLINIC_SETTINGS_UPDATED = "clinic.settings_updated";
     public static final String PHARMACY_MEDICINE_MARKED = "pharmacy.medicine_marked";
     public static final String PHARMACY_MEDICINE_UNMARKED = "pharmacy.medicine_unmarked";
     public static final String PHARMACY_CLASS_CHANGED = "pharmacy.class_changed";

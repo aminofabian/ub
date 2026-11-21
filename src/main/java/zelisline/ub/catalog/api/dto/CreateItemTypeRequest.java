@@ -1,5 +1,7 @@
 package zelisline.ub.catalog.api.dto;
 
+import java.math.BigDecimal;
+
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import jakarta.validation.constraints.NotBlank;
@@ -11,6 +13,7 @@ public record CreateItemTypeRequest(
         @Size(max = 500) String icon,
         @Size(max = 64) String color,
         Integer sortOrder,
-        @JsonProperty("isDefault") Boolean isDefault
+        @JsonProperty("isDefault") Boolean isDefault,
+        BigDecimal defaultMarkupPct
 ) {
 }

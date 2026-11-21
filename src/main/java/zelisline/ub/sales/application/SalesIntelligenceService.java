@@ -101,6 +101,7 @@ public class SalesIntelligenceService {
     private final JdbcTemplate jdbc;
     private final MvSalesDailyRepository mvSalesDailyRepository;
     private final ItemRepository itemRepository;
+    private final zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry;
     private final StockMovementRepository stockMovementRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
     private final PackageVariantStockResolver packageVariantStockResolver;
@@ -2375,6 +2376,9 @@ public class SalesIntelligenceService {
              LIMIT ?
             """;
 
+    public static final String MEDICINE_BUYERS_REFUSED =
+            "This product is a medicine. Kiosk does not list the customers who bought a medicine.";
+
     @Transactional(readOnly = true)
     public List<CustomerProductSegmentRow> customersByProduct(
             String businessId,
@@ -2387,8 +2391,11 @@ public class SalesIntelligenceService {
         if (itemId == null || itemId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "itemId is required");
         }
-        if (!itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId.trim(), businessId).isPresent()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found");
+        var product = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(itemId.trim(), businessId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+        // Who bought a medicine is health data: it is never listed, exported or used as an audience.
+        if (!medicineRegistry.medicineItemIds(businessId, List.of(product)).isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, MEDICINE_BUYERS_REFUSED);
         }
         ProfitWindow w = profitWindow(businessId, fromInclusive, toInclusive);
         Timestamp from = utcBound(w.startInclusive());

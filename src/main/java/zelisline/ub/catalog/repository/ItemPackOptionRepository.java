@@ -17,5 +17,12 @@ public interface ItemPackOptionRepository extends JpaRepository<ItemPackOption, 
 
     List<ItemPackOption> findByBusinessIdAndItemId(String businessId, String itemId);
 
+    List<ItemPackOption> findByBusinessIdAndItemIdOrderBySortOrderAscIdAsc(String businessId, String itemId);
+
+    List<ItemPackOption> findByBusinessIdAndItemIdAndActiveTrueOrderBySortOrderAscIdAsc(
+            String businessId, String itemId);
+
+    List<ItemPackOption> findByBusinessIdAndItemIdAndDefaultPurchaseTrue(String businessId, String itemId);
+
     Optional<ItemPackOption> findByIdAndBusinessIdAndItemId(String id, String businessId, String itemId);
 }

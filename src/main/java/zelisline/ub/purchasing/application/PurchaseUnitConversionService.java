@@ -13,6 +13,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.domain.ItemPackOption;
+import zelisline.ub.catalog.repository.ItemPackOptionRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.suppliers.domain.SupplierProduct;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
@@ -45,6 +47,7 @@ public class PurchaseUnitConversionService {
 
     private final ItemRepository itemRepository;
     private final SupplierProductRepository supplierProductRepository;
+    private final ItemPackOptionRepository itemPackOptionRepository;
 
     public record ReceiptResolution(String catalogItemId, BigDecimal usableQty) {
     }
@@ -97,6 +100,33 @@ public class PurchaseUnitConversionService {
                 businessId, item.getId());
         Optional<SupplierProduct> link = supplierProductRepository.findBySupplierIdAndItemId(supplierId, item.getId())
                 .filter(sp -> sp.getDeletedAt() == null && sp.isActive());
+
+        // Saved item pack options are the backend-owned packaging shapes. Prefer an exact
+        // unit match; when several shapes share a unit name, the default purchase unit wins,
+        // otherwise the request is ambiguous and must be retried with unitsPerPurchaseUnit.
+        java.util.List<ItemPackOption> packOptions = itemPackOptionRepository
+                .findByBusinessIdAndItemIdAndActiveTrueOrderBySortOrderAscIdAsc(businessId, item.getId());
+        java.util.List<ItemPackOption> matching = packOptions.stream()
+                .filter(op -> normUnit(op.getPackUnit()).equals(purchaseUnit))
+                .toList();
+        if (matching.size() == 1) {
+            BigDecimal usable = qty.multiply(matching.getFirst().getUnitsPerPack())
+                    .setScale(QTY_SCALE, RoundingMode.HALF_UP);
+            return new ReceiptResolution(item.getId(), usable);
+        }
+        if (matching.size() > 1) {
+            java.util.List<ItemPackOption> defaults = matching.stream()
+                    .filter(ItemPackOption::isDefaultPurchase)
+                    .toList();
+            if (defaults.size() == 1) {
+                BigDecimal usable = qty.multiply(defaults.getFirst().getUnitsPerPack())
+                        .setScale(QTY_SCALE, RoundingMode.HALF_UP);
+                return new ReceiptResolution(item.getId(), usable);
+            }
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Several " + purchaseUnit + " sizes are configured for this item; send unitsPerPurchaseUnit");
+        }
 
         if (link.isPresent()) {
             SupplierProduct sp = link.get();

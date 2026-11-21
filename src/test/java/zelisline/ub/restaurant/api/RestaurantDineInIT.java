@@ -184,6 +184,10 @@ class RestaurantDineInIT extends ServiceSaleTestSupport {
 
         // The floor shows the table as occupied with what is going on.
         JsonNode floor = getJson(as(get("/api/v1/restaurant/floor").param("branchId", branchId), TENANT, waiter, ROLE_WAITER), 200);
+        // The screen knows which staff profile is looking, so it can offer "my tables".
+        String myProfile = staffProfileRepository.findAll().stream()
+                .filter(p -> waiter.getId().equals(p.getUserId())).findFirst().orElseThrow().getId();
+        assertThat(floor.get("myStaffProfileId").asText()).isEqualTo(myProfile);
         JsonNode card = floor.get("tables").get(0).get("orders").get(0);
         assertThat(card.get("inKitchen").asInt()).isEqualTo(1);
         assertThat(card.get("ready").asInt()).isEqualTo(1);
@@ -804,6 +808,88 @@ class RestaurantDineInIT extends ServiceSaleTestSupport {
         // A dine-in with no table, no name and no booking is still refused.
         waiterPost("/open-orders", "{\"branchId\":\"" + branchId + "\",\"channel\":\"DINE_IN\","
                 + "\"clientOrderId\":\"" + UUID.randomUUID() + "\"}", 400);
+    }
+
+    // ------------------------------------------------------------------ what the kitchen is told, and its history
+
+    @Test
+    void aKitchenTicketSaysWhereTheFoodGoesAndForWhichSeat() throws Exception {
+        JsonNode order = open(table1, UUID.randomUUID().toString(), 3, 201);
+        String orderId = order.get("id").asText();
+        waiterPost("/open-orders/" + orderId + "/lines",
+                "{\"lines\":[" + lineForSeat(UUID.randomUUID().toString(), burger, 1, 2, dbl) + "]}", 200);
+        waiterPost("/open-orders/" + orderId + "/send", "", 200);
+
+        JsonNode ticket = getJson(as(get("/api/v1/restaurant/kitchen/tickets").param("branchId", branchId),
+                TENANT, cook, ROLE_KITCHEN), 200).get("tickets").get(0);
+        // A cook cannot tell a dine-in plate from a takeaway bag by the order number alone.
+        assertThat(ticket.get("orderChannel").asText()).isEqualTo("DINE_IN");
+        assertThat(ticket.get("tableName").asText()).isEqualTo("Table 1");
+        assertThat(ticket.get("lines").get(0).get("seatNo").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    void anOrderWithEveryLineCancelledFinishesAndFreesTheTable() throws Exception {
+        JsonNode order = open(table1, UUID.randomUUID().toString(), 2, 201);
+        String orderId = order.get("id").asText();
+        waiterPost("/open-orders/" + orderId + "/lines",
+                "{\"lines\":[" + line(UUID.randomUUID().toString(), burger, 1, dbl) + "]}", 200);
+        JsonNode sent = waiterPost("/open-orders/" + orderId + "/send", "", 200);
+        String lineId = sent.get("lines").get(0).get("id").asText();
+
+        // A sent line needs the void permission and a reason; the owner has both.
+        JsonNode after = send(as(post("/api/v1/restaurant/open-orders/" + orderId + "/lines/" + lineId + "/cancel"),
+                TENANT, owner, ROLE_OWNER), "{\"reason\":\"guest changed their mind\"}", 200);
+
+        assertThat(after.get("status").asText()).isEqualTo("completed");
+        assertThat(getJson(as(get("/api/v1/restaurant/floor").param("branchId", branchId), TENANT, waiter, ROLE_WAITER),
+                200).get("tables").get(0).get("orders")).isEmpty();
+        JsonNode activity = getJson(as(get("/api/v1/restaurant/open-orders/" + orderId + "/activity"),
+                TENANT, waiter, ROLE_WAITER), 200);
+        assertThat(activity).hasSize(1);
+        assertThat(activity.get(0).get("action").asText()).isEqualTo("ORDER_LINE_CANCELLED");
+        assertThat(activity.get(0).get("detail").asText()).contains("guest changed their mind");
+    }
+
+    @Test
+    void theBillsOfALineAddUpToTheLine() throws Exception {
+        JsonNode order = open(table1, UUID.randomUUID().toString(), 2, 201);
+        String orderId = order.get("id").asText();
+        JsonNode added = waiterPost("/open-orders/" + orderId + "/lines",
+                "{\"lines\":[" + line(UUID.randomUUID().toString(), burger, 3, dbl) + "]}", 200);
+        String lineId = added.get("lines").get(0).get("id").asText();
+        waiterPost("/open-orders/" + orderId + "/send", "", 200);
+
+        JsonNode first = waiterPost("/open-orders/" + orderId + "/bills",
+                "{\"lines\":[{\"orderLineId\":\"" + lineId + "\",\"quantity\":1}]}", 201);
+        JsonNode second = waiterPost("/open-orders/" + orderId + "/bills",
+                "{\"lines\":[{\"orderLineId\":\"" + lineId + "\",\"quantity\":2}]}", 201);
+
+        JsonNode one = first.get("bills").get(0);
+        JsonNode two = second.get("bills").get(1);
+        // Each bill keeps the money it was shown, and together they are exactly the line.
+        assertThat(one.get("lines").get(0).get("amount").decimalValue()).isEqualByComparingTo("550.00");
+        assertThat(two.get("lines").get(0).get("amount").decimalValue()).isEqualByComparingTo("1100.00");
+        assertThat(one.get("total").decimalValue().add(two.get("total").decimalValue()))
+                .isEqualByComparingTo("1650.00");
+    }
+
+    @Test
+    void aCompedBillIsWrittenOnTheOrdersHistory() throws Exception {
+        JsonNode order = open(table1, UUID.randomUUID().toString(), 2, 201);
+        String orderId = order.get("id").asText();
+        waiterPost("/open-orders/" + orderId + "/lines",
+                "{\"lines\":[" + line(UUID.randomUUID().toString(), burger, 1, dbl) + "]}", 200);
+        waiterPost("/open-orders/" + orderId + "/send", "", 200);
+        JsonNode bill = waiterPost("/open-orders/" + orderId + "/bills", "", 201).get("bills").get(0);
+
+        send(as(post("/api/v1/restaurant/open-orders/" + orderId + "/bills/" + bill.get("id").asText() + "/close"),
+                TENANT, owner, ROLE_OWNER), "{\"outcome\":\"COMP\",\"reason\":\"regular customer\"}", 200);
+
+        JsonNode activity = getJson(as(get("/api/v1/restaurant/open-orders/" + orderId + "/activity"),
+                TENANT, owner, ROLE_OWNER), 200);
+        assertThat(activity.get(0).get("action").asText()).isEqualTo("BILL_COMP");
+        assertThat(activity.get(0).get("detail").asText()).contains("on the house").contains("regular customer");
     }
 
     // ------------------------------------------------------------------ helpers

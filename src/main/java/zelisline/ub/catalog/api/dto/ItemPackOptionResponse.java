@@ -15,6 +15,10 @@ public record ItemPackOptionResponse(
         String skuSuffix,
         int sortOrder,
         boolean active,
+        String innerPackUnit,
+        BigDecimal innerPackCount,
+        BigDecimal baseUnitsPerInner,
+        boolean defaultPurchase,
         Instant createdAt,
         Instant updatedAt
 ) {
@@ -29,6 +33,10 @@ public record ItemPackOptionResponse(
                 option.getSkuSuffix(),
                 option.getSortOrder(),
                 option.isActive(),
+                option.getInnerPackUnit(),
+                option.getInnerPackCount(),
+                option.getBaseUnitsPerInner(),
+                option.isDefaultPurchase(),
                 option.getCreatedAt(),
                 option.getUpdatedAt());
     }

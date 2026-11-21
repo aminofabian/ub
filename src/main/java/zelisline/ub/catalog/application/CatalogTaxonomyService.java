@@ -805,6 +805,7 @@ public class CatalogTaxonomyService {
             itemTypeRepository.clearDefaultForBusiness(businessId);
             row.setDefault(true);
         }
+        row.setDefaultMarkupPct(request.defaultMarkupPct());
         itemTypeRepository.save(row);
         return toItemTypeResponse(row);
     }
@@ -844,6 +845,11 @@ public class CatalogTaxonomyService {
                 itemTypeRepository.clearDefaultForBusiness(businessId);
             }
             row.setDefault(request.isDefault());
+        }
+        if (Boolean.TRUE.equals(request.clearDefaultMarkup())) {
+            row.setDefaultMarkupPct(null);
+        } else if (request.defaultMarkupPct() != null) {
+            row.setDefaultMarkupPct(request.defaultMarkupPct());
         }
 
         itemTypeRepository.save(row);
@@ -889,7 +895,8 @@ public class CatalogTaxonomyService {
                 t.getColor(),
                 t.getSortOrder(),
                 t.isActive(),
-                t.isDefault());
+                t.isDefault(),
+                t.getDefaultMarkupPct());
     }
 
     private static String trimToNull(String value) {

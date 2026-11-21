@@ -140,4 +140,36 @@ public interface ItemMedicineDetailsRepository extends JpaRepository<ItemMedicin
             @Param("businessId") String businessId,
             @Param("itemTypeId") String itemTypeId
     );
+
+    /**
+     * Products added since a moment that are not marked as medicines, neither themselves nor the
+     * product they are a pack of. Newest first.
+     */
+    @org.springframework.data.jpa.repository.Query("""
+            select i from zelisline.ub.catalog.domain.Item i
+             where i.businessId = :businessId
+               and i.deletedAt is null
+               and i.createdAt >= :since
+               and not exists (select 1 from ItemMedicineDetails d
+                                where d.businessId = :businessId
+                                  and (d.itemId = i.id or d.itemId = i.variantOfItemId))
+             order by i.createdAt desc, i.id desc
+            """)
+    java.util.List<zelisline.ub.catalog.domain.Item> findUnmarkedAddedSince(
+            @org.springframework.data.repository.query.Param("businessId") String businessId,
+            @org.springframework.data.repository.query.Param("since") java.time.Instant since,
+            org.springframework.data.domain.Pageable pageable);
+
+    @org.springframework.data.jpa.repository.Query("""
+            select count(i) from zelisline.ub.catalog.domain.Item i
+             where i.businessId = :businessId
+               and i.deletedAt is null
+               and i.createdAt >= :since
+               and not exists (select 1 from ItemMedicineDetails d
+                                where d.businessId = :businessId
+                                  and (d.itemId = i.id or d.itemId = i.variantOfItemId))
+            """)
+    long countUnmarkedAddedSince(
+            @org.springframework.data.repository.query.Param("businessId") String businessId,
+            @org.springframework.data.repository.query.Param("since") java.time.Instant since);
 }

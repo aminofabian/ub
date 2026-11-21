@@ -177,7 +177,8 @@ public class DispensingRecordQueryService {
                             l.getId(),
                             l.getQuantityPrescribed(),
                             l.getRefillDueOn(),
-                            l.getSettlesLineId()));
+                            l.getSettlesLineId(),
+                            l.getQuantityReturned()));
         }
         Map<String, String> userNames = new LinkedHashMap<>();
         for (User u : userRepository.findAllById(userIds)) {

@@ -858,6 +858,140 @@ class PathAPurchaseIT {
         assertThat(arr.get(0).get("totalReceived").decimalValue()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
+    @Test
+    void addPoLineWithPackaging_recordsOrderViewAndKeepsBaseQty() throws Exception {
+        String poId = createPo();
+        String body = """
+                {"itemId":"%s","qtyOrdered":48,"unitEstimatedCost":50,
+                 "purchaseUnit":"carton","purchaseQty":2,"unitsPerPurchaseUnit":24,"packPrice":1200}
+                """.formatted(itemId);
+        MvcResult r = mockMvc.perform(post("/api/v1/purchasing/path-a/purchase-orders/" + poId + "/lines")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andReturn();
+        JsonNode line = objectMapper.readTree(r.getResponse().getContentAsString());
+        assertThat(line.get("purchaseUnit").asText()).isEqualTo("carton");
+        assertThat(line.get("purchaseQty").decimalValue()).isEqualByComparingTo("2");
+        assertThat(line.get("unitsPerPurchaseUnit").decimalValue()).isEqualByComparingTo("24");
+        assertThat(line.get("packPrice").decimalValue()).isEqualByComparingTo("1200");
+        assertThat(line.get("qtyOrdered").decimalValue()).isEqualByComparingTo("48");
+        assertThat(line.get("baseUnit").asText()).isEqualTo("each");
+
+        JsonNode po = getPo(poId);
+        assertThat(po.get("lines").get(0).get("purchaseUnit").asText()).isEqualTo("carton");
+    }
+
+    @Test
+    void addPoLineWithMismatchedPackaging_isRejected() throws Exception {
+        String poId = createPo();
+        String body = """
+                {"itemId":"%s","qtyOrdered":48,"unitEstimatedCost":50,
+                 "purchaseUnit":"carton","purchaseQty":2,"unitsPerPurchaseUnit":20}
+                """.formatted(itemId);
+        mockMvc.perform(post("/api/v1/purchasing/path-a/purchase-orders/" + poId + "/lines")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isBadRequest());
+        assertThat(purchaseOrderLineRepository.findByPurchaseOrderIdOrderBySortOrderAscIdAsc(poId)).isEmpty();
+    }
+
+    @Test
+    void receivePackagedPo_snapshotsPackagingOnInvoiceLine() throws Exception {
+        String poId = createPo();
+        String body = """
+                {"itemId":"%s","qtyOrdered":48,"unitEstimatedCost":50,
+                 "purchaseUnit":"carton","purchaseQty":2,"unitsPerPurchaseUnit":24,"packPrice":1200}
+                """.formatted(itemId);
+        MvcResult added = mockMvc.perform(post("/api/v1/purchasing/path-a/purchase-orders/" + poId + "/lines")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String poLineId = objectMapper.readTree(added.getResponse().getContentAsString()).get("id").asText();
+        sendPo(poId);
+
+        String grnBody = """
+                {"purchaseOrderId":"%s","branchId":"%s","receivedAt":"%s","lines":[
+                  {"purchaseOrderLineId":"%s","qtyReceived":48}
+                ]}
+                """.formatted(poId, branchId, Instant.parse("2026-05-12T08:00:00Z"), poLineId);
+        MvcResult grn = mockMvc.perform(post("/api/v1/purchasing/path-a/goods-receipts")
+                        .contentType(APPLICATION_JSON)
+                        .content(grnBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andReturn();
+        String grnId = objectMapper.readTree(grn.getResponse().getContentAsString())
+                .get("goodsReceiptId").asText();
+
+        String invBody = """
+                {"invoiceNumber":"INV-PACK-1","invoiceDate":"2026-05-15","lines":[
+                  {"itemId":"%s","qty":48,"unitCost":50,"lineTotal":2400}
+                ]}
+                """.formatted(itemId);
+        mockMvc.perform(post("/api/v1/purchasing/path-a/goods-receipts/" + grnId + "/supplier-invoice")
+                        .contentType(APPLICATION_JSON)
+                        .content(invBody)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+
+        var invoiceLine = supplierInvoiceLineRepository.findAll().getFirst();
+        assertThat(invoiceLine.getPurchaseUnit()).isEqualTo("carton");
+        assertThat(invoiceLine.getPurchaseQty()).isEqualByComparingTo("2");
+        assertThat(invoiceLine.getUnitsPerPurchaseUnit()).isEqualByComparingTo("24");
+        assertThat(invoiceLine.getPackPrice()).isEqualByComparingTo("1200");
+        assertThat(invoiceLine.getBaseUnit()).isEqualTo("each");
+        assertThat(itemRepository.findById(itemId).orElseThrow().getCurrentStock())
+                .isEqualByComparingTo("48");
+    }
+
+    @Test
+    void updatePoLine_canClearRecordedPackaging() throws Exception {
+        String poId = createPo();
+        String body = """
+                {"itemId":"%s","qtyOrdered":48,"unitEstimatedCost":50,
+                 "purchaseUnit":"carton","purchaseQty":2,"unitsPerPurchaseUnit":24}
+                """.formatted(itemId);
+        MvcResult added = mockMvc.perform(post("/api/v1/purchasing/path-a/purchase-orders/" + poId + "/lines")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String poLineId = objectMapper.readTree(added.getResponse().getContentAsString()).get("id").asText();
+
+        mockMvc.perform(patch("/api/v1/purchasing/path-a/purchase-orders/" + poId + "/lines/" + poLineId)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"purchaseUnit":""}
+                                """)
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk());
+        PurchaseOrderLine line = purchaseOrderLineRepository.findById(poLineId).orElseThrow();
+        assertThat(line.getPurchaseUnit()).isNull();
+        assertThat(line.getPurchaseQty()).isNull();
+        assertThat(line.getUnitsPerPurchaseUnit()).isNull();
+        assertThat(line.getQtyOrdered()).isEqualByComparingTo("48");
+    }
+
     private String createPo() throws Exception {
         String body = """
                 {"supplierId":"%s","branchId":"%s","expectedDate":"2026-05-01"}

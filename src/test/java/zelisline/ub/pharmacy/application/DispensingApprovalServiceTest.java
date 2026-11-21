@@ -76,6 +76,33 @@ class DispensingApprovalServiceTest {
     }
 
     @Test
+    void aPreparationByAPharmacistGrantsAShortApprovalForExactlyWhatWasPrepared() {
+        pharmacist(DispensingGate.PERMISSION_DISPENSE);
+        String id = service.grantFromPreparation(BIZ, PHARMACIST, CASHIER, Map.of("item-1", new BigDecimal("24")));
+        org.mockito.ArgumentCaptor<DispensingApproval> saved = org.mockito.ArgumentCaptor.forClass(DispensingApproval.class);
+        verify(approvalRepository).save(saved.capture());
+        assertEquals(saved.getValue().getId(), id);
+        assertEquals(PHARMACIST, saved.getValue().getApproverUserId());
+        assertEquals(CASHIER, saved.getValue().getRequestedBy());
+        assertEquals(BIZ, saved.getValue().getBusinessId());
+        assertEquals("item-1=24", saved.getValue().getItemIds());
+        org.junit.jupiter.api.Assertions.assertTrue(
+                saved.getValue().getExpiresAt().isBefore(Instant.now().plusSeconds(180)));
+    }
+
+    @Test
+    void aPreparerWhoCanNoLongerDispenseGrantsNothing() {
+        pharmacist("sales.sell");
+        org.junit.jupiter.api.Assertions.assertNull(
+                service.grantFromPreparation(BIZ, PHARMACIST, CASHIER, Map.of("item-1", BigDecimal.ONE)));
+        org.junit.jupiter.api.Assertions.assertNull(
+                service.grantFromPreparation(BIZ, "someone-from-another-shop", CASHIER, Map.of("item-1", BigDecimal.ONE)));
+        org.junit.jupiter.api.Assertions.assertNull(
+                service.grantFromPreparation(BIZ, PHARMACIST, CASHIER, Map.of()));
+        verify(approvalRepository, never()).save(any(DispensingApproval.class));
+    }
+
+    @Test
     void theRightPinCreatesAnApprovalBoundToTheCashierAndTheMedicines() {
         pharmacist(DispensingGate.PERMISSION_DISPENSE);
         DispensingApprovalResponse out = service.approve(BIZ, CASHIER, PHARMACIST, " 1234 ",

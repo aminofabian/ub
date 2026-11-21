@@ -28,12 +28,15 @@ class DispensingFollowUpServiceTest {
 
     private final DispensingRecordRepository recordRepository = mock(DispensingRecordRepository.class);
     private final DispensingRecordLineRepository lineRepository = mock(DispensingRecordLineRepository.class);
+    private final zelisline.ub.pharmacy.repository.DispensingRecordCorrectionRepository correctionRepository =
+            org.mockito.Mockito.mock(zelisline.ub.pharmacy.repository.DispensingRecordCorrectionRepository.class);
     private final DispensingFollowUpService service = new DispensingFollowUpService(
             recordRepository,
             lineRepository,
             mock(PharmacyPatientRepository.class),
             mock(AuditEventPublisher.class),
-            mock(AuditEventBuilder.class));
+            mock(AuditEventBuilder.class),
+            correctionRepository);
 
     private static DispensingRecord record(String id, String branchId, String patientId, Instant voidedAt) {
         DispensingRecord r = new DispensingRecord();
@@ -113,5 +116,40 @@ class DispensingFollowUpServiceTest {
         assertEquals("l4", service.owings(BIZ, "branch-b", "viewer").getFirst().lineId());
         assertEquals("l1", service.owingsForPatient(BIZ, "p1", "viewer").getFirst().lineId());
         assertTrue(service.owingsForPatient(BIZ, "someone-else", "viewer").isEmpty());
+    }
+
+    @Test
+    void closingAFollowUpTakesTheLineOffBothListsAndSaysWhyOnTheRecord() {
+        zelisline.ub.pharmacy.domain.DispensingRecordLine line = new zelisline.ub.pharmacy.domain.DispensingRecordLine();
+        line.setId("line-9");
+        line.setRecordId("rec-9");
+        line.setBusinessId("biz-1");
+        line.setItemName("Metformin 500mg");
+        line.setRefillDueOn(java.time.LocalDate.of(2026, 12, 1));
+        zelisline.ub.pharmacy.domain.DispensingRecord record = new zelisline.ub.pharmacy.domain.DispensingRecord();
+        record.setId("rec-9");
+        record.setBusinessId("biz-1");
+        record.setBranchId("branch-a");
+        org.mockito.Mockito.when(lineRepository.findByIdAndBusinessId("line-9", "biz-1"))
+                .thenReturn(java.util.Optional.of(line));
+        org.mockito.Mockito.when(recordRepository.findByIdAndBusinessId("rec-9", "biz-1"))
+                .thenReturn(java.util.Optional.of(record));
+
+        service.close("biz-1", "line-9", " Got the rest elsewhere ", "user-1", null);
+
+        org.junit.jupiter.api.Assertions.assertNotNull(line.getFollowUpClosedAt());
+        org.junit.jupiter.api.Assertions.assertEquals("user-1", line.getFollowUpClosedBy());
+        org.junit.jupiter.api.Assertions.assertEquals("Got the rest elsewhere", line.getFollowUpNote());
+        org.junit.jupiter.api.Assertions.assertNull(line.getRefillDueOn());
+        org.mockito.Mockito.verify(correctionRepository)
+                .save(org.mockito.ArgumentMatchers.any(zelisline.ub.pharmacy.domain.DispensingRecordCorrection.class));
+
+        // Another branch's pharmacist, another shop, or no reason: nothing changes.
+        org.junit.jupiter.api.Assertions.assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> service.close("biz-1", "line-9", "x", "user-2", "branch-b"));
+        org.junit.jupiter.api.Assertions.assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> service.close("biz-2", "line-9", "x", "user-3", null));
+        org.junit.jupiter.api.Assertions.assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> service.close("biz-1", "line-9", "  ", "user-1", null));
     }
 }

@@ -58,6 +58,18 @@ public class KitchenTicket {
     @Column(name = "status", nullable = false, length = 8)
     private String status;
 
+    /** Where the food goes: {@code DINE_IN}, {@code TAKEAWAY}, {@code DELIVERY}, {@code COUNTER} or {@code LODGING}. */
+    @Column(name = "order_channel", length = 16)
+    private String orderChannel;
+
+    /** The table as it was when this ticket was sent, so a docket can say where the plate goes. */
+    @Column(name = "table_name", length = 191)
+    private String tableName;
+
+    /** The name a counter order is called by; never a phone number. */
+    @Column(name = "customer_name", length = 120)
+    private String customerName;
+
     @Column(name = "sent_by", nullable = false, length = 36)
     private String sentBy;
 

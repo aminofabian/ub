@@ -11,6 +11,13 @@ public record PathAPurchaseOrderLineResponse(
         BigDecimal unitEstimatedCost,
         String supplierLineStatus,
         BigDecimal qtyAccepted,
-        String supplierNote
+        String supplierNote,
+        /** Packaging as ordered (null for lines created before packaging was recorded). */
+        String packOptionId,
+        String purchaseUnit,
+        BigDecimal purchaseQty,
+        BigDecimal unitsPerPurchaseUnit,
+        BigDecimal packPrice,
+        String baseUnit
 ) {
 }

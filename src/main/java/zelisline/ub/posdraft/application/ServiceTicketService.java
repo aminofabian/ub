@@ -1105,7 +1105,8 @@ public class ServiceTicketService {
                 ticket.getCustomerId(),
                 request.cashReceived(),
                 null,
-                request.tips());
+                request.tips(),
+                request.dispensing());
         SaleCreationOutcome outcome =
                 // Amounts set on the visit were authorised when they were typed, not by whoever takes the money.
                 zelisline.ub.serviceops.application.EarningsApproval.approved(() ->
@@ -1552,11 +1553,77 @@ public class ServiceTicketService {
     @Transactional(readOnly = true)
     public TicketRef ref(String businessId, String ticketId) {
         PosDraft ticket = requireTicket(businessId, ticketId);
-        return new TicketRef(ticket.getBranchId(), ticket.getServiceStage(), ticket.isPending());
+        return new TicketRef(ticket.getBranchId(), ticket.getServiceStage(), ticket.isPending(),
+                ticket.getPatientId() != null);
     }
 
-    public record TicketRef(String branchId, String stage, boolean open) {
+    /** {@code clinicVisit}: the ticket has a patient on it (ADR 0034) and is reached only through the Clinic section. */
+    public record TicketRef(String branchId, String stage, boolean open, boolean clinicVisit) {
     }
+
+    // ------------------------------------------------------------ clinic visits stay in the clinic
+
+    /**
+     * Which of these tickets are clinic visits. A visit ties a named patient to what was done for
+     * them, so the service floor, the appointment list and the calendar (open to anyone who can
+     * sell) leave them out; the Clinic section shows them to people who hold a clinic hat.
+     */
+    @Transactional(readOnly = true)
+    public java.util.Set<String> clinicVisitIds(String businessId, java.util.Collection<String> ticketIds) {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        for (String id : ticketIds) {
+            if (id != null) {
+                ids.add(id);
+            }
+        }
+        if (ids.isEmpty()) {
+            return out;
+        }
+        for (PosDraft d : draftRepository.findByBusinessIdAndIdInAndDraftKind(
+                businessId, ids, PosDraftConstants.KIND_SERVICE)) {
+            if (d.getPatientId() != null) {
+                out.add(d.getId());
+            }
+        }
+        return out;
+    }
+
+    @Transactional(readOnly = true)
+    public List<TicketResponse> withoutClinicVisits(String businessId, List<TicketResponse> tickets) {
+        java.util.Set<String> clinic = clinicVisitIds(businessId, tickets.stream().map(TicketResponse::id).toList());
+        return clinic.isEmpty() ? tickets : tickets.stream().filter(t -> !clinic.contains(t.id())).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public ServiceBoardResponse withoutClinicVisits(String businessId, ServiceBoardResponse board) {
+        return new ServiceBoardResponse(
+                board.branchId(), board.stationCount(), withoutClinicVisits(businessId, board.tickets()), board.staff());
+    }
+
+    /**
+     * A clinic visit still takes its clinician's and its room's time, so the calendar keeps the
+     * block; it loses the patient's name, what the visit is for and the way in to the ticket.
+     */
+    @Transactional(readOnly = true)
+    public zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarResponse maskClinicVisits(
+            String businessId, zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarResponse calendar) {
+        java.util.Set<String> clinic = clinicVisitIds(businessId, calendar.entries().stream()
+                .map(zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarEntry::ticketId).toList());
+        if (clinic.isEmpty()) {
+            return calendar;
+        }
+        List<zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarEntry> entries = calendar.entries().stream()
+                .map(e -> e.ticketId() == null || !clinic.contains(e.ticketId()) ? e
+                        : new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarEntry(
+                                e.kind(), null, null, CLINIC_VISIT_TITLE, null, e.staffProfileId(), e.resourceId(),
+                                e.start(), e.end()))
+                .toList();
+        return new zelisline.ub.posdraft.api.dto.ServiceTicketDtos.CalendarResponse(
+                calendar.branchId(), calendar.from(), calendar.to(), calendar.staff(), calendar.resources(), entries);
+    }
+
+    public static final String CLINIC_VISIT_TITLE = "Clinic visit";
 
     // ------------------------------------------------------------------ helpers
 

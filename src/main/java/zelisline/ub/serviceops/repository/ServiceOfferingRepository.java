@@ -36,4 +36,7 @@ public interface ServiceOfferingRepository extends JpaRepository<ServiceOffering
             @Param("nameLike") String nameLike,
             Pageable pageable
     );
+
+    /** Clinic: the services a visit can carry, in the order the shop keeps them. */
+    java.util.List<ServiceOffering> findByBusinessIdAndActiveTrueAndDeletedAtIsNullOrderBySortOrderAscNameAsc(String businessId);
 }

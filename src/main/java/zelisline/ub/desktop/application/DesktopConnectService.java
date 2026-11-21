@@ -617,6 +617,7 @@ public class DesktopConnectService {
             itemType.setSortOrder(t.sortOrder());
             itemType.setActive(t.active());
             itemType.setDefault(t.isDefault());
+            itemType.setDefaultMarkupPct(t.defaultMarkupPct());
             itemTypeRepository.save(itemType);
             itemTypeIds.put(t.id(), t.id());
         }
@@ -787,6 +788,7 @@ public class DesktopConnectService {
                 if (d.prepaymentBalance() != null) {
                     supplier.setPrepaymentBalance(d.prepaymentBalance());
                 }
+                supplier.setDefaultMarkupPct(d.defaultMarkupPct());
                 supplier.setCloudSyncedAt(Instant.now());
                 supplierRepository.save(supplier);
 

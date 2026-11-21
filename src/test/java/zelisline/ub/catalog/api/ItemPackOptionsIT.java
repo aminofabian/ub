@@ -318,6 +318,118 @@ class ItemPackOptionsIT {
                 .andExpect(jsonPath("$[1].packs[1].unitPrice").value(170.0));
     }
 
+    @Test
+    void createsNestedPackagingAndDefaultPurchaseUnit() throws Exception {
+        MockHttpServletRequestBuilder create = post("/api/v1/items/{id}/pack-options", itemA)
+                .contentType(APPLICATION_JSON)
+                .content("""
+                        {"packUnit":"carton","unitsPerPack":120,"defaultPackPrice":6000.00,
+                         "innerPackUnit":"packet","innerPackCount":12,"baseUnitsPerInner":10,
+                         "defaultPurchase":true,"label":"Biscuit carton"}
+                        """);
+        asTenantA(create);
+        mockMvc.perform(create)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.packUnit").value("carton"))
+                .andExpect(jsonPath("$.unitsPerPack").value(120))
+                .andExpect(jsonPath("$.innerPackUnit").value("packet"))
+                .andExpect(jsonPath("$.innerPackCount").value(12))
+                .andExpect(jsonPath("$.baseUnitsPerInner").value(10))
+                .andExpect(jsonPath("$.defaultPurchase").value(true));
+
+        MockHttpServletRequestBuilder list = get("/api/v1/items/{id}/pack-options", itemA);
+        asTenantA(list);
+        mockMvc.perform(list)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].innerPackUnit").value("packet"))
+                .andExpect(jsonPath("$[0].defaultPurchase").value(true));
+    }
+
+    @Test
+    void rejectsInnerPackagingThatDoesNotAddUp() throws Exception {
+        MockHttpServletRequestBuilder create = post("/api/v1/items/{id}/pack-options", itemA)
+                .contentType(APPLICATION_JSON)
+                .content("""
+                        {"packUnit":"carton","unitsPerPack":120,
+                         "innerPackUnit":"packet","innerPackCount":12,"baseUnitsPerInner":9}
+                        """);
+        asTenantA(create);
+        mockMvc.perform(create).andExpect(status().isBadRequest());
+
+        MockHttpServletRequestBuilder partial = post("/api/v1/items/{id}/pack-options", itemA)
+                .contentType(APPLICATION_JSON)
+                .content("""
+                        {"packUnit":"carton","unitsPerPack":120,"innerPackUnit":"packet"}
+                        """);
+        asTenantA(partial);
+        mockMvc.perform(partial).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void onlyOneDefaultPurchaseUnitPerItem() throws Exception {
+        String first = createOption("carton", "24", null, null, 0);
+        MockHttpServletRequestBuilder makeDefault = patch(
+                "/api/v1/items/{id}/pack-options/{oid}", itemA, first)
+                .contentType(APPLICATION_JSON)
+                .content("""
+                        {"defaultPurchase":true}
+                        """);
+        asTenantA(makeDefault);
+        mockMvc.perform(makeDefault)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.defaultPurchase").value(true));
+
+        String second = createOption("bale", "12", null, null, 10);
+        MockHttpServletRequestBuilder makeSecondDefault = patch(
+                "/api/v1/items/{id}/pack-options/{oid}", itemA, second)
+                .contentType(APPLICATION_JSON)
+                .content("""
+                        {"defaultPurchase":true}
+                        """);
+        asTenantA(makeSecondDefault);
+        mockMvc.perform(makeSecondDefault)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.defaultPurchase").value(true));
+
+        MockHttpServletRequestBuilder list = get("/api/v1/items/{id}/pack-options", itemA);
+        asTenantA(list);
+        mockMvc.perform(list)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(first))
+                .andExpect(jsonPath("$[0].defaultPurchase").value(false))
+                .andExpect(jsonPath("$[1].id").value(second))
+                .andExpect(jsonPath("$[1].defaultPurchase").value(true));
+    }
+
+    @Test
+    void patchCanClearInnerPackaging() throws Exception {
+        String optionId = createOption("carton", "120", null, null, 0);
+        MockHttpServletRequestBuilder addInner = patch(
+                "/api/v1/items/{id}/pack-options/{oid}", itemA, optionId)
+                .contentType(APPLICATION_JSON)
+                .content("""
+                        {"innerPackUnit":"packet","innerPackCount":12,"baseUnitsPerInner":10}
+                        """);
+        asTenantA(addInner);
+        mockMvc.perform(addInner)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.innerPackUnit").value("packet"));
+
+        MockHttpServletRequestBuilder clear = patch(
+                "/api/v1/items/{id}/pack-options/{oid}", itemA, optionId)
+                .contentType(APPLICATION_JSON)
+                .content("""
+                        {"innerPackUnit":""}
+                        """);
+        asTenantA(clear);
+        mockMvc.perform(clear)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.innerPackUnit").doesNotExist())
+                .andExpect(jsonPath("$.innerPackCount").doesNotExist())
+                .andExpect(jsonPath("$.baseUnitsPerInner").doesNotExist());
+    }
+
     private String createOption(String packUnit, String units, String label, String price, int sortOrder)
             throws Exception {
         String payload = """

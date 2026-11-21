@@ -45,6 +45,7 @@ import zelisline.ub.restaurant.api.dto.OrderDtos.TableResponse;
 import zelisline.ub.restaurant.api.dto.OrderDtos.VoidLineRequest;
 import zelisline.ub.restaurant.application.BillService;
 import zelisline.ub.restaurant.application.DineInService;
+import zelisline.ub.restaurant.application.OrderActivityService;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.application.BranchResolutionService;
 import zelisline.ub.till.application.TillDeviceService;
@@ -72,10 +73,23 @@ public class RestaurantOrdersController {
 
     private final DineInService dineInService;
     private final BillService billService;
+    private final OrderActivityService orderActivityService;
     private final BranchResolutionService branchResolutionService;
     private final CurrentUserPermissions currentUserPermissions;
 
     // ------------------------------------------------------------------ tables
+
+    /**
+     * What has happened to this order: dishes cancelled after they went to the kitchen, bills
+     * comped or left unpaid, the order moved, merged or cancelled, the waiter changed.
+     */
+    @GetMapping("/open-orders/{orderId}/activity")
+    @PreAuthorize(SEE_FLOOR)
+    public List<zelisline.ub.restaurant.api.dto.OrderDtos.OrderActivityResponse> activity(
+            @PathVariable String orderId, HttpServletRequest request) {
+        String businessId = orderBranchChecked(request, orderId);
+        return orderActivityService.forOrder(businessId, orderId);
+    }
 
     @GetMapping("/tables")
     @PreAuthorize(SEE_FLOOR)
@@ -124,7 +138,8 @@ public class RestaurantOrdersController {
     @GetMapping("/floor")
     @PreAuthorize(SEE_FLOOR)
     public FloorResponse floor(@RequestParam String branchId, HttpServletRequest request) {
-        return dineInService.floor(business(request), branch(request, branchId));
+        TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
+        return dineInService.floor(business(request), branch(request, branchId), caller.userId());
     }
 
     @PostMapping("/open-orders")
@@ -228,7 +243,8 @@ public class RestaurantOrdersController {
     @PreAuthorize(SERVE)
     public OrderResponse move(
             @PathVariable String orderId, @Valid @RequestBody MoveRequest body, HttpServletRequest request) {
-        return dineInService.move(orderBranchChecked(request, orderId), orderId, body.tableId());
+        TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
+        return dineInService.move(orderBranchChecked(request, orderId), orderId, body.tableId(), caller.userId());
     }
 
     /** Joins this order into another open order at the same branch; this one is closed. 409 if it has a bill. */
@@ -259,7 +275,8 @@ public class RestaurantOrdersController {
     @PreAuthorize(SERVE)
     public OrderResponse setDetails(
             @PathVariable String orderId, @Valid @RequestBody OrderDetailsRequest body, HttpServletRequest request) {
-        return dineInService.setDetails(orderBranchChecked(request, orderId), orderId, body);
+        TenantPrincipal caller = CurrentTenantUser.requireHuman(request);
+        return dineInService.setDetails(orderBranchChecked(request, orderId), orderId, body, caller.userId());
     }
 
     @PostMapping("/open-orders/{orderId}/bill-requested")

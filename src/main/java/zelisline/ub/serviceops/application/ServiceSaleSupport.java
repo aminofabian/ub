@@ -69,7 +69,8 @@ public class ServiceSaleSupport {
         }
         return new ServiceLine(
                 service.getId(),
-                service.getName(),
+                // The sale, and so the receipt, carries the name the shop chose to show customers.
+                service.soldAsName(),
                 service.getDurationMinutes(),
                 service.getPrice(),
                 service.isPriceIsVariable(),

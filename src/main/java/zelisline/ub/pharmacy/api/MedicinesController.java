@@ -40,6 +40,7 @@ import zelisline.ub.tenancy.api.TenantRequestIds;
 public class MedicinesController {
 
     private final MedicineDetailsService medicineDetailsService;
+    private final zelisline.ub.pharmacy.application.ProductReviewService productReviewService;
     private final zelisline.ub.pharmacy.application.DispensingGate dispensingGate;
 
     /**
@@ -70,6 +71,22 @@ public class MedicinesController {
         CurrentTenantUser.require(request);
         return medicineDetailsService.list(
                 TenantRequestIds.resolveBusinessId(request), dispensingClass, q, page, size);
+    }
+
+    /** Products added since the last check that are not marked as medicines. */
+    @GetMapping("/to-review")
+    @PreAuthorize("hasPermission(null, 'pharmacy.manage')")
+    public zelisline.ub.pharmacy.application.ProductReviewService.ToReview toReview(HttpServletRequest request) {
+        return productReviewService.toReview(TenantRequestIds.resolveBusinessId(request));
+    }
+
+    /** Confirms that what is left on that list is not a medicine. */
+    @PostMapping("/to-review/done")
+    @PreAuthorize("hasPermission(null, 'pharmacy.manage')")
+    public zelisline.ub.pharmacy.application.ProductReviewService.ToReview reviewed(HttpServletRequest request) {
+        zelisline.ub.platform.security.TenantPrincipal user =
+                zelisline.ub.platform.security.CurrentTenantUser.requireHuman(request);
+        return productReviewService.markReviewed(TenantRequestIds.resolveBusinessId(request), user.userId());
     }
 
     @GetMapping("/counts")

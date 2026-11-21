@@ -94,6 +94,7 @@ public class SaleRefundService {
     private final ShiftRepository shiftRepository;
     private final InventoryBatchRepository inventoryBatchRepository;
     private final zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry;
+    private final zelisline.ub.pharmacy.application.DispensingRefundService dispensingRefundService;
     private final StockMovementRepository stockMovementRepository;
     private final ItemRepository itemRepository;
     private final SupplyBatchRepository supplyBatchRepository;
@@ -212,6 +213,12 @@ public class SaleRefundService {
                 jeId
         );
         finalizeSaleRefundTotals(sale, comp.totalMoney());
+        // A dispensed medicine that came back: the dispensing record says so (ADR 0034, Phase 0).
+        Map<String, BigDecimal> returnedBySaleItem = new java.util.LinkedHashMap<>();
+        for (RefundRow row : comp.rows()) {
+            returnedBySaleItem.merge(row.saleItem().getId(), row.quantity(), BigDecimal::add);
+        }
+        dispensingRefundService.applyRefund(businessId, saleId, returnedBySaleItem, userId);
         publishRefundEvents(businessId, sale, refund, shift, userId, pays);
 
         return toRefundResponse(refund);

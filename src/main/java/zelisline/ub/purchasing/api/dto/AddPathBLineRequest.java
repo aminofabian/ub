@@ -18,11 +18,19 @@ public record AddPathBLineRequest(
         @Positive BigDecimal draftUnitCost,
         @DecimalMin("0.01") BigDecimal draftSellPrice,
         LocalDate draftExpiryDate,
-        /** Saved item pack option. When set, {@code draftQty} is the number of packs
+        /** Saved item pack option. When set, {@code purchaseQty} is the number of packs
          *  and the server expands it to stock units + unit cost authoritatively. */
         @Size(max = 36) String packOptionId,
         /** Manufacturer's lot number; required at post time when the item is a medicine. */
-        @Size(max = 64) String draftLotNumber
+        @Size(max = 64) String draftLotNumber,
+        /** Purchase unit the buyer typed ("carton", "bale", "sack"…). */
+        @Size(max = 32) String purchaseUnit,
+        /** Number of purchase units (packs) bought. Null = legacy unit-mode line. */
+        @Positive BigDecimal purchaseQty,
+        /** Base items in one purchase unit. Used for inline (unsaved) custom packs. */
+        @DecimalMin(value = "0.0001", message = "unitsPerPurchaseUnit must be positive") BigDecimal unitsPerPurchaseUnit,
+        /** Price of one purchase unit. Optional; derived from the line total when absent. */
+        @DecimalMin("0") BigDecimal packPrice
 ) {
 
     public AddPathBLineRequest(
@@ -36,6 +44,21 @@ public record AddPathBLineRequest(
             String packOptionId
     ) {
         this(description, amountMoney, suggestedItemId, draftQty, draftUnitCost, draftSellPrice,
-                draftExpiryDate, packOptionId, null);
+                draftExpiryDate, packOptionId, null, null, null, null, null);
+    }
+
+    public AddPathBLineRequest(
+            String description,
+            BigDecimal amountMoney,
+            String suggestedItemId,
+            BigDecimal draftQty,
+            BigDecimal draftUnitCost,
+            BigDecimal draftSellPrice,
+            LocalDate draftExpiryDate,
+            String packOptionId,
+            String draftLotNumber
+    ) {
+        this(description, amountMoney, suggestedItemId, draftQty, draftUnitCost, draftSellPrice,
+                draftExpiryDate, packOptionId, draftLotNumber, null, null, null, null);
     }
 }

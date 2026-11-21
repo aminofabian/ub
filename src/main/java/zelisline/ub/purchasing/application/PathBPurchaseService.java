@@ -194,7 +194,7 @@ public class PathBPurchaseService {
         line.setSuggestedItemId(blankToNull(req.suggestedItemId()));
         line.setPackOptionId(blankToNull(req.packOptionId()));
         applyDraftLineFields(line, req);
-        applyPackOptionExpansion(businessId, line);
+        applyPurchasePackaging(businessId, line, req);
         line.setLineStatus(PurchasingConstants.LINE_PENDING);
         lineRepository.save(line);
         return toLineResponse(line);
@@ -222,7 +222,7 @@ public class PathBPurchaseService {
         line.setSuggestedItemId(blankToNull(req.suggestedItemId()));
         line.setPackOptionId(blankToNull(req.packOptionId()));
         applyDraftLineFields(line, req);
-        applyPackOptionExpansion(businessId, line);
+        applyPurchasePackaging(businessId, line, req);
         lineRepository.save(line);
         return toLineResponse(line);
     }
@@ -341,14 +341,18 @@ public class PathBPurchaseService {
             postedLines.add(line);
             Item item = itemRepository.findByIdAndBusinessIdAndDeletedAtIsNull(br.itemId(), businessId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found"));
-            purchaseUnitConversionService.assertMatchesPosted(
-                    businessId,
-                    session.getSupplierId(),
-                    br.itemId(),
-                    br.usableQty(),
-                    br.purchaseQty(),
-                    br.purchaseUnit()
-            );
+            validatePackagingAgainstDraft(line, br);
+            if (line.getUnitsPerPurchaseUnit() == null
+                    || line.getUnitsPerPurchaseUnit().compareTo(BigDecimal.ONE) <= 0) {
+                purchaseUnitConversionService.assertMatchesPosted(
+                        businessId,
+                        session.getSupplierId(),
+                        br.itemId(),
+                        br.usableQty(),
+                        br.purchaseQty(),
+                        br.purchaseUnit()
+                );
+            }
             CostSplit split = splitLine(line.getAmountMoney(), br.usableQty(), br.wastageQty());
             String lot = zelisline.ub.pharmacy.application.MedicineReceivingGuard.normalizeLot(
                     br.lotNumber() != null && !br.lotNumber().isBlank() ? br.lotNumber() : line.getDraftLotNumber());
@@ -415,6 +419,8 @@ public class PathBPurchaseService {
         inv.setStatus(PurchasingConstants.INVOICE_POSTED);
         supplierInvoiceRepository.save(inv);
 
+        Map<String, Item> itemByLineId = plans.stream()
+                .collect(Collectors.toMap(p -> p.line().getId(), LinePostPlan::item));
         int sort = 0;
         for (RawPurchaseLine line : postedLines) {
             BigDecimal qty = line.getUsableQty().add(line.getWastageQty());
@@ -428,6 +434,8 @@ public class PathBPurchaseService {
             sil.setLineTotal(line.getAmountMoney().setScale(2, RoundingMode.HALF_UP));
             sil.setSortOrder(sort++);
             sil.setRawLineId(line.getId());
+            snapshotInvoiceLinePackaging(sil, line, breakdownByLineId.get(line.getId()),
+                    itemByLineId.get(line.getId()));
             supplierInvoiceLineRepository.save(sil);
         }
 
@@ -710,32 +718,204 @@ public class PathBPurchaseService {
     }
 
     /**
-     * When the line names a saved pack option, {@code draftQty} is the pack count;
-     * expand authoritatively to stock units + unit cost (packPrice / unitsPerPack).
-     * Unit and custom-pack lines keep the client-supplied draft values untouched.
+     * Resolves the packaging the buyer entered and expands it to base stock units.
+     *
+     * <p>Priority: a saved item pack option (authoritative size) → an inline custom pack
+     * ({@code unitsPerPurchaseUnit} + {@code purchaseQty}) → legacy unit mode. The expanded
+     * {@code draftQty} is what reaches the shelf; the pack values are snapshotted on the line
+     * so a reloaded draft still shows "5 cartons × 24" instead of 120 pieces.
      */
-    private void applyPackOptionExpansion(String businessId, RawPurchaseLine line) {
-        String packOptionId = line.getPackOptionId();
-        if (packOptionId == null) {
+    private void applyPurchasePackaging(String businessId, RawPurchaseLine line, AddPathBLineRequest req) {
+        String itemId = line.getSuggestedItemId();
+        Item item = itemId == null ? null : itemRepository
+                .findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId).orElse(null);
+        if (itemId != null && item == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Item not found");
+        }
+
+        BigDecimal unitsPerPurchaseUnit = null;
+        String purchaseUnit = blankToNull(req.purchaseUnit());
+        BigDecimal packPrice = req.packPrice();
+        String packOptionId = blankToNull(req.packOptionId());
+
+        if (packOptionId != null) {
+            if (itemId == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "packOptionId requires suggestedItemId");
+            }
+            ItemPackOption option = itemPackOptionRepository
+                    .findByIdAndBusinessIdAndItemId(packOptionId, businessId, itemId)
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST, "Pack option does not belong to this item"));
+            if (!option.isActive()) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Pack option is no longer available");
+            }
+            if (req.unitsPerPurchaseUnit() != null
+                    && req.unitsPerPurchaseUnit().compareTo(option.getUnitsPerPack()) != 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "The saved pack size changed; pick the pack again or enter a custom size");
+            }
+            unitsPerPurchaseUnit = option.getUnitsPerPack();
+            if (purchaseUnit == null) {
+                purchaseUnit = option.getPackUnit();
+            }
+            if (packPrice == null) {
+                packPrice = option.getDefaultPackPrice();
+            }
+        } else if (req.unitsPerPurchaseUnit() != null
+                && req.unitsPerPurchaseUnit().compareTo(BigDecimal.ONE) > 0) {
+            unitsPerPurchaseUnit = req.unitsPerPurchaseUnit();
+            if (purchaseUnit == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "A custom pack needs a purchase unit (carton, bale, sack…)");
+            }
+        }
+
+        // Old clients send only the expanded qty; when a pack is present that qty is the pack count.
+        BigDecimal purchaseQty = req.purchaseQty() != null ? req.purchaseQty() : req.draftQty();
+
+        if (unitsPerPurchaseUnit != null && purchaseQty != null) {
+            BigDecimal baseQty = purchaseQty.multiply(unitsPerPurchaseUnit)
+                    .setScale(UNIT_SCALE, RoundingMode.HALF_UP);
+            if (baseQty.signum() > 0) {
+                line.setDraftQty(baseQty);
+                line.setDraftUnitCost(line.getAmountMoney()
+                        .divide(baseQty, UNIT_SCALE, RoundingMode.HALF_UP));
+            }
+            if (packPrice == null) {
+                packPrice = line.getAmountMoney()
+                        .divide(purchaseQty, UNIT_SCALE, RoundingMode.HALF_UP);
+            }
+            line.setPurchaseUnit(purchaseUnit);
+            line.setPurchaseQty(purchaseQty);
+            line.setUnitsPerPurchaseUnit(unitsPerPurchaseUnit);
+            line.setPackPrice(packPrice);
             return;
         }
-        String itemId = line.getSuggestedItemId();
-        if (itemId == null) {
+
+        // Unit mode: one purchase unit is one base unit.
+        if (purchaseQty != null) {
+            line.setPurchaseQty(purchaseQty);
+            line.setUnitsPerPurchaseUnit(BigDecimal.ONE);
+        } else {
+            line.setUnitsPerPurchaseUnit(null);
+        }
+        line.setPurchaseUnit(purchaseUnit != null ? purchaseUnit : unitTypeOf(item));
+        line.setPackPrice(packPrice);
+    }
+
+    /**
+     * The stored draft line is the source of truth for a packaged line. A post whose
+     * {@code usableQty + wastageQty} disagrees with {@code purchaseQty × unitsPerPurchaseUnit}
+     * is rejected rather than silently inflating or losing stock.
+     */
+    private static void validatePackagingAgainstDraft(RawPurchaseLine line, PostPathBLineBreakdown br) {
+        BigDecimal storedUnits = line.getUnitsPerPurchaseUnit();
+        if (storedUnits != null && br.unitsPerPurchaseUnit() != null
+                && storedUnits.compareTo(br.unitsPerPurchaseUnit()) != 0) {
             throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST, "packOptionId requires suggestedItemId");
+                    HttpStatus.CONFLICT,
+                    "The pack size changed after this line was added; remove and re-add the line");
         }
-        ItemPackOption option = itemPackOptionRepository
-                .findByIdAndBusinessIdAndItemId(packOptionId, businessId, itemId)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST, "Pack option does not belong to this item"));
-        if (line.getDraftQty() != null) {
-            line.setDraftQty(line.getDraftQty()
-                    .multiply(option.getUnitsPerPack())
-                    .setScale(UNIT_SCALE, RoundingMode.HALF_UP));
+        BigDecimal units = br.unitsPerPurchaseUnit() != null ? br.unitsPerPurchaseUnit() : storedUnits;
+        if (units == null || units.compareTo(BigDecimal.ONE) <= 0) {
+            return;
         }
-        if (option.getDefaultPackPrice() != null) {
-            line.setDraftUnitCost(option.getDefaultPackPrice()
-                    .divide(option.getUnitsPerPack(), UNIT_SCALE, RoundingMode.HALF_UP));
+        BigDecimal packs = br.purchaseQty() != null ? br.purchaseQty() : line.getPurchaseQty();
+        if (packs == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Purchase quantity is required for a packaged line");
+        }
+        BigDecimal expected = packs.multiply(units).setScale(UNIT_SCALE, RoundingMode.HALF_UP);
+        BigDecimal posted = br.usableQty().add(br.wastageQty())
+                .setScale(UNIT_SCALE, RoundingMode.HALF_UP);
+        if (posted.compareTo(expected) != 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Received quantity does not match the packaging: " + packs.toPlainString()
+                            + " × " + units.toPlainString() + " = " + expected.toPlainString()
+                            + " base units, but " + posted.toPlainString() + " were posted");
+        }
+    }
+
+    private static String unitTypeOf(Item item) {
+        return item == null ? null : blankToNull(item.getUnitType());
+    }
+
+    /**
+     * Copies the packaging used on a receipt onto its posted invoice line. History keeps the
+     * numbers as they were at post time; later pack-option edits never touch these columns.
+     */
+    private static void snapshotInvoiceLinePackaging(
+            SupplierInvoiceLine sil,
+            RawPurchaseLine line,
+            PostPathBLineBreakdown br,
+            Item item
+    ) {
+        String purchaseUnit = line.getPurchaseUnit();
+        if (purchaseUnit == null && br != null) {
+            purchaseUnit = blankToNull(br.purchaseUnit());
+        }
+        BigDecimal purchaseQty = line.getPurchaseQty() != null
+                ? line.getPurchaseQty()
+                : (br != null ? br.purchaseQty() : null);
+        BigDecimal units = line.getUnitsPerPurchaseUnit() != null
+                ? line.getUnitsPerPurchaseUnit()
+                : (br != null ? br.unitsPerPurchaseUnit() : null);
+        BigDecimal packPrice = line.getPackPrice() != null
+                ? line.getPackPrice()
+                : (br != null ? br.packPrice() : null);
+        String packOptionId = line.getPackOptionId() != null
+                ? line.getPackOptionId()
+                : (br != null ? blankToNull(br.packOptionId()) : null);
+        sil.setPackOptionId(packOptionId);
+        sil.setPurchaseUnit(purchaseUnit);
+        sil.setPurchaseQty(purchaseQty);
+        sil.setUnitsPerPurchaseUnit(units);
+        sil.setPackPrice(packPrice);
+        sil.setBaseUnit(item == null ? null : blankToNull(item.getUnitType()));
+
+        // Older drafts carried no packaging snapshot; fill it so a reversed line reopens with packs.
+        if (line.getPurchaseUnit() == null) {
+            line.setPurchaseUnit(purchaseUnit);
+            line.setPurchaseQty(purchaseQty);
+            line.setUnitsPerPurchaseUnit(units);
+            line.setPackPrice(packPrice);
+        }
+    }
+
+    /**
+     * Keeps an edited invoice line honest: a quantity that is still a whole number of packs
+     * refreshes the pack count and pack price; anything else drops the pack view instead of
+     * pretending the edit was made in packs.
+     */
+    private static void resyncInvoiceLinePackaging(
+            SupplierInvoiceLine sil,
+            BigDecimal qty,
+            BigDecimal lineTotal
+    ) {
+        BigDecimal units = sil.getUnitsPerPurchaseUnit();
+        if (units == null || units.compareTo(BigDecimal.ONE) <= 0) {
+            sil.setPurchaseQty(qty);
+            sil.setPackPrice(qty.signum() > 0
+                    ? lineTotal.divide(qty, UNIT_SCALE, RoundingMode.HALF_UP)
+                    : null);
+            return;
+        }
+        BigDecimal packs = qty.divide(units, UNIT_SCALE, RoundingMode.HALF_UP);
+        BigDecimal whole = packs.setScale(0, RoundingMode.HALF_UP);
+        if (whole.signum() > 0 && whole.multiply(units).compareTo(qty) == 0) {
+            sil.setPurchaseQty(whole);
+            sil.setPackPrice(lineTotal.divide(whole, UNIT_SCALE, RoundingMode.HALF_UP));
+        } else {
+            sil.setPurchaseUnit(null);
+            sil.setPurchaseQty(null);
+            sil.setUnitsPerPurchaseUnit(null);
+            sil.setPackPrice(null);
         }
     }
 
@@ -759,7 +939,11 @@ public class PathBPurchaseService {
                 l.getDraftSellPrice(),
                 l.getDraftExpiryDate(),
                 l.getPackOptionId(),
-                l.getDraftLotNumber()
+                l.getDraftLotNumber(),
+                l.getPurchaseUnit(),
+                l.getPurchaseQty(),
+                l.getUnitsPerPurchaseUnit(),
+                l.getPackPrice()
         );
     }
 
@@ -1111,6 +1295,7 @@ public class PathBPurchaseService {
             sil.setQty(qty);
             sil.setUnitCost(unit);
             sil.setLineTotal(lineTotal);
+            resyncInvoiceLinePackaging(sil, qty, lineTotal);
             if (in.description() != null && !in.description().isBlank()) {
                 sil.setDescription(in.description().trim());
             }

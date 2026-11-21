@@ -105,6 +105,7 @@ public class SupplierService {
         s.setTaxExempt(Boolean.TRUE.equals(request.taxExempt()));
         s.setCreditTermsDays(request.creditTermsDays());
         s.setCreditLimit(request.creditLimit());
+        s.setDefaultMarkupPct(request.defaultMarkupPct());
         s.setStatus(firstOrDefault(request.status(), "active"));
         s.setNotes(blankToNull(request.notes()));
         s.setPaymentMethodPreferred(blankToNull(request.paymentMethodPreferred()));
@@ -193,6 +194,11 @@ public class SupplierService {
         }
         if (patch.creditLimit() != null) {
             s.setCreditLimit(patch.creditLimit());
+        }
+        if (Boolean.TRUE.equals(patch.clearDefaultMarkup())) {
+            s.setDefaultMarkupPct(null);
+        } else if (patch.defaultMarkupPct() != null) {
+            s.setDefaultMarkupPct(patch.defaultMarkupPct());
         }
         if (patch.status() != null) {
             String st = blankToNull(patch.status());
@@ -590,7 +596,8 @@ public class SupplierService {
                 s.getVersion(),
                 s.getCreatedAt(),
                 s.getUpdatedAt(),
-                s.getDeletedAt()
+                s.getDeletedAt(),
+                s.getDefaultMarkupPct()
         );
     }
 
@@ -628,6 +635,7 @@ public class SupplierService {
         snapshot.put("taxExempt", s.isTaxExempt());
         snapshot.put("creditTermsDays", s.getCreditTermsDays());
         snapshot.put("creditLimit", s.getCreditLimit());
+        snapshot.put("defaultMarkupPct", s.getDefaultMarkupPct());
         snapshot.put("status", s.getStatus());
         snapshot.put("notes", s.getNotes());
         snapshot.put("paymentMethodPreferred", s.getPaymentMethodPreferred());

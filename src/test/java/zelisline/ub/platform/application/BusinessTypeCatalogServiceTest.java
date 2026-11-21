@@ -48,8 +48,8 @@ class BusinessTypeCatalogServiceTest {
 
         List<BusinessTypeResponse> all = service.list(false);
 
-        // All 19 built-in codes are present, in order, with default copy and no image.
-        assertThat(all).hasSize(19);
+        // All 20 built-in codes are present, in order, with default copy and no image.
+        assertThat(all).hasSize(20);
         assertThat(all.get(0).code()).isEqualTo("butchery");
         BusinessTypeResponse bar = all.stream().filter(t -> t.code().equals("bar")).findFirst().orElseThrow();
         assertThat(bar.label()).isEqualTo("Bar");
@@ -105,7 +105,7 @@ class BusinessTypeCatalogServiceTest {
         when(repository.findAllByOrderByDisplayOrderAscCodeAsc()).thenReturn(List.of(bogus));
 
         assertThat(service.list(false).stream().anyMatch(t -> t.code().equals("casino"))).isFalse();
-        assertThat(service.list(false)).hasSize(19);
+        assertThat(service.list(false)).hasSize(20);
     }
 
     @Test

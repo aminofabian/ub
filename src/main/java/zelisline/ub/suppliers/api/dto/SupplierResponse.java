@@ -31,6 +31,7 @@ public record SupplierResponse(
         long version,
         Instant createdAt,
         Instant updatedAt,
-        Instant deletedAt
+        Instant deletedAt,
+        BigDecimal defaultMarkupPct
 ) {
 }

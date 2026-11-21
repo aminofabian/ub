@@ -55,6 +55,10 @@ public class DispensingRecord {
     @Column(name = "prescription_ref", length = 64)
     private String prescriptionRef;
 
+    /** The clinic prescription this was dispensed from, when there was one (ADR 0034). */
+    @Column(name = "prescription_id", length = 36)
+    private String prescriptionId;
+
     @Column(name = "prescription_date")
     private LocalDate prescriptionDate;
 

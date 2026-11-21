@@ -1,5 +1,6 @@
 package zelisline.ub.catalog.domain;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -45,6 +46,10 @@ public class ItemType {
 
     @Column(name = "is_default", nullable = false)
     private boolean isDefault = false;
+
+    /** Markup on cost. 25 means the selling price is 125% of the buying price. Null means no default. */
+    @Column(name = "default_markup_pct", precision = 9, scale = 4)
+    private BigDecimal defaultMarkupPct;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

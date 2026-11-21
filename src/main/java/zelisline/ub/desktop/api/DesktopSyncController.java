@@ -363,7 +363,8 @@ public class DesktopSyncController {
             t.getColor(),
             t.getSortOrder(),
             t.isActive(),
-            t.isDefault()
+            t.isDefault(),
+            t.getDefaultMarkupPct()
         );
     }
 
@@ -433,6 +434,7 @@ public class DesktopSyncController {
             s.getPayoutPaybillAccount(),
             s.getPrepaymentBalance(),
             "active".equalsIgnoreCase(s.getStatus()),
+            s.getDefaultMarkupPct(),
             supplierContactRepository
                 .findBySupplierIdOrderByPrimaryContactDescNameAsc(s.getId())
                 .stream()

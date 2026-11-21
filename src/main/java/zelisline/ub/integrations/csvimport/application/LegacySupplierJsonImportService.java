@@ -93,6 +93,7 @@ public class LegacySupplierJsonImportService {
                 null,
                 null,
                 null,
+                null,
                 null);
     }
 

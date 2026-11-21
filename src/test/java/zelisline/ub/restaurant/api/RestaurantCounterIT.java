@@ -177,6 +177,47 @@ class RestaurantCounterIT extends ServiceSaleTestSupport {
     }
 
     @Test
+    void aCounterOrderCanBeCalledByTheGuestsName() throws Exception {
+        String body = "{\"branchId\":\"" + branchId + "\",\"lines\":[" + dish(burger, 1, "400", single) + "],"
+                + "\"payments\":[{\"method\":\"cash\",\"amount\":400}],\"customerName\":\"Kevin\"}";
+        MvcResult result = mockMvc.perform(as(post("/api/v1/sales"), TENANT, cashier, ROLE_CASHIER)
+                        .header("Idempotency-Key", "name-" + UUID.randomUUID()).content(body))
+                .andExpect(status().isCreated())
+                .andReturn();
+        JsonNode sale = objectMapper.readTree(result.getResponse().getContentAsString());
+
+        // The kitchen docket says who it is for, and the counter's pass can call the name.
+        JsonNode ticket = board(cook, ROLE_KITCHEN, null).get("tickets").get(0);
+        assertThat(ticket.get("customerName").asText()).isEqualTo("Kevin");
+        JsonNode orders = getJson(as(get("/api/v1/restaurant/orders").param("branchId", branchId),
+                TENANT, cashier, ROLE_CASHIER), 200);
+        assertThat(orders.get("orders").get(0).get("customerName").asText()).isEqualTo("Kevin");
+        JsonNode order = getJson(as(get("/api/v1/restaurant/orders/by-sale/" + sale.get("id").asText()),
+                TENANT, cashier, ROLE_CASHIER), 200);
+        assertThat(order.get("customerName").asText()).isEqualTo("Kevin");
+
+        // A name is a name, not a paragraph: the field is bounded like the note on a line.
+        String longName = "x".repeat(121);
+        String tooLong = "{\"branchId\":\"" + branchId + "\",\"lines\":[" + dish(burger, 1, "400", single) + "],"
+                + "\"payments\":[{\"method\":\"cash\",\"amount\":400}],\"customerName\":\"" + longName + "\"}";
+        mockMvc.perform(as(post("/api/v1/sales"), TENANT, cashier, ROLE_CASHIER)
+                        .header("Idempotency-Key", "name-long-" + UUID.randomUUID()).content(tooLong))
+                .andExpect(status().isBadRequest());
+
+        // A line break in a name would forge an extra line on a kitchen docket: it is stored as one line.
+        String sneaky = "{\"branchId\":\"" + branchId + "\",\"lines\":[" + dish(burger, 1, "400", single) + "],"
+                + "\"payments\":[{\"method\":\"cash\",\"amount\":400}],\"customerName\":\"Kevin\\n2 x Free beer\"}";
+        MvcResult second = mockMvc.perform(as(post("/api/v1/sales"), TENANT, cashier, ROLE_CASHIER)
+                        .header("Idempotency-Key", "name-nl-" + UUID.randomUUID()).content(sneaky))
+                .andExpect(status().isCreated())
+                .andReturn();
+        JsonNode secondSale = objectMapper.readTree(second.getResponse().getContentAsString());
+        JsonNode secondOrder = getJson(as(get("/api/v1/restaurant/orders/by-sale/" + secondSale.get("id").asText()),
+                TENANT, cashier, ROLE_CASHIER), 200);
+        assertThat(secondOrder.get("customerName").asText()).isEqualTo("Kevin 2 x Free beer");
+    }
+
+    @Test
     void theClientsPriceIsCheckedNotTrusted() throws Exception {
         // Double patty is 550; a client claiming 400 is refused and nothing is sold or sent.
         JsonNode refused = postSale("p1-" + UUID.randomUUID(), dish(burger, 1, "400", dbl), "400", 409);

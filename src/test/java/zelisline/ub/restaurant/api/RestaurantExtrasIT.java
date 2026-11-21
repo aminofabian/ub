@@ -1,6 +1,7 @@
 package zelisline.ub.restaurant.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -577,6 +578,32 @@ class RestaurantExtrasIT extends ServiceSaleTestSupport {
         cashierPost("/open-orders/" + orderId + "/send", "", 200);
         assertThat(ticketRepository.count()).isEqualTo(1);
 
+        // The diner sees what they ordered, what it costs and where it is — nothing about staff or the customer.
+        JsonNode status = objectMapper.readTree(mockMvc.perform(get(publicBase + token + "/status"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertThat(status.get("orderNumber").asLong()).isEqualTo(placed.get("orderNumber").asLong());
+        assertThat(status.get("total").decimalValue()).isEqualByComparingTo("1200.00");
+        assertThat(status.get("due").decimalValue()).isEqualByComparingTo("1200.00");
+        assertThat(status.get("billRequested").asBoolean()).isFalse();
+        assertThat(status.get("lines").get(0).get("stage").asText()).isEqualTo("NEW");
+        assertThat(status.has("customerName")).isFalse();
+        assertThat(status.has("servedByName")).isFalse();
+
+        // "Please bring the bill" sets the same flag the floor shows; asking twice changes nothing.
+        // Its own client address: the public write limit is per address and this test has spent the
+        // order POSTs' allowance already.
+        String caller = "198.51.100.10";
+        JsonNode asked = objectMapper.readTree(mockMvc.perform(post(publicBase + token + "/bill")
+                        .header("X-Forwarded-For", caller))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertThat(asked.get("billRequested").asBoolean()).isTrue();
+        assertThat(objectMapper.readTree(mockMvc.perform(post(publicBase + token + "/bill")
+                                .header("X-Forwarded-For", caller))
+                        .andExpect(status().isOk()).andReturn().getResponse().getContentAsString())
+                .get("billRequested").asBoolean()).isTrue();
+        JsonNode askedFloor = getJson(as(get("/api/v1/restaurant/floor").param("branchId", branchId), TENANT, cashier, ROLE_CASHIER), 200);
+        assertThat(askedFloor.get("tables").get(0).get("orders").get(0).get("billRequestedAt").isNull()).isFalse();
+
         // What a stranger can and cannot do with the code.
         publicPost(publicBase + token, "{\"requestId\":\"" + UUID.randomUUID() + "\",\"lines\":[]}", 400);
         publicPost(publicBase + token, "{\"requestId\":\"" + UUID.randomUUID() + "\",\"lines\":[{\"menuItemId\":\"" + burger
@@ -586,7 +613,10 @@ class RestaurantExtrasIT extends ServiceSaleTestSupport {
         publicPost(publicBase + token, "{\"requestId\":\"x\",\"lines\":[{\"menuItemId\":\"" + burger + "\",\"quantity\":1}]}", 400);
         // A code used under another shop's name, a made-up code, and a code that was replaced all look the same.
         mockMvc.perform(get("/api/v1/public/businesses/other-sale/table-orders/" + token)).andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/public/businesses/other-sale/table-orders/" + token + "/status"))
+                .andExpect(status().isNotFound());
         mockMvc.perform(get(publicBase + "0".repeat(48))).andExpect(status().isNotFound());
+        mockMvc.perform(get(publicBase + "0".repeat(48) + "/status")).andExpect(status().isNotFound());
         String fresh = ownerPost("/api/v1/restaurant/tables/" + table1 + "/qr", "{\"enabled\":true}", 200).get("qrToken").asText();
         assertThat(fresh).isNotEqualTo(token);
         mockMvc.perform(get(publicBase + token)).andExpect(status().isNotFound());
@@ -595,6 +625,66 @@ class RestaurantExtrasIT extends ServiceSaleTestSupport {
         // Switched off again, the new code stops too.
         send(as(put("/api/v1/restaurant/settings"), TENANT, owner, ROLE_OWNER), "{\"qrOrdering\":false}", 200);
         mockMvc.perform(get(publicBase + fresh)).andExpect(status().isNotFound());
+        mockMvc.perform(get(publicBase + fresh + "/status")).andExpect(status().isNotFound());
+        mockMvc.perform(post(publicBase + fresh + "/bill").header("X-Forwarded-For", caller))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void aCustomerCanTakeOffALineBeforeStaffSendIt() throws Exception {
+        String publicBase = "/api/v1/public/businesses/kinyozi-sale/table-orders/";
+        String token = ownerPost("/api/v1/restaurant/tables/" + table1 + "/qr", "{\"enabled\":true}", 200)
+                .get("qrToken").asText();
+        send(as(put("/api/v1/restaurant/settings"), TENANT, owner, ROLE_OWNER), "{\"qrOrdering\":true}", 200);
+        // Its own address, so the public write budget is this test's, not the class's.
+        String ip = "203.0.113.77";
+
+        publicPostFrom(publicBase + token, "{\"requestId\":\"" + UUID.randomUUID()
+                + "\",\"lines\":[{\"menuItemId\":\"" + burger + "\",\"quantity\":2}]}", ip, 201);
+        publicPostFrom(publicBase + token, "{\"requestId\":\"" + UUID.randomUUID()
+                + "\",\"lines\":[{\"menuItemId\":\"" + burger + "\",\"quantity\":1}]}", ip, 201);
+
+        JsonNode status = publicGetFrom(publicBase + token + "/status", ip);
+        assertThat(status.get("total").decimalValue()).isEqualByComparingTo("1200.00");
+        String mine = status.get("lines").get(0).get("id").asText();
+        assertThat(status.get("lines").get(0).get("removable").asBoolean()).isTrue();
+
+        // A line staff added is not the diner's to remove — and the answer does not say whose it is.
+        JsonNode floor = getJson(as(get("/api/v1/restaurant/floor").param("branchId", branchId), TENANT, cashier, ROLE_CASHIER), 200);
+        String orderId = floor.get("tables").get(0).get("orders").get(0).get("orderId").asText();
+        cashierPost("/open-orders/" + orderId + "/lines",
+                "{\"lines\":[{\"clientLineId\":\"staff-1\",\"menuItemId\":\"" + burger + "\",\"quantity\":1}]}", 200);
+        JsonNode withStaff = publicGetFrom(publicBase + token + "/status", ip);
+        String staffLine = null;
+        for (JsonNode line : withStaff.get("lines")) {
+            if (!line.get("removable").asBoolean()) {
+                staffLine = line.get("id").asText();
+            }
+        }
+        assertThat(staffLine).isNotNull();
+        mockMvc.perform(delete(publicBase + token + "/lines/" + staffLine).header("X-Forwarded-For", ip))
+                .andExpect(status().isNotFound());
+
+        // The diner's own line comes off and the total follows.
+        JsonNode after = objectMapper.readTree(mockMvc.perform(delete(publicBase + token + "/lines/" + mine)
+                        .header("X-Forwarded-For", ip))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertThat(after.get("total").decimalValue()).isEqualByComparingTo("800.00");
+        String remaining = null;
+        for (JsonNode line : after.get("lines")) {
+            if (line.get("removable").asBoolean()) {
+                remaining = line.get("id").asText();
+            }
+        }
+        assertThat(remaining).isNotNull();
+
+        // Once staff send it, the kitchen has it: the phone cannot take it back.
+        cashierPost("/open-orders/" + orderId + "/send", "", 200);
+        mockMvc.perform(delete(publicBase + token + "/lines/" + remaining).header("X-Forwarded-For", ip))
+                .andExpect(status().isConflict());
+        // A made-up line is not found, like a made-up code.
+        mockMvc.perform(delete(publicBase + token + "/lines/" + UUID.randomUUID()).header("X-Forwarded-For", ip))
+                .andExpect(status().isNotFound());
     }
 
     @Test
@@ -644,6 +734,20 @@ class RestaurantExtrasIT extends ServiceSaleTestSupport {
                 .andExpect(status().is(expected)).andReturn();
         String text = result.getResponse().getContentAsString();
         return text.isBlank() ? objectMapper.createObjectNode() : objectMapper.readTree(text);
+    }
+
+    /** A public POST from a stated client address, so one test does not spend another's rate limit. */
+    private JsonNode publicPostFrom(String path, String body, String address, int expected) throws Exception {
+        MvcResult result = mockMvc.perform(post(path).header("X-Forwarded-For", address)
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().is(expected)).andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString());
+    }
+
+    private JsonNode publicGetFrom(String path, String address) throws Exception {
+        MvcResult result = mockMvc.perform(get(path).header("X-Forwarded-For", address))
+                .andExpect(status().isOk()).andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString());
     }
 
     private JsonNode cashierPost(String path, String body, int expected) throws Exception {

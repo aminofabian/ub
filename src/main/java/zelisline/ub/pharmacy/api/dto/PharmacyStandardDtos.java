@@ -32,6 +32,7 @@ public final class PharmacyStandardDtos {
 
     public record PatientResponse(
             String id,
+            Long patientNo,
             String name,
             String phone,
             LocalDate dateOfBirth,
@@ -44,7 +45,12 @@ public final class PharmacyStandardDtos {
     }
 
     /** What the till may see when it looks a patient up by phone: enough to pick the right person. */
-    public record PatientMatch(String id, String name, String phone, String allergies) {
+    /**
+     * What the till gets back for a phone or patient number. {@code ageYears} tells people on one
+     * phone apart without sending a date of birth to the till.
+     */
+    public record PatientMatch(
+            String id, Long patientNo, String name, String phone, Integer ageYears, String allergies) {
     }
 
     public record PatientPage(List<PatientResponse> patients, long total, int page, int size) {

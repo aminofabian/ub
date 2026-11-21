@@ -47,7 +47,9 @@ public record DispensingRecordResponse(
             /** Set when the prescription asked for more than this line supplied. */
             BigDecimal quantityPrescribed,
             LocalDate refillDueOn,
-            String settlesLineId
+            String settlesLineId,
+            /** How much came back on a refund; null when nothing has. */
+            BigDecimal quantityReturned
     ) {
     }
 }

@@ -1,6 +1,8 @@
 package zelisline.ub.restaurant.application;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -25,6 +27,8 @@ import zelisline.ub.restaurant.api.dto.OrderDtos.PublicOption;
 import zelisline.ub.restaurant.api.dto.OrderDtos.PublicOrderConfirmation;
 import zelisline.ub.restaurant.api.dto.OrderDtos.PublicOrderLine;
 import zelisline.ub.restaurant.api.dto.OrderDtos.PublicOrderRequest;
+import zelisline.ub.restaurant.api.dto.OrderDtos.PublicOrderStatus;
+import zelisline.ub.restaurant.api.dto.OrderDtos.PublicStatusLine;
 import zelisline.ub.restaurant.api.dto.OrderDtos.PublicTableMenu;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.MenuItemResponse;
 import zelisline.ub.restaurant.api.dto.RestaurantDtos.MenuResponse;
@@ -189,12 +193,7 @@ public class PublicTableOrderService {
             throw notFound();
         }
         // The newest open order at the table that is not a booking; else a new one for this table.
-        OrderTicketService.Order target = null;
-        for (OrderTicketService.Order open : orderTicketService.openOrders(business.getId(), table.branchId())) {
-            if (table.id().equals(open.tableResourceId()) && !open.isBooked()) {
-                target = open;
-            }
-        }
+        OrderTicketService.Order target = openOrderAt(business.getId(), table.branchId(), table.id());
         if (target == null) {
             // Opening is idempotent on the request id, so a phone that retries opens one order, not two.
             // Two phones at an empty table at the same instant can still open one each; staff see
@@ -218,6 +217,115 @@ public class PublicTableOrderService {
         var updated = dineInService.addLines(business.getId(), target.id(), lines);
         return new PublicOrderConfirmation(updated.orderNumber(), table.name(), updated.lines().size() - before,
                 updated.total());
+    }
+
+    /**
+     * What the diner's table has ordered and still owes. Read-only, and deliberately narrow: line
+     * names, quantities, amounts and kitchen stages, plus whether the bill has been asked for. No
+     * customer name or phone, no staff name, no bill internals.
+     */
+    @Transactional(readOnly = true)
+    public PublicOrderStatus status(String slug, String token, String clientAddress) {
+        if (!allow("r:" + clientAddress, READS_PER_MINUTE)) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Too many requests; wait a moment");
+        }
+        Business business = requireBusiness(slug);
+        ServiceResourceService.TableRecord table = requireTable(business, token);
+        return statusOf(business, table, openOrderAt(business.getId(), table.branchId(), table.id()));
+    }
+
+    /**
+     * The diner asks for the bill. The floor already treats "bill requested" as a table that needs
+     * someone, so this uses the same flag staff see. Repeating it changes nothing.
+     */
+    @Transactional
+    public PublicOrderStatus requestBill(String slug, String token, String clientAddress) {
+        if (!allow("w:" + clientAddress, WRITES_PER_MINUTE)) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Too many requests; wait a moment");
+        }
+        Business business = requireBusiness(slug);
+        ServiceResourceService.TableRecord table = requireTable(business, token);
+        OrderTicketService.Order order = openOrderAt(business.getId(), table.branchId(), table.id());
+        if (order == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Nothing has been ordered at this table yet");
+        }
+        if (order.billRequestedAt() == null) {
+            order = orderTicketService.requestBill(business.getId(), order.id(), true, Instant.now());
+        }
+        return statusOf(business, table, order);
+    }
+
+    /**
+     * Takes off a line this table's phone added, while staff have not sent it yet. A line staff added,
+     * or one already in the kitchen, cannot be removed here: the first is not the diner's to remove,
+     * and the second needs a person to stop the kitchen and record why. Both answer "not found" /
+     * "ask a member of staff" rather than saying whose line it is.
+     */
+    @Transactional
+    public PublicOrderStatus removeLine(String slug, String token, String orderLineId, String clientAddress) {
+        if (!allow("w:" + clientAddress, WRITES_PER_MINUTE)) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Too many requests; wait a moment");
+        }
+        Business business = requireBusiness(slug);
+        ServiceResourceService.TableRecord table = requireTable(business, token);
+        OrderTicketService.Order order = openOrderAt(business.getId(), table.branchId(), table.id());
+        if (order == null) {
+            throw notFound();
+        }
+        OrderTicketService.OrderLine line = order.lines().stream()
+                .filter(l -> l.id().equals(orderLineId))
+                .findFirst()
+                .orElseThrow(PublicTableOrderService::notFound);
+        if (!line.fromCustomer()) {
+            throw notFound();
+        }
+        if (!line.isDraft()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "That has gone to the kitchen; ask a member of staff to take it off");
+        }
+        dineInService.voidLine(business.getId(), order.id(), line.id(),
+                "Removed from the table's phone", null, false);
+        return statusOf(business, table, openOrderAt(business.getId(), table.branchId(), table.id()));
+    }
+
+    /** The table's open, non-booking order. Where two exist (two phones, one table), the last wins. */
+    private OrderTicketService.Order openOrderAt(String businessId, String branchId, String tableId) {
+        OrderTicketService.Order target = null;
+        for (OrderTicketService.Order open : orderTicketService.openOrders(businessId, branchId)) {
+            if (tableId.equals(open.tableResourceId()) && !open.isBooked()) {
+                target = open;
+            }
+        }
+        return target;
+    }
+
+    private PublicOrderStatus statusOf(
+            Business business, ServiceResourceService.TableRecord table, OrderTicketService.Order order) {
+        String currency = business.getCurrency() == null || business.getCurrency().isBlank()
+                ? "KES" : business.getCurrency();
+        if (order == null) {
+            return new PublicOrderStatus(business.getName(), table.name(), currency, null, "NONE", false,
+                    BigDecimal.ZERO.setScale(2), BigDecimal.ZERO.setScale(2), List.of());
+        }
+        Map<String, BigDecimal> settled = dineInService.settledQuantity(business.getId(), order.id());
+        BigDecimal total = BigDecimal.ZERO;
+        BigDecimal due = BigDecimal.ZERO;
+        List<PublicStatusLine> lines = new ArrayList<>();
+        for (OrderTicketService.OrderLine line : order.lines()) {
+            BigDecimal amount = line.lineTotal() == null ? BigDecimal.ZERO : line.lineTotal();
+            lines.add(new PublicStatusLine(line.id(), line.name(), line.quantity(), amount, line.stage(),
+                    line.isDraft() && line.fromCustomer()));
+            if (line.isVoided()) {
+                continue;
+            }
+            total = total.add(amount);
+            BigDecimal settledQty = settled.getOrDefault(line.id(), BigDecimal.ZERO);
+            BigDecimal onABill = line.unitPrice() == null ? BigDecimal.ZERO : line.unitPrice().multiply(settledQty);
+            due = due.add(amount.subtract(onABill).max(BigDecimal.ZERO));
+        }
+        return new PublicOrderStatus(business.getName(), table.name(), currency, order.orderNumber(), order.status(),
+                order.billRequestedAt() != null,
+                total.setScale(2, RoundingMode.HALF_UP), due.setScale(2, RoundingMode.HALF_UP), lines);
     }
 
     private Business requireBusiness(String slug) {

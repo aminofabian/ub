@@ -1290,6 +1290,7 @@ public class DesktopSyncPullService {
             itemType.setSortOrder(t.sortOrder());
             itemType.setActive(t.active());
             itemType.setDefault(t.isDefault());
+            itemType.setDefaultMarkupPct(t.defaultMarkupPct());
             itemTypeRepository.save(itemType);
             itemTypeIds.put(t.id(), t.id());
         }
@@ -1485,7 +1486,8 @@ public class DesktopSyncPullService {
             || !java.util.Objects.equals(s.getPayoutTillNumber(), d.payoutTillNumber())
             || !java.util.Objects.equals(s.getPayoutPaybillNumber(), d.payoutPaybillNumber())
             || !java.util.Objects.equals(s.getPayoutPaybillAccount(), d.payoutPaybillAccount())
-            || !bdEquals(s.getPrepaymentBalance(), d.prepaymentBalance());
+            || !bdEquals(s.getPrepaymentBalance(), d.prepaymentBalance())
+            || !bdEquals(s.getDefaultMarkupPct(), d.defaultMarkupPct());
     }
 
     private static void applySupplier(Supplier s, MasterDataSnapshot.SupplierData d) {
@@ -1513,6 +1515,7 @@ public class DesktopSyncPullService {
         if (d.prepaymentBalance() != null) {
             s.setPrepaymentBalance(d.prepaymentBalance());
         }
+        s.setDefaultMarkupPct(d.defaultMarkupPct());
         // deletedAt stays null — tombstoned rows are handled separately so a
         // live snapshot row always revives a local row an earlier tombstone hit.
         s.setDeletedAt(null);

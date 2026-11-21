@@ -41,6 +41,28 @@ public class PurchaseOrderLine {
     @Column(name = "unit_estimated_cost", nullable = false, precision = 14, scale = 4)
     private BigDecimal unitEstimatedCost;
 
+    /**
+     * Packaging as ordered (ADR 0036). {@code qtyOrdered} stays the expanded base quantity;
+     * these columns preserve "2 cartons × 24 @ 1,200" for the order, the supplier and history.
+     */
+    @Column(name = "pack_option_id", length = 36)
+    private String packOptionId;
+
+    @Column(name = "purchase_unit", length = 32)
+    private String purchaseUnit;
+
+    @Column(name = "purchase_qty", precision = 14, scale = 4)
+    private BigDecimal purchaseQty;
+
+    @Column(name = "units_per_purchase_unit", precision = 14, scale = 4)
+    private BigDecimal unitsPerPurchaseUnit;
+
+    @Column(name = "pack_price", precision = 14, scale = 4)
+    private BigDecimal packPrice;
+
+    @Column(name = "base_unit", length = 16)
+    private String baseUnit;
+
     /** pending | accepted | rejected | partially_accepted */
     @Column(name = "supplier_line_status", nullable = false, length = 32)
     private String supplierLineStatus = "pending";

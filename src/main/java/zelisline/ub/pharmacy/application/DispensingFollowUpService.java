@@ -54,6 +54,7 @@ public class DispensingFollowUpService {
     private final PharmacyPatientRepository patientRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
+    private final zelisline.ub.pharmacy.repository.DispensingRecordCorrectionRepository correctionRepository;
 
     /** Prescriptions supplied in part whose balance has not been supplied since. */
     @Transactional(readOnly = true)
@@ -81,7 +82,7 @@ public class DispensingFollowUpService {
         for (DispensingRecordLine s : settling) {
             DispensingRecord sr = records.get(s.getRecordId());
             if (sr != null && sr.getVoidedAt() == null) {
-                settled.merge(s.getSettlesLineId(), s.getQuantity(), BigDecimal::add);
+                settled.merge(s.getSettlesLineId(), s.netQuantity(), BigDecimal::add);
             }
         }
         List<Owing> out = new ArrayList<>();
@@ -91,6 +92,10 @@ public class DispensingFollowUpService {
                 continue;
             }
             if (onlyBranchId != null && !onlyBranchId.equals(r.getBranchId())) {
+                continue;
+            }
+            if (l.anyReturned() || l.getFollowUpClosedAt() != null) {
+                // Refunded and handed back, or closed by hand: nobody is owed the rest of it.
                 continue;
             }
             BigDecimal supplied = l.getQuantity().add(settled.getOrDefault(l.getId(), BigDecimal.ZERO));
@@ -156,6 +161,9 @@ public class DispensingFollowUpService {
         List<RefillDue> out = new ArrayList<>();
         for (DispensingRecordLine l : lines) {
             DispensingRecord r = records.get(l.getRecordId());
+            if (l.getFollowUpClosedAt() != null) {
+                continue;
+            }
             if (r == null || r.getVoidedAt() != null) {
                 continue;
             }
@@ -172,6 +180,42 @@ public class DispensingFollowUpService {
         }
         audit(businessId, viewerUserId, out.size());
         return out;
+    }
+
+    /**
+     * Closes a line's follow-up: it leaves the still-owed list and the refills list. The record
+     * itself is not changed; a note on it says who closed the follow-up and why.
+     */
+    @Transactional
+    public void close(String businessId, String lineId, String note, String userId, String onlyBranchId) {
+        DispensingRecordLine line = lineRepository.findByIdAndBusinessId(lineId, businessId)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "Record line not found"));
+        DispensingRecord record = recordRepository.findByIdAndBusinessId(line.getRecordId(), businessId)
+                .filter(r -> onlyBranchId == null || onlyBranchId.equals(r.getBranchId()))
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "Record line not found"));
+        String text = note == null ? "" : note.strip();
+        if (text.isEmpty()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "Say why this no longer needs following up");
+        }
+        if (line.getFollowUpClosedAt() != null) {
+            return;
+        }
+        line.setFollowUpClosedAt(Instant.now());
+        line.setFollowUpClosedBy(userId);
+        line.setFollowUpNote(text.length() > 255 ? text.substring(0, 255) : text);
+        line.setRefillDueOn(null);
+        lineRepository.save(line);
+        zelisline.ub.pharmacy.domain.DispensingRecordCorrection c = new zelisline.ub.pharmacy.domain.DispensingRecordCorrection();
+        c.setBusinessId(businessId);
+        c.setRecordId(record.getId());
+        String full = "Follow-up closed for " + line.getItemName() + ": " + text;
+        c.setNote(full.length() > 1000 ? full.substring(0, 1000) : full);
+        c.setCreatedBy(userId);
+        correctionRepository.save(c);
+        audit(businessId, userId, 1);
     }
 
     private void audit(String businessId, String viewerUserId, int count) {

@@ -112,7 +112,8 @@ public record MasterDataSnapshot(
             String color,
             int sortOrder,
             boolean active,
-            boolean isDefault
+            boolean isDefault,
+            BigDecimal defaultMarkupPct
     ) {}
 
     /**
@@ -180,6 +181,7 @@ public record MasterDataSnapshot(
             String payoutPaybillAccount,
             BigDecimal prepaymentBalance,
             boolean active,
+            BigDecimal defaultMarkupPct,
             List<SupplierContactData> contacts
     ) {}
 

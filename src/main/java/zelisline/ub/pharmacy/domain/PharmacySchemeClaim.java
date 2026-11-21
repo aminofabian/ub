@@ -39,7 +39,8 @@ public class PharmacySchemeClaim {
     @Column(name = "scheme_id", nullable = false, length = 36)
     private String schemeId;
 
-    @Column(name = "record_id", nullable = false, length = 36)
+    /** Null for a claim on a visit with no medicines: it then stands on the sale alone. */
+    @Column(name = "record_id", length = 36)
     private String recordId;
 
     @Column(name = "sale_id", nullable = false, length = 36)

@@ -245,8 +245,11 @@ public class KitchenService {
             names.add(line.getQuantity().stripTrailingZeros().toPlainString() + " × " + line.getName());
         }
         Instant sentAt = tickets.stream().map(KitchenTicket::getSentAt).min(Instant::compareTo).orElse(null);
+        // The name the counter calls this order by, so a takeaway can be called "Kevin" and not "34".
+        String customerName = orderTicketService.find(businessId, first.getOrderId())
+                .map(OrderTicketService.Order::customerName).orElse(null);
         return new OrderSummaryResponse(first.getOrderId(), first.getOrderNumber(), first.getSaleId(), sentAt,
-                total > 0 && ready == total, total, ready, names);
+                total > 0 && ready == total, total, ready, names, customerName);
     }
 
     private List<KitchenTicketResponse> toResponses(String businessId, List<KitchenTicket> tickets) {
@@ -275,11 +278,13 @@ public class KitchenService {
             String stage = isVoid || orderLine == null ? OrderTicketService.STAGE_VOIDED : orderLine.stage();
             out.add(new KitchenLineResponse(line.getId(), line.getOrderLineId(), line.getName(), line.getQuantity(),
                     ModifierSnapshots.decode(line.getModifiers()), line.getNote(), stage,
-                    orderLine == null ? null : orderLine.readyAt()));
+                    orderLine == null ? null : orderLine.readyAt(),
+                    line.getSeatNo() != null ? line.getSeatNo() : (orderLine == null ? null : orderLine.seatNo())));
         }
         return new KitchenTicketResponse(ticket.getId(), ticket.getOrderId(), ticket.getOrderNumber(),
                 ticket.getStationId(), ticket.getTicketType(), ticket.getStatus(), ticket.getRoundNo(),
-                ticket.getSentAt(), ticket.getReadyAt(), out);
+                ticket.getSentAt(), ticket.getReadyAt(), out, ticket.getOrderChannel(), ticket.getTableName(),
+                ticket.getCustomerName());
     }
 
     private static boolean matchesStation(KitchenTicket ticket, String stationId) {

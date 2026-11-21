@@ -27,14 +27,18 @@ public class DesktopTillPolicy {
     public static final String REFUSAL_CODE = "DESKTOP_TILL_NOT_FOR_MEDICINES";
 
     public static final String REFUSAL_MESSAGE =
-            "This shop sells medicines, so it uses the online till, where prescription and "
-                    + "pharmacist checks apply. The desktop till is not available for it yet.";
+            "This shop sells medicines or runs a clinic, so it uses the online till, where prescription "
+                    + "and pharmacist checks apply. The desktop till is not available for it yet.";
 
     private final ItemMedicineDetailsRepository medicineDetailsRepository;
+    private final zelisline.ub.clinic.repository.ClinicSettingsRepository clinicSettingsRepository;
 
     @Transactional(readOnly = true)
     public boolean desktopTillAllowed(String businessId) {
-        return !medicineDetailsRepository.existsByBusinessId(businessId);
+        // A clinic's visits are held tickets with a patient on them; the desktop till knows
+        // neither (ADR 0034, decision 14).
+        return !medicineDetailsRepository.existsByBusinessId(businessId)
+                && !clinicSettingsRepository.existsByBusinessIdAndEnabledTrue(businessId);
     }
 
     /** 409 with {@link #REFUSAL_CODE} when the shop may not run a desktop till. */

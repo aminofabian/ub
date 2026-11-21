@@ -70,6 +70,7 @@ public class DineInService {
     private final RestaurantSettingsService settingsService;
     private final RecipeService recipeService;
     private final RestaurantGate gate;
+    private final OrderActivityService activity;
 
     // ------------------------------------------------------------------ tables
 
@@ -130,8 +131,12 @@ public class DineInService {
 
     /** Every table of a branch with its open orders, and the open orders that have no table. */
     @Transactional(readOnly = true)
-    public FloorResponse floor(String businessId, String branchId) {
+    public FloorResponse floor(String businessId, String branchId, String userId) {
         gate.requireEnabled(businessId);
+        // The caller's own staff profile, so a waiter can ask the screen for their own tables.
+        String myStaffProfileId = userId == null || userId.isBlank() ? null
+                : staffProfileService.findByUser(businessId, userId)
+                        .map(zelisline.ub.payroll.domain.StaffProfile::getId).orElse(null);
         // A stay lives on the front desk, not the restaurant floor: keep lodging orders out of it.
         List<OrderTicketService.Order> open = orderTicketService.openOrders(businessId, branchId).stream()
                 .filter(o -> !OrderTicketService.CHANNEL_LODGING.equals(o.channel()))
@@ -162,7 +167,7 @@ public class DineInService {
         for (List<OrderCard> orphaned : byTable.values()) {
             others.addAll(orphaned);
         }
-        return new FloorResponse(branchId, Instant.now(), tables, others);
+        return new FloorResponse(branchId, Instant.now(), tables, others, myStaffProfileId);
     }
 
     // ------------------------------------------------------------------ the front desk
@@ -433,7 +438,7 @@ public class DineInService {
                         saleSupport.priceDish(businessId, item.getId(), line.modifierOptionIds());
                 out.add(new OrderTicketService.NewLine("DISH", null, item.getId(), dish.name(), line.quantity(),
                         dish.unitPrice(), dish.modifiersJson(), blankToNull(line.note()), stationId, true,
-                        line.seatNo(), line.clientLineId()));
+                        line.seatNo(), line.clientLineId(), dish.taxRateId()));
             } else {
                 if (line.modifierOptionIds() != null && !line.modifierOptionIds().isEmpty()) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only a dish has choices");
@@ -491,6 +496,11 @@ public class DineInService {
         OrderTicketService.Order before = orderTicketService.lock(businessId, orderId);
         OrderTicketService.OrderLine target = before.lines().stream().filter(l -> l.id().equals(lineId)).findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Order line not found"));
+        // Tapping Cancel twice is harmless — including once the order finished because this was its
+        // last live line. The order service refuses a change to a finished order, so answer here.
+        if (target.isVoided()) {
+            return toResponse(businessId, before);
+        }
         if (!target.isDraft() && !target.isVoided()) {
             if (!maySendVoid) {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN,
@@ -517,11 +527,24 @@ public class DineInService {
                         ModifierSnapshots.decode(target.modifiers()), target.quantity());
             }
         }
-        return toResponse(businessId, order);
+        activity.record(orderId, userId, OrderActivityService.LINE_CANCELLED, lineId,
+                OrderActivityService.lineWords(target.name(), target.quantity())
+                        + (reason == null || reason.isBlank() ? "" : " — " + reason.trim())
+                        + (voided.wasSent() ? " (after it went to the kitchen)" : ""));
+        // An order with nothing left on it must not sit on the floor for ever: finish it, so the
+        // table is free and the close-shift list stops warning about it. A lodging folio is left
+        // alone — an empty folio is still a guest in a room, and completing it would check them out.
+        OrderTicketService.Order after = require(businessId, orderId);
+        boolean anyLive = after.lines().stream().anyMatch(l -> !l.isVoided());
+        if (!anyLive && after.isOpen() && !OrderTicketService.CHANNEL_LODGING.equals(after.channel())) {
+            orderTicketService.complete(businessId, orderId, null, null, now);
+            after = require(businessId, orderId);
+        }
+        return toResponse(businessId, after);
     }
 
     @Transactional
-    public OrderResponse move(String businessId, String orderId, String tableId) {
+    public OrderResponse move(String businessId, String orderId, String tableId, String userId) {
         gate.requireEnabled(businessId);
         OrderTicketService.Order order = orderTicketService.lock(businessId, orderId);
         String target = blankToNull(tableId);
@@ -532,7 +555,16 @@ public class DineInService {
                         order.scheduledEnd(), order.id());
             }
         }
-        return toResponse(businessId, orderTicketService.moveToTable(businessId, orderId, target));
+        OrderTicketService.Order moved = orderTicketService.moveToTable(businessId, orderId, target);
+        String from = order.tableResourceId();
+        if (!java.util.Objects.equals(from, target)) {
+            Map<String, String> names = resourceService.namesByIds(businessId,
+                    java.util.stream.Stream.of(from, target).filter(java.util.Objects::nonNull).toList());
+            String fromWords = from == null ? "" : " from " + names.getOrDefault(from, "its table");
+            String toWords = target == null ? " off the table" : " to " + names.getOrDefault(target, "another table");
+            activity.record(orderId, userId, OrderActivityService.ORDER_MOVED, null, "Moved" + fromWords + toWords);
+        }
+        return toResponse(businessId, moved);
     }
 
     /**
@@ -607,8 +639,13 @@ public class DineInService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "This order has a bill; settle or tear it up before joining it with another");
         }
+        OrderTicketService.Order from = require(businessId, orderId);
         OrderTicketService.Order into = orderTicketService.merge(businessId, orderId, intoOrderId, userId, Instant.now());
         saleSupport.ordersJoined(businessId, orderId, into);
+        activity.record(orderId, userId, OrderActivityService.ORDER_MERGED, null,
+                "Joined into order " + into.orderNumber());
+        activity.record(intoOrderId, userId, OrderActivityService.ORDER_MERGED, null,
+                "Order " + from.orderNumber() + " joined into this one");
         return toResponse(businessId, into);
     }
 
@@ -636,14 +673,25 @@ public class DineInService {
     }
 
     @Transactional
-    public OrderResponse setDetails(String businessId, String orderId, OrderDetailsRequest request) {
+    public OrderResponse setDetails(String businessId, String orderId, OrderDetailsRequest request, String userId) {
         gate.requireEnabled(businessId);
         if (request.servedByStaffProfileId() != null && !request.servedByStaffProfileId().isBlank()) {
             requireStaff(businessId, request.servedByStaffProfileId().trim());
         }
-        return toResponse(businessId, orderTicketService.setDetails(businessId, orderId, request.guestCount(),
+        OrderTicketService.Order before = require(businessId, orderId);
+        OrderTicketService.Order after = orderTicketService.setDetails(businessId, orderId, request.guestCount(),
                 request.servedByStaffProfileId(), request.customerId(), request.customerName(),
-                request.customerPhone(), request.deliveryAddress()));
+                request.customerPhone(), request.deliveryAddress());
+        // A tip and a staff service charge follow whoever is named as serving, so a change is worth
+        // a line in the order's history (ADR 0027).
+        if (request.servedByStaffProfileId() != null
+                && !java.util.Objects.equals(before.servedByStaffProfileId(), after.servedByStaffProfileId())) {
+            String name = after.servedByStaffProfileId() == null ? "nobody"
+                    : staffProfileService.displayNamesByIds(businessId, List.of(after.servedByStaffProfileId()))
+                            .getOrDefault(after.servedByStaffProfileId(), "another waiter");
+            activity.record(orderId, userId, OrderActivityService.SERVED_BY_CHANGED, null, "Now served by " + name);
+        }
+        return toResponse(businessId, after);
     }
 
     @Transactional
@@ -747,8 +795,11 @@ public class DineInService {
                 .anyMatch(OrderBill::holdsItsLines)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "This order has a bill; it cannot be cancelled");
         }
-        return toResponse(businessId, orderTicketService.cancel(businessId, orderId, reason, userId, Instant.now(),
-                refundsDeposit, depositBack, tillDeviceKey));
+        OrderTicketService.Order cancelled = orderTicketService.cancel(businessId, orderId, reason, userId,
+                Instant.now(), refundsDeposit, depositBack, tillDeviceKey);
+        activity.record(orderId, userId, OrderActivityService.ORDER_CANCELLED, null,
+                reason == null || reason.isBlank() ? "Order cancelled" : "Order cancelled — " + reason.trim());
+        return toResponse(businessId, cancelled);
     }
 
     /**
@@ -935,7 +986,9 @@ public class DineInService {
                 if (line == null) {
                     continue;
                 }
-                BigDecimal amount = amount(line, row.getQuantity());
+                // What the bill line was charged when it was made; only a bill older than V433 has
+                // none and is worked out from the order line's price as before.
+                BigDecimal amount = row.getAmount() != null ? row.getAmount() : amount(line, row.getQuantity());
                 billTotal = billTotal.add(amount);
                 rows.add(new BillLineResponse(line.id(), line.name(), row.getQuantity(), amount));
             }

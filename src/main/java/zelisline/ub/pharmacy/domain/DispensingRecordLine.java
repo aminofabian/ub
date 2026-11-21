@@ -55,6 +55,19 @@ public class DispensingRecordLine {
     private String lotNumbers;
 
     /** What the prescription asked for, when more than was supplied (partial supply). */
+    /** How much of {@link #quantity} came back on a refund; null when nothing has. */
+    @Column(name = "quantity_returned", precision = 14, scale = 4)
+    private BigDecimal quantityReturned;
+
+    /** What the patient still has of this supply. */
+    public BigDecimal netQuantity() {
+        return quantityReturned == null ? quantity : quantity.subtract(quantityReturned).max(BigDecimal.ZERO);
+    }
+
+    public boolean anyReturned() {
+        return quantityReturned != null && quantityReturned.signum() > 0;
+    }
+
     @Column(name = "quantity_prescribed", precision = 14, scale = 4)
     private BigDecimal quantityPrescribed;
 
@@ -65,6 +78,16 @@ public class DispensingRecordLine {
     /** The earlier line whose outstanding balance this line supplies. */
     @Column(name = "settles_line_id", length = 36)
     private String settlesLineId;
+
+    /** Set when someone decided this line needs no more chasing: no balance to supply, no refill to remind. */
+    @Column(name = "follow_up_closed_at")
+    private Instant followUpClosedAt;
+
+    @Column(name = "follow_up_closed_by", length = 36)
+    private String followUpClosedBy;
+
+    @Column(name = "follow_up_note", length = 255)
+    private String followUpNote;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

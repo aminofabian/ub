@@ -45,6 +45,15 @@ public class ServiceOffering {
     @Column(name = "name", nullable = false, length = 191)
     private String name;
 
+    /** What the service is called on the receipt and the sale; null means its own name (ADR 0034). */
+    @Column(name = "receipt_name", length = 191)
+    private String receiptName;
+
+    /** The name a customer is given: the receipt name when one is set. */
+    public String soldAsName() {
+        return receiptName == null || receiptName.isBlank() ? name : receiptName;
+    }
+
     /**
      * Lower-cased trimmed name while the row is live, {@code null} once soft-deleted, so the
      * unique key only constrains live rows and a deleted name can be reused.

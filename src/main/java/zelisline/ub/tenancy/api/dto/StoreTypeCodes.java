@@ -14,7 +14,8 @@ public final class StoreTypeCodes {
             "butchery|mini-mart|full-grocery|fresh-market|mixed-shop|cosmetics|wines-spirits|pharmacy|other"
                     + "|barbershop|salon|spa|nail-studio|beauty-parlour"
                     + "|restaurant|cafe|fast-food|bar"
-                    + "|lodging";
+                    + "|lodging"
+                    + "|clinic";
 
     /** Every valid code, derived from {@link #PATTERN} so the two never drift. */
     public static final List<String> ALL = List.of(PATTERN.split("\\|"));

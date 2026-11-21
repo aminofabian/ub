@@ -73,6 +73,22 @@ public class PharmacyStandardController {
         return followUpService.refillsDue(businessId, lockedBranch(user, businessId), user.userId());
     }
 
+    public record CloseFollowUpRequest(
+            @jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 255) String note) {
+    }
+
+    /** A balance that will not be collected, or a refill that has been dealt with. */
+    @PostMapping("/follow-ups/{lineId}/close")
+    @PreAuthorize("hasPermission(null, 'pharmacy.dispense') or hasPermission(null, 'pharmacy.manage')")
+    public void closeFollowUp(
+            @org.springframework.web.bind.annotation.PathVariable String lineId,
+            @jakarta.validation.Valid @org.springframework.web.bind.annotation.RequestBody CloseFollowUpRequest body,
+            HttpServletRequest request) {
+        TenantPrincipal user = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        followUpService.close(businessId, lineId, body.note(), user.userId(), lockedBranch(user, businessId));
+    }
+
     // ── Controlled register ───────────────────────────────────────────
 
     @GetMapping("/controlled-register/items")

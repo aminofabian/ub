@@ -175,6 +175,64 @@ public class DispensingApprovalService {
         return new DispensingApprovalResponse(a.getId(), approver.getId(), approver.getName(), a.getExpiresAt());
     }
 
+    /** How long an approval made from a prepared prescription lasts: long enough for the sale it is made for. */
+    static final Duration PREPARATION_TTL = Duration.ofMinutes(2);
+
+    /**
+     * An approval that comes from a pharmacist having prepared a clinic prescription while signed
+     * in themselves (ADR 0034). It stands in for their PIN at the cash desk and nothing else: the
+     * dispensing gate still checks it like any approval — the right cashier, not used, not
+     * expired, and covering every medicine and quantity on the sale.
+     *
+     * <p>The caller decides whether a preparation is good enough (who prepared, when, and that the
+     * bill holds no more than was prepared). This checks the one thing that must hold at the
+     * moment of sale: the preparer can still dispense.
+     *
+     * @return the approval id, or null when the preparer may no longer dispense
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public String grantFromPreparation(
+            String businessId,
+            String preparerUserId,
+            String cashierUserId,
+            java.util.Map<String, java.math.BigDecimal> quantitiesByItemId
+    ) {
+        if (preparerUserId == null || cashierUserId == null || quantitiesByItemId == null || quantitiesByItemId.isEmpty()) {
+            return null;
+        }
+        User preparer = userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(preparerUserId, businessId).orElse(null);
+        boolean eligible = preparer != null
+                && UserStatus.ACTIVE.wire().equals(preparer.getStatus())
+                && preparer.getRoleId() != null
+                && permissionRepository.findPermissionKeysByRoleId(preparer.getRoleId())
+                        .contains(DispensingGate.PERMISSION_DISPENSE);
+        if (!eligible) {
+            return null;
+        }
+        Set<String> items = new LinkedHashSet<>();
+        for (var e : quantitiesByItemId.entrySet()) {
+            String id = e.getKey();
+            java.math.BigDecimal q = e.getValue();
+            if (id == null || id.isBlank() || id.contains(",") || id.contains("=") || q == null || q.signum() <= 0) {
+                return null;
+            }
+            items.add(DispensingGate.approvalToken(id.strip(), q));
+        }
+        if (items.size() > MAX_ITEMS || String.join(",", items).length() > 2000) {
+            return null;
+        }
+        DispensingApproval a = new DispensingApproval();
+        a.setBusinessId(businessId);
+        a.setApproverUserId(preparer.getId());
+        a.setRequestedBy(cashierUserId);
+        a.setItemIds(String.join(",", items));
+        a.setExpiresAt(Instant.now().plus(PREPARATION_TTL));
+        approvalRepository.save(a);
+        audit(businessId, cashierUserId, preparer.getId(), AuditEventTypes.PHARMACY_APPROVAL_GRANTED,
+                AuditEventSeverity.INFO, items.size());
+        return a.getId();
+    }
+
     /** Who asked, whose PIN was tried, how many medicines. Never the PIN or the medicine names. */
     private void audit(
             String businessId,

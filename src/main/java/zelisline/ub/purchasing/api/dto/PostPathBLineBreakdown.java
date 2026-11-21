@@ -19,7 +19,13 @@ public record PostPathBLineBreakdown(
         @PositiveOrZero BigDecimal purchaseQty,
         @Size(max = 32) String purchaseUnit,
         /** Manufacturer's lot number; falls back to the draft line's. Required for medicines. */
-        @Size(max = 64) String lotNumber
+        @Size(max = 64) String lotNumber,
+        /** Base items in one purchase unit. Must agree with the stored draft-line snapshot. */
+        @PositiveOrZero BigDecimal unitsPerPurchaseUnit,
+        /** Price of one purchase unit, kept on the posted invoice line. */
+        @PositiveOrZero BigDecimal packPrice,
+        /** Saved pack option used at receive time, kept on the posted invoice line. */
+        @Size(max = 36) String packOptionId
 ) {
 
     public PostPathBLineBreakdown(
@@ -31,6 +37,21 @@ public record PostPathBLineBreakdown(
             BigDecimal purchaseQty,
             String purchaseUnit
     ) {
-        this(lineId, itemId, usableQty, wastageQty, expiryDate, purchaseQty, purchaseUnit, null);
+        this(lineId, itemId, usableQty, wastageQty, expiryDate, purchaseQty, purchaseUnit,
+                null, null, null, null);
+    }
+
+    public PostPathBLineBreakdown(
+            String lineId,
+            String itemId,
+            BigDecimal usableQty,
+            BigDecimal wastageQty,
+            LocalDate expiryDate,
+            BigDecimal purchaseQty,
+            String purchaseUnit,
+            String lotNumber
+    ) {
+        this(lineId, itemId, usableQty, wastageQty, expiryDate, purchaseQty, purchaseUnit,
+                lotNumber, null, null, null);
     }
 }

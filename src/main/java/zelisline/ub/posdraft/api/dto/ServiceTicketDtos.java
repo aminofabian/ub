@@ -94,12 +94,23 @@ public final class ServiceTicketDtos {
             @DecimalMin("0") BigDecimal cashReceived,
             Instant clientSoldAt,
             /** Use one session of this prepaid package toward the ticket. The ticket must name the customer. */
-            @Size(max = 36) String packageId
+            @Size(max = 36) String packageId,
+            /**
+             * Needed when the visit carries a prescription-only medicine: prescriber, patient and
+             * the pharmacist's approval, exactly as on a till sale (ADR 0033). Null otherwise.
+             */
+            @Valid zelisline.ub.sales.api.dto.PostSaleDispensingRequest dispensing
     ) {
         public PayTicketRequest(
                 List<PostSalePaymentRequest> payments, List<PostSaleTipRequest> tips,
                 BigDecimal cashReceived, Instant clientSoldAt) {
-            this(payments, tips, cashReceived, clientSoldAt, null);
+            this(payments, tips, cashReceived, clientSoldAt, null, null);
+        }
+
+        public PayTicketRequest(
+                List<PostSalePaymentRequest> payments, List<PostSaleTipRequest> tips,
+                BigDecimal cashReceived, Instant clientSoldAt, String packageId) {
+            this(payments, tips, cashReceived, clientSoldAt, packageId, null);
         }
     }
 

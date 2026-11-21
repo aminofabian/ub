@@ -21,6 +21,7 @@ public record CreateSupplierRequest(
         @Size(max = 32) String payoutPhone,
         @Size(max = 32) String payoutTillNumber,
         @Size(max = 32) String payoutPaybillNumber,
-        @Size(max = 64) String payoutPaybillAccount
+        @Size(max = 64) String payoutPaybillAccount,
+        BigDecimal defaultMarkupPct
 ) {
 }

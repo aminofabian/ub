@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -89,6 +90,12 @@ class PharmacyTenantIsolationIT {
     private zelisline.ub.pharmacy.repository.PharmacySchemeRepository schemeRepository;
     @Autowired
     private zelisline.ub.pharmacy.repository.PharmacySchemeClaimRepository claimRepository;
+    @Autowired
+    private zelisline.ub.posdraft.repository.PosDraftRepository posDraftRepository;
+    @Autowired
+    private zelisline.ub.clinic.repository.ClinicSettingsRepository clinicSettingsRepository;
+    @Autowired
+    private zelisline.ub.clinic.repository.PrescriptionRepository prescriptionRepository;
 
     @MockitoBean
     @SuppressWarnings("unused")
@@ -99,6 +106,9 @@ class PharmacyTenantIsolationIT {
 
     @BeforeEach
     void seed() {
+        prescriptionRepository.deleteAll();
+        clinicSettingsRepository.deleteAll();
+        posDraftRepository.deleteAll();
         claimRepository.deleteAll();
         schemeRepository.deleteAll();
         dispensingRecordRepository.deleteAll();
@@ -127,6 +137,7 @@ class PharmacyTenantIsolationIT {
             "catalog.items.read", "inventory.read", "inventory.write",
             "pharmacy.manage", "pharmacy.dispense", "pharmacy.records.read", "sales.sell",
             "pharmacy.claims.manage",
+            "clinic.reception", "clinic.consult", "clinic.prescribe", "clinic.perform", "clinic.manage",
         };
         for (int i = 0; i < keys.length; i++) {
             String id = "11111111-0000-0000-0000-0000000033" + String.format("%02d", i);
@@ -259,12 +270,118 @@ class PharmacyTenantIsolationIT {
                 .andExpect(status().isConflict());
     }
 
+    /**
+     * Clinic (ADR 0034): a visit is a held ticket with a patient. Shop A runs a clinic of its own,
+     * so nothing here is refused merely because Clinic is off; every refusal is tenancy.
+     */
+    @Test
+    void aShopCannotReachAnotherShopsClinicVisits() throws Exception {
+        zelisline.ub.clinic.domain.ClinicSettings settingsA = new zelisline.ub.clinic.domain.ClinicSettings();
+        settingsA.setBusinessId(TENANT_A);
+        settingsA.setConsultationServiceId(UUID.randomUUID().toString());
+        clinicSettingsRepository.save(settingsA);
+
+        zelisline.ub.pharmacy.domain.PharmacyPatient p = new zelisline.ub.pharmacy.domain.PharmacyPatient();
+        p.setBusinessId(TENANT_B);
+        p.setName("Visitor Of B");
+        p.setPhone("0700000044");
+        p.setPatientNo(9L);
+        String patientB = patientRepository.save(p).getId();
+
+        zelisline.ub.posdraft.domain.PosDraft visit = new zelisline.ub.posdraft.domain.PosDraft();
+        visit.setBusinessId(TENANT_B);
+        visit.setBranchId(BRANCH_B);
+        visit.setTicketNumber(1L);
+        visit.setCreatedBy(ownerB.getId());
+        visit.setDraftKind(zelisline.ub.posdraft.PosDraftConstants.KIND_SERVICE);
+        visit.setServiceStage(zelisline.ub.posdraft.PosDraftConstants.STAGE_WAITING);
+        visit.setPatientId(patientB);
+        String visitB = posDraftRepository.save(visit).getId();
+
+        mockMvc.perform(asA(get("/api/v1/clinic/visits/" + visitB)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(asA(put("/api/v1/clinic/visits/" + visitB + "/prescription")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"lines\":[{\"medicineName\":\"Anything\",\"quantity\":1}]}")))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(asA(post("/api/v1/clinic/visits/" + visitB + "/prescription/prepare")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"lines\":[]}")))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(asA(post("/api/v1/clinic/visits/" + visitB + "/services")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"serviceId\":\"" + UUID.randomUUID() + "\"}")))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(asA(post("/api/v1/clinic/visits/" + visitB + "/medicines-given")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"itemId\":\"" + UUID.randomUUID() + "\",\"quantity\":1}")))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(asA(post("/api/v1/clinic/visits/" + visitB + "/pay")
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"payments\":[{\"method\":\"cash\",\"amount\":1}]}")))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(asA(post("/api/v1/clinic/visits/" + visitB + "/cancel")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{}")))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(asA(post("/api/v1/clinic/visits/" + visitB + "/claims")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"schemeId\":\"x\",\"memberNo\":\"1\",\"amountClaimed\":1}")))
+                .andExpect(status().isNotFound());
+        // B's patient cannot be found from A, or put on a visit of A's.
+        mockMvc.perform(asA(get("/api/v1/clinic/patients").param("q", "Visitor")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+        mockMvc.perform(asA(post("/api/v1/clinic/visits")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"branchId\":\"" + BRANCH_B + "\",\"clientVisitId\":\"" + UUID.randomUUID()
+                                + "\",\"patientId\":\"" + patientB + "\"}")))
+                .andExpect(status().isNotFound());
+        // B's branch shows A nothing.
+        mockMvc.perform(asA(get("/api/v1/clinic/visits").param("branchId", BRANCH_B)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.visits.length()").value(0));
+        // Nothing was written to B's visit.
+        assertEquals(0, prescriptionRepository.count());
+    }
+
+    /**
+     * A clinic visit is reached only through /api/v1/clinic. The service-ticket routes, open to
+     * anyone who can sell, answer as if it were not there, even inside the visit's own shop.
+     */
+    @Test
+    void aClinicVisitIsNotReachableThroughTheServiceTicketRoutes() throws Exception {
+        zelisline.ub.posdraft.domain.PosDraft visit = new zelisline.ub.posdraft.domain.PosDraft();
+        visit.setBusinessId(TENANT_A);
+        visit.setBranchId(UUID.randomUUID().toString());
+        visit.setTicketNumber(1L);
+        visit.setCreatedBy(ownerA.getId());
+        visit.setDraftKind(zelisline.ub.posdraft.PosDraftConstants.KIND_SERVICE);
+        visit.setServiceStage(zelisline.ub.posdraft.PosDraftConstants.STAGE_WAITING);
+        visit.setPatientId(UUID.randomUUID().toString());
+        String visitA = posDraftRepository.save(visit).getId();
+
+        mockMvc.perform(asA(get("/api/v1/service-tickets/" + visitA)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(asA(post("/api/v1/service-tickets/" + visitA + "/pay")
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"payments\":[{\"method\":\"cash\",\"amount\":1}]}")))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(asA(post("/api/v1/service-tickets/" + visitA + "/cancel")
+                        .contentType(APPLICATION_JSON)
+                        .content("{}")))
+                .andExpect(status().isNotFound());
+    }
+
     @Test
     void aShopCannotSeeAnotherShopsPatients() throws Exception {
         zelisline.ub.pharmacy.domain.PharmacyPatient p = new zelisline.ub.pharmacy.domain.PharmacyPatient();
         p.setBusinessId(TENANT_B);
         p.setName("Patient Of B");
         p.setPhone("0700000033");
+        p.setPatientNo(7L);
         String patientB = patientRepository.save(p).getId();
 
         mockMvc.perform(asA(get("/api/v1/pharmacy/patients/" + patientB)))
@@ -275,6 +392,13 @@ class PharmacyTenantIsolationIT {
         mockMvc.perform(asA(get("/api/v1/pharmacy/patients/lookup").param("phone", "0700000033")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(0));
+        // A patient number is per shop: B's number 7 is not A's to look up or search for.
+        mockMvc.perform(asA(get("/api/v1/pharmacy/patients/lookup").param("phone", "P-7")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+        mockMvc.perform(asA(get("/api/v1/pharmacy/patients").param("q", "7")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(0));
         mockMvc.perform(asA(get("/api/v1/pharmacy/follow-ups/owings/for-patient").param("patientId", patientB)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(0));

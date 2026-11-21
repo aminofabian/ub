@@ -68,6 +68,7 @@ public class RestaurantSaleSupport {
     private final RestaurantGate gate;
     private final ApplicationEventPublisher eventPublisher;
     private final KitchenPrintService kitchenPrintService;
+    private final zelisline.ub.serviceops.application.ServiceResourceService resourceService;
 
     /** A dish as it is sold: its name, its price with the chosen modifiers, and what was chosen. */
     public record DishLine(
@@ -217,7 +218,8 @@ public class RestaurantSaleSupport {
     @Transactional
     public void recordOrderForSale(
             String businessId, String branchId, String userId, String shiftId, String saleId,
-            String customerId, List<PostSaleLineRequest> lines, Instant soldAt, boolean alreadySold) {
+            String customerId, String customerName, List<PostSaleLineRequest> lines, Instant soldAt,
+            boolean alreadySold) {
         List<OrderTicketService.NewLine> orderLines = new ArrayList<>();
         boolean anyForKitchen = false;
         Map<String, MenuCategory> categories = new HashMap<>();
@@ -238,7 +240,8 @@ public class RestaurantSaleSupport {
             if (line.isDish()) {
                 DishLine dish = priceDish(businessId, item.getId(), line.modifierOptionIds(), alreadySold);
                 orderLines.add(new OrderTicketService.NewLine("DISH", null, item.getId(), dish.name(),
-                        line.quantity(), alreadySold ? line.unitPrice() : dish.unitPrice(), dish.modifiersJson(), trimNote(line.note()), stationId, true));
+                        line.quantity(), alreadySold ? line.unitPrice() : dish.unitPrice(), dish.modifiersJson(),
+                        trimNote(line.note()), stationId, true, null, null, dish.taxRateId()));
                 anyForKitchen = true;
             } else if (MenuService.KIND_ITEM.equals(item.getKind()) && item.getItemId() != null
                     && item.getItemId().equals(line.itemId())) {
@@ -252,7 +255,7 @@ public class RestaurantSaleSupport {
             return;
         }
         OrderTicketService.Order order = orderTicketService.createPaidCounterOrder(
-                businessId, branchId, userId, shiftId, saleId, customerId, orderLines, soldAt);
+                businessId, branchId, userId, shiftId, saleId, customerId, customerName, orderLines, soldAt);
         if (!ticketRepository.findByBusinessIdAndSaleId(businessId, saleId).isEmpty()) {
             return; // already sent: a replayed sale tells the kitchen nothing new
         }
@@ -450,6 +453,14 @@ public class RestaurantSaleSupport {
         ticket.setStationId(stationId);
         ticket.setTicketType(type);
         ticket.setStatus(status);
+        // Which room the plate goes to, and whether it is eaten in, taken away or delivered: a
+        // cook cannot tell a dine-in plate from a takeaway bag by the order number alone.
+        ticket.setOrderChannel(order.channel());
+        ticket.setTableName(order.tableResourceId() == null ? null
+                : resourceService.table(businessId, order.tableResourceId())
+                        .map(zelisline.ub.serviceops.application.ServiceResourceService.TableRecord::name)
+                        .orElse(null));
+        ticket.setCustomerName(order.customerName());
         ticket.setSentBy(userId);
         ticket.setSentAt(now);
         ticketRepository.save(ticket);
@@ -465,6 +476,7 @@ public class RestaurantSaleSupport {
             row.setQuantity(line.quantity());
             row.setModifiers(line.modifiers());
             row.setNote(line.note());
+            row.setSeatNo(line.seatNo());
             saved.add(ticketLineRepository.save(row));
         }
         // The ticket is now a print job for its station: any device at the branch can print it.

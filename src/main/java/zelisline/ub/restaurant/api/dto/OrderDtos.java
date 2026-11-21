@@ -36,6 +36,19 @@ public final class OrderDtos {
     public record TableQrRequest(@NotNull Boolean enabled) {
     }
 
+    // ---------------------------------------------------------------- what happened to an order
+
+    /**
+     * One thing that happened to an order, as a manager reads it back: a dish cancelled, a bill
+     * comped, an order moved or merged, a waiter changed.
+     *
+     * @param action a short code such as {@code ORDER_LINE_CANCELLED} or {@code BILL_COMP}
+     * @param detail what was done, in words
+     */
+    public record OrderActivityResponse(
+            String id, Instant at, String action, String lineId, String userId, String userName, String detail) {
+    }
+
     // ---------------------------------------------------------------- ordering from a table's QR code (public)
 
     public record PublicOption(String id, String name, BigDecimal priceDelta) {
@@ -86,6 +99,30 @@ public final class OrderDtos {
     public record PublicOrderConfirmation(long orderNumber, String tableName, int added, BigDecimal total) {
     }
 
+    /**
+     * One line as the diner sees it. The stage is the kitchen's own code ({@code DRAFT},
+     * {@code NEW}, {@code PREPARING}, {@code READY}, {@code SERVED}, {@code VOIDED}); the page
+     * turns it into words. No staff name, no customer detail.
+     *
+     * @param removable true only for a line this table's phone added that staff have not sent, so the
+     *                  diner may take it off again
+     */
+    public record PublicStatusLine(
+            String id, String name, BigDecimal quantity, BigDecimal amount, String stage, boolean removable) {
+    }
+
+    /**
+     * What the diner's table has ordered and what is left to pay.
+     *
+     * @param orderNumber null when the table has no open order (yet)
+     * @param due         the part of {@code total} not on a paid or closed bill
+     */
+    public record PublicOrderStatus(
+            String shopName, String tableName, String currency,
+            Long orderNumber, String status, boolean billRequested,
+            BigDecimal total, BigDecimal due, List<PublicStatusLine> lines) {
+    }
+
     public record TableRequest(
             @Size(max = 36) String branchId,
             @Size(max = 80) String name,
@@ -118,7 +155,9 @@ public final class OrderDtos {
     }
 
     /** @param otherOrders open orders with no table: takeaway, delivery, and bookings not yet given a table */
-    public record FloorResponse(String branchId, Instant asOf, List<FloorTable> tables, List<OrderCard> otherOrders) {
+    public record FloorResponse(String branchId, Instant asOf, List<FloorTable> tables, List<OrderCard> otherOrders,
+            /** The caller's own staff profile, so a waiter can filter to their tables; null when they have none here. */
+            String myStaffProfileId) {
     }
 
     // ---------------------------------------------------------------- an order

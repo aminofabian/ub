@@ -11,6 +11,12 @@ public record PathBSupplyInvoiceLineDto(
         BigDecimal lineTotal,
         int sortOrder,
         BigDecimal usableQty,
-        BigDecimal wastageQty
+        BigDecimal wastageQty,
+        /** Packaging snapshot captured when the receipt was posted (null for legacy lines). */
+        String purchaseUnit,
+        BigDecimal purchaseQty,
+        BigDecimal unitsPerPurchaseUnit,
+        BigDecimal packPrice,
+        String baseUnit
 ) {
 }

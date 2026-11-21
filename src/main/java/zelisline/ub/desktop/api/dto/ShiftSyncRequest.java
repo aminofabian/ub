@@ -123,6 +123,7 @@ public record ShiftSyncRequest(
         String payoutTillNumber,
         String payoutPaybillNumber,
         String payoutPaybillAccount,
+        BigDecimal defaultMarkupPct,
         @Valid List<SupplierContactData> contacts
     ) {}
 

@@ -49,6 +49,10 @@ public class KitchenTicketLine {
     @Column(name = "note", length = 255)
     private String note;
 
+    /** Which guest at the table the dish is for, so it can be plated and carried to the right seat. */
+    @Column(name = "seat_no")
+    private Integer seatNo;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

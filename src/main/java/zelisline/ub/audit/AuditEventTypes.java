@@ -87,6 +87,8 @@ public final class AuditEventTypes {
     public static final String CASH_PAID_OUT = "cash.paid_out";
     public static final String CASH_DROP = "cash.drop";
     public static final String CASH_SALE_ADDED = "cash.sale_added";
+    /** The drawer opened: a till pulse, or a key the printer switch reported. */
+    public static final String CASH_DRAWER_OPENED = "cash.drawer_opened";
     public static final String CASH_REFUND_REMOVED = "cash.refund_removed";
     public static final String CASH_VOID_REMOVED = "cash.void_removed";
     public static final String CASH_PAYMENT_ADJUSTED = "cash.payment_adjusted";

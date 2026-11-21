@@ -26,6 +26,8 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
 
     List<Sale> findByShiftIdAndStatus(String shiftId, String status);
 
+    List<Sale> findByBusinessIdAndShiftId(String businessId, String shiftId);
+
     /** Sales the desktop till has not yet uploaded to the cloud (realtime sync). */
     List<Sale> findByBusinessIdAndCloudSyncedAtIsNullOrderBySoldAtAsc(String businessId);
 

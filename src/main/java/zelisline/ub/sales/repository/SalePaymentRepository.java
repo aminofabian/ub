@@ -1,5 +1,6 @@
 package zelisline.ub.sales.repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -13,6 +14,8 @@ import zelisline.ub.sales.domain.SalePayment;
 public interface SalePaymentRepository extends JpaRepository<SalePayment, String> {
 
     List<SalePayment> findBySaleIdOrderBySortOrderAsc(String saleId);
+
+    List<SalePayment> findBySaleIdInAndMethod(Collection<String> saleIds, String method);
 
     @Query("""
             select s.id

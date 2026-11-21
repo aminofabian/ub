@@ -1,8 +1,11 @@
 package zelisline.ub.identity.infrastructure;
 
+import java.util.List;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
@@ -12,6 +15,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.identity.application.MailAttachment;
 import zelisline.ub.identity.application.NotificationService;
 
 /**
@@ -102,6 +106,22 @@ public class LoggingNotificationService implements NotificationService {
     }
 
     @Override
+    public void sendNotificationEmail(
+            String toEmail,
+            String subject,
+            String textBody,
+            String htmlBody,
+            String fromDisplayName,
+            List<MailAttachment> attachments
+    ) {
+        if (attachments == null || attachments.isEmpty()) {
+            sendNotificationEmail(toEmail, subject, textBody, htmlBody, fromDisplayName);
+            return;
+        }
+        sendWithAttachments(toEmail, subject, textBody, htmlBody, fromDisplayName, attachments);
+    }
+
+    @Override
     public void sendPlatformCampaignEmail(
             String toEmail, String subject, String textBody, String htmlBody, String fromDisplayName) {
         if (htmlBody != null && !htmlBody.isBlank()) {
@@ -124,6 +144,118 @@ public class LoggingNotificationService implements NotificationService {
                 + escaped
                 + "</body></html>";
         sendOrLogHtml(toEmail, subject, html, "contact reply", fromDisplayName);
+    }
+
+    private void sendWithAttachments(
+            String toEmail,
+            String subject,
+            String textBody,
+            String htmlBody,
+            String fromDisplayName,
+            List<MailAttachment> attachments
+    ) {
+        if (trySendSmtpWithAttachments(toEmail, subject, textBody, htmlBody, attachments)) {
+            return;
+        }
+        if (trySendResendWithAttachments(toEmail, subject, htmlBody, fromDisplayName, attachments)) {
+            return;
+        }
+        if (trySendMailgunWithAttachments(toEmail, subject, textBody, htmlBody, fromDisplayName, attachments)) {
+            return;
+        }
+        log.info("[notification-html] with attachments to={} subject={} files={}",
+                toEmail, subject, attachmentNames(attachments));
+    }
+
+    private boolean trySendSmtpWithAttachments(
+            String toEmail, String subject, String textBody, String htmlBody, List<MailAttachment> attachments) {
+        JavaMailSender sender = javaMailSender.getIfAvailable();
+        if (sender == null) {
+            return false;
+        }
+        try {
+            MimeMessage message = sender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
+            helper.setTo(toEmail);
+            helper.setSubject(subject);
+            if (htmlBody != null && !htmlBody.isBlank()) {
+                helper.setText(textBody == null ? "" : textBody, htmlBody);
+            } else {
+                helper.setText(textBody == null ? "" : textBody, false);
+            }
+            addSmtpAttachments(helper, attachments);
+            sender.send(message);
+            log.info("Sent notification with attachments via SMTP to={} files={}",
+                    toEmail, attachmentNames(attachments));
+            return true;
+        } catch (MessagingException | RuntimeException ex) {
+            log.warn("Failed to send notification with attachments via SMTP to={}", toEmail, ex);
+            return false;
+        }
+    }
+
+    private static void addSmtpAttachments(MimeMessageHelper helper, List<MailAttachment> attachments)
+            throws MessagingException {
+        for (MailAttachment file : attachments) {
+            if (file.content().length == 0) {
+                continue;
+            }
+            helper.addAttachment(file.filename(), new ByteArrayResource(file.content()), file.mediaType());
+        }
+    }
+
+    private boolean trySendResendWithAttachments(
+            String toEmail,
+            String subject,
+            String htmlBody,
+            String fromDisplayName,
+            List<MailAttachment> attachments
+    ) {
+        if (!resendMailClient.isConfigured() || htmlBody == null || htmlBody.isBlank()) {
+            return false;
+        }
+        try {
+            resendMailClient.sendHtml(toEmail, subject, htmlBody, fromDisplayName, attachments);
+            log.info("Sent notification with attachments via Resend to={} files={}",
+                    toEmail, attachmentNames(attachments));
+            return true;
+        } catch (RuntimeException ex) {
+            log.warn("Resend attachments failed to={}", toEmail, ex);
+            return false;
+        }
+    }
+
+    private boolean trySendMailgunWithAttachments(
+            String toEmail,
+            String subject,
+            String textBody,
+            String htmlBody,
+            String fromDisplayName,
+            List<MailAttachment> attachments
+    ) {
+        if (!mailgunMailClient.isConfigured() || htmlBody == null || htmlBody.isBlank()) {
+            return false;
+        }
+        try {
+            mailgunMailClient.sendHtml(toEmail, subject, htmlBody, textBody, fromDisplayName, attachments);
+            log.info("Sent notification with attachments via Mailgun to={} files={}",
+                    toEmail, attachmentNames(attachments));
+            return true;
+        } catch (RuntimeException ex) {
+            log.warn("Mailgun attachments failed to={}", toEmail, ex);
+            return false;
+        }
+    }
+
+    private static String attachmentNames(List<MailAttachment> attachments) {
+        StringBuilder names = new StringBuilder();
+        for (MailAttachment file : attachments) {
+            if (names.length() > 0) {
+                names.append(", ");
+            }
+            names.append(file.filename());
+        }
+        return names.toString();
     }
 
     private void sendOrLogHtml(String toEmail, String subject, String htmlBody, String kind) {

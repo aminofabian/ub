@@ -1,7 +1,12 @@
 package zelisline.ub.identity.infrastructure;
 
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+
+import zelisline.ub.identity.application.MailAttachment;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -58,9 +63,41 @@ public class ResendMailClient {
     }
 
     public void sendHtml(String toEmail, String subject, String htmlBody, String fromDisplayName) {
+        sendHtml(toEmail, subject, htmlBody, fromDisplayName, List.of());
+    }
+
+    public void sendHtml(
+            String toEmail,
+            String subject,
+            String htmlBody,
+            String fromDisplayName,
+            List<MailAttachment> attachments
+    ) {
         Map<String, Object> payload = buildBasePayload(toEmail, subject, fromDisplayName);
         payload.put("html", htmlBody);
+        List<Map<String, String>> files = encodedAttachments(attachments);
+        if (!files.isEmpty()) {
+            payload.put("attachments", files);
+        }
         doSend(payload);
+    }
+
+    private static List<Map<String, String>> encodedAttachments(List<MailAttachment> attachments) {
+        List<Map<String, String>> files = new ArrayList<>();
+        if (attachments == null) {
+            return files;
+        }
+        for (MailAttachment file : attachments) {
+            if (file.content().length == 0) {
+                continue;
+            }
+            Map<String, String> entry = new LinkedHashMap<>();
+            entry.put("filename", file.filename());
+            entry.put("content", Base64.getEncoder().encodeToString(file.content()));
+            entry.put("content_type", file.mediaType());
+            files.add(entry);
+        }
+        return files;
     }
 
     private Map<String, Object> buildBasePayload(String toEmail, String subject, String fromDisplayName) {

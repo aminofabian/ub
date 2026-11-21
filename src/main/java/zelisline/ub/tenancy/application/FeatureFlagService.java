@@ -180,6 +180,12 @@ public class FeatureFlagService {
      */
     public static final String FLAG_SHIFTS_DISABLED = "shifts.disabled";
 
+    /**
+     * Email the owner a stock sheet (buying, selling, on-hand) and today's sales
+     * when a shift closes. Absent defaults to on; {@code false} is the opt-out.
+     */
+    public static final String FLAG_SHIFTS_EMAIL_CLOSE_REPORTS = "shifts.email_close_reports";
+
     /** Grocery counter draft cart persistence (master kill-switch). */
     public static final String FLAG_GROCERY_DRAFTS_ENABLED = "grocery_drafts.enabled";
 

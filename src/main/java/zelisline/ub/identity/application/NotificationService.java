@@ -1,5 +1,7 @@
 package zelisline.ub.identity.application;
 
+import java.util.List;
+
 /**
  * Outbound user notifications (email). Default implementation logs only; replace
  * with a mail-backed bean when {@code spring.mail.host} is configured.
@@ -45,6 +47,21 @@ public interface NotificationService {
             String fromDisplayName
     ) {
         sendNotificationEmail(toEmail, subject, textBody, htmlBody);
+    }
+
+    /**
+     * Same as {@link #sendNotificationEmail(String, String, String, String, String)}
+     * plus files. The default drops the files so older mailers still send the letter.
+     */
+    default void sendNotificationEmail(
+            String toEmail,
+            String subject,
+            String textBody,
+            String htmlBody,
+            String fromDisplayName,
+            List<MailAttachment> attachments
+    ) {
+        sendNotificationEmail(toEmail, subject, textBody, htmlBody, fromDisplayName);
     }
 
     default void sendPlatformCampaignEmail(

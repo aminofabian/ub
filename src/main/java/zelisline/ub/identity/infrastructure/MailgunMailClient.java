@@ -1,11 +1,17 @@
 package zelisline.ub.identity.infrastructure;
 
+import java.io.ByteArrayInputStream;
+import java.util.List;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import kong.unirest.ContentType;
 import kong.unirest.HttpResponse;
+import kong.unirest.MultipartBody;
 import kong.unirest.Unirest;
 import kong.unirest.UnirestException;
+import zelisline.ub.identity.application.MailAttachment;
 
 /**
  * Mailgun HTTP API (same shape as Mailgun samples: POST /v3/{domain}/messages,
@@ -64,15 +70,51 @@ public class MailgunMailClient {
         doSend(toEmail, subject, "html", htmlBody, fromDisplayName);
     }
 
+    public void sendHtml(
+            String toEmail,
+            String subject,
+            String htmlBody,
+            String textBody,
+            String fromDisplayName,
+            List<MailAttachment> attachments
+    ) {
+        if (!isConfigured()) {
+            throw new IllegalStateException("Mailgun is not configured");
+        }
+        MultipartBody request = Unirest.post(messagesUrl())
+                .basicAuth(BASIC_AUTH_USER, privateApiKey.strip())
+                .field("from", resolveFrom(fromDisplayName))
+                .field("to", toEmail)
+                .field("subject", subject)
+                .field("html", htmlBody);
+        if (textBody != null && !textBody.isBlank()) {
+            request = request.field("text", textBody);
+        }
+        if (attachments != null) {
+            for (MailAttachment file : attachments) {
+                if (file.content().length == 0) {
+                    continue;
+                }
+                request = request.field(
+                        "attachment",
+                        new ByteArrayInputStream(file.content()),
+                        ContentType.APPLICATION_OCTET_STREAM,
+                        file.filename());
+            }
+        }
+        HttpResponse<String> response = request.asString();
+        if (response.getStatus() < 200 || response.getStatus() >= 300) {
+            throw new IllegalStateException(
+                    "Mailgun HTTP " + response.getStatus() + ": " + response.getBody());
+        }
+    }
+
     private void doSend(
             String toEmail, String subject, String bodyFieldName, String body, String fromDisplayName) {
         if (!isConfigured()) {
             throw new IllegalStateException("Mailgun is not configured");
         }
-        String base = EU_REGION_KEY.equalsIgnoreCase(region != null ? region.trim() : "") ? EU_API_BASE : US_API_BASE;
-        String url = base + "/v3/" + domain + "/messages";
-
-        HttpResponse<String> response = Unirest.post(url)
+        HttpResponse<String> response = Unirest.post(messagesUrl())
                 .basicAuth(BASIC_AUTH_USER, privateApiKey.strip())
                 .field("from", resolveFrom(fromDisplayName))
                 .field("to", toEmail)
@@ -84,6 +126,11 @@ public class MailgunMailClient {
             throw new IllegalStateException(
                     "Mailgun HTTP " + response.getStatus() + ": " + response.getBody());
         }
+    }
+
+    private String messagesUrl() {
+        String base = EU_REGION_KEY.equalsIgnoreCase(region != null ? region.trim() : "") ? EU_API_BASE : US_API_BASE;
+        return base + "/v3/" + domain + "/messages";
     }
 
     private String resolveFrom(String fromDisplayName) {

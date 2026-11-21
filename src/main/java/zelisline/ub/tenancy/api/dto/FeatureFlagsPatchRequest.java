@@ -51,6 +51,11 @@ public record FeatureFlagsPatchRequest(
          * Turn cash-drawer shifts off for the shop: cashiers are never asked to open one and
          * sales ride on a hidden system-managed shift. Absent / false keeps shifts required.
          */
-        Boolean shiftsDisabled
+        Boolean shiftsDisabled,
+        /**
+         * Email stock (with buying and selling prices) and today's sales when a shift
+         * closes. Absent keeps the default, which is on.
+         */
+        Boolean shiftsEmailCloseReports
 ) {
 }

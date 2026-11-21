@@ -49,6 +49,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 hubAlerts,
                 null,
                 null,
+                null,
                 null);
     }
 
@@ -59,6 +60,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 null, null, null, null, null, null, null, null,
                 null,
                 enabled,
+                null,
                 null);
     }
 
@@ -69,7 +71,8 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 null, null, null, null, null, null, null, null,
                 null,
                 null,
-                disabled);
+                disabled,
+                null);
     }
 
     @Test
@@ -133,7 +136,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 new FeatureFlagsPatchRequest(
                         null, null, null, null, null, null, null, null,
                         null, null, null, true, null, null, null, null,
-                        null, null, null));
+                        null, null, null, null));
 
         assertThat(objectMapper.readTree(merged).path("featureFlags").path("pos.cashier_mpesa_code").asBoolean())
                 .isTrue();
@@ -222,6 +225,7 @@ class StorefrontSettingsServiceFeatureFlagTest {
                         new zelisline.ub.tenancy.api.dto.CashierDrawoutAccessPatch(
                                 "selected",
                                 java.util.List.of("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
+                        null,
                         null,
                         null));
 
@@ -325,5 +329,23 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 flags(true, null, null, null, null, null, null, null, null, null, null, null));
 
         assertThat(objectMapper.readTree(merged).path("featureFlags").has("ui.opening_loader")).isFalse();
+    }
+
+    @Test
+    void mergeFeatureFlags_optsOutOfShiftCloseEmail() throws Exception {
+        String merged = service.mergeFeatureFlags("{}", emailCloseReports(false));
+
+        assertThat(objectMapper.readTree(merged)
+                        .path("featureFlags")
+                        .path("shifts.email_close_reports")
+                        .asBoolean())
+                .isFalse();
+    }
+
+    private static FeatureFlagsPatchRequest emailCloseReports(Boolean enabled) {
+        return new FeatureFlagsPatchRequest(
+                null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null,
+                null, null, null, enabled);
     }
 }

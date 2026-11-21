@@ -89,6 +89,7 @@ public class SuperAdminGlobalCatalogPromoteService {
     private final GlobalProductRepository globalProductRepository;
     private final GlobalProductImageGalleryService galleryService;
     private final SuperAdminGlobalCatalogPromoteLineExecutor lineExecutor;
+    private final GlobalCatalogMedicineService medicineService;
     private final EntityManager entityManager;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
@@ -338,6 +339,12 @@ public class SuperAdminGlobalCatalogPromoteService {
                 SuperAdminGlobalCatalogPromoteLineExecutor.SavedProduct saved =
                         lineExecutor.saveProduct(product, creating);
                 product = saved.product();
+                try {
+                    medicineService.copyFromTenantItem(product.getId(), item.getBusinessId(), item.getId());
+                } catch (RuntimeException ex) {
+                    log.warn("Promote: medicine details not copied item={} product={}: {}",
+                            item.getId(), product.getId(), ex.toString());
+                }
                 boolean imageRehosted = false;
                 List<String> sourceImageUrls = resolveHttpsImageUrls(item);
                 if (!sourceImageUrls.isEmpty()) {

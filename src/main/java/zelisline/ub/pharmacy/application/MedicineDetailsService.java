@@ -222,6 +222,93 @@ public class MedicineDetailsService {
         return new BulkMedicinesResult(changed, skipped);
     }
 
+    /**
+     * Marks a newly adopted catalogue product as a medicine. The new row is UNCLASSIFIED whatever
+     * the catalogue suggests, so the item cannot be sold until someone with {@code pharmacy.manage}
+     * confirms a class. An item that is already a medicine only has its blank details filled in.
+     *
+     * @return true when the item is a medicine after the call
+     */
+    @Transactional
+    public boolean markFromCatalogue(
+            String businessId,
+            Item item,
+            CatalogueMedicineTemplate template,
+            boolean markIfNew,
+            String userId
+    ) {
+        if (template == null || item == null || !businessId.equals(item.getBusinessId())) {
+            return false;
+        }
+        ItemMedicineDetails d = repository.findByItemIdAndBusinessId(item.getId(), businessId).orElse(null);
+        boolean created = d == null;
+        if (created) {
+            if (!markIfNew) {
+                return false;
+            }
+            d = new ItemMedicineDetails();
+            d.setItemId(item.getId());
+            d.setBusinessId(businessId);
+        }
+        if (d.getGenericName() == null) {
+            d.setGenericName(blankToNull(template.genericName()));
+        }
+        if (d.getStrength() == null) {
+            d.setStrength(blankToNull(template.strength()));
+        }
+        if (d.getDosageForm() == null) {
+            d.setDosageForm(blankToNull(template.dosageForm()));
+        }
+        if (d.getPackSize() == null) {
+            d.setPackSize(blankToNull(template.packSize()));
+        }
+        if (d.getManufacturer() == null) {
+            d.setManufacturer(blankToNull(template.manufacturer()));
+        }
+        if (d.getSuggestedClass() == null && d.getDispensingClass() == DispensingClass.UNCLASSIFIED) {
+            d.setSuggestedClass(template.suggestedClass());
+        }
+        repository.save(d);
+        if (created) {
+            forceExpiryTracking(businessId, item);
+            audit(businessId, userId, AuditEventTypes.PHARMACY_MEDICINE_MARKED, item, null, d.getDispensingClass());
+        }
+        return true;
+    }
+
+    /**
+     * Sets each chosen medicine's class to the one the catalogue suggested. Only unclassified
+     * medicines that carry a suggestion change; the person confirming is recorded as having set
+     * the class.
+     */
+    @Transactional
+    public BulkMedicinesResult confirmSuggested(String businessId, List<String> itemIds, String userId) {
+        Set<String> ids = new LinkedHashSet<>(itemIds);
+        Map<String, Item> items = liveItems(businessId, ids);
+        int changed = 0;
+        int skipped = 0;
+        Set<String> seen = new LinkedHashSet<>();
+        for (ItemMedicineDetails d : repository.findByBusinessIdAndItemIdIn(businessId, ids)) {
+            seen.add(d.getItemId());
+            Item item = items.get(d.getItemId());
+            DispensingClass suggested = d.getSuggestedClass();
+            if (item == null
+                    || d.getDispensingClass() != DispensingClass.UNCLASSIFIED
+                    || suggested == null
+                    || suggested == DispensingClass.UNCLASSIFIED) {
+                skipped++;
+                continue;
+            }
+            applyClass(d, suggested, userId);
+            repository.save(d);
+            audit(businessId, userId, AuditEventTypes.PHARMACY_CLASS_CHANGED, item,
+                    DispensingClass.UNCLASSIFIED, suggested);
+            changed++;
+        }
+        skipped += ids.size() - seen.size();
+        return new BulkMedicinesResult(changed, skipped);
+    }
+
     private static void applyClass(ItemMedicineDetails d, DispensingClass cls, String userId) {
         if (d.getDispensingClass() == cls && d.getClassSetAt() != null) {
             return;
@@ -306,7 +393,8 @@ public class MedicineDetailsService {
                 d.getStorageNote(),
                 d.getDispensingClass().name(),
                 d.isRestockOnRefund(),
-                d.getClassSetAt()
+                d.getClassSetAt(),
+                d.getSuggestedClass() == null ? null : d.getSuggestedClass().name()
         );
     }
 

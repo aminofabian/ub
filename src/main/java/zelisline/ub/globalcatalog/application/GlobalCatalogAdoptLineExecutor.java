@@ -18,6 +18,7 @@ import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.globalcatalog.api.dto.AdoptResultLineResponse;
 import zelisline.ub.inventory.api.dto.PostOpeningBalanceRequest;
 import zelisline.ub.inventory.application.InventoryLedgerService;
+import zelisline.ub.pharmacy.application.MedicineDetailsService;
 import zelisline.ub.pricing.api.dto.PostSellingPriceRequest;
 import zelisline.ub.pricing.application.PricingService;
 
@@ -38,6 +39,9 @@ public class GlobalCatalogAdoptLineExecutor {
     private final InventoryLedgerService inventoryLedgerService;
     private final GlobalCatalogAdoptImageAttacher imageAttacher;
     private final GlobalCatalogSupplierAdoptLinker supplierAdoptLinker;
+    private final GlobalCatalogMedicineService catalogMedicineService;
+    private final MedicineDetailsService medicineDetailsService;
+    private final zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry;
 
     public record ImportLineCommand(
             String globalProductId,
@@ -84,17 +88,20 @@ public class GlobalCatalogAdoptLineExecutor {
         item.setGlobalProductSourceId(cmd.globalProductId());
         applyWebPublished(item, cmd.webPublished());
         itemRepository.saveAndFlush(item);
+        boolean medicine = markMedicine(businessId, cmd.globalProductId(), item, true, actorUserId);
 
         applySellingPrice(businessId, item.getId(), cmd.branchId(), cmd.sellingPrice(), actorUserId, "Global catalog adopt");
-        applyOpeningBalance(
-                businessId,
-                cmd.branchId(),
-                item.getId(),
-                cmd.openingQty(),
-                cmd.openingUnitCost(),
-                cmd.createReq().buyingPrice(),
-                actorUserId
-        );
+        if (!medicine) {
+            applyOpeningBalance(
+                    businessId,
+                    cmd.branchId(),
+                    item.getId(),
+                    cmd.openingQty(),
+                    cmd.openingUnitCost(),
+                    cmd.createReq().buyingPrice(),
+                    actorUserId
+            );
+        }
         supplierAdoptLinker.linkPrimaryTemplate(businessId, cmd.globalProductId(), item);
 
         return new AdoptResultLineResponse(
@@ -102,7 +109,7 @@ public class GlobalCatalogAdoptLineExecutor {
                 "imported",
                 item.getId(),
                 item.getSku(),
-                "Imported successfully");
+                medicineMessage("Imported successfully", medicine, cmd.openingQty()));
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -118,6 +125,9 @@ public class GlobalCatalogAdoptLineExecutor {
         item.setGlobalProductSourceId(cmd.globalProductId());
         applyWebPublished(item, cmd.webPublished());
         itemRepository.saveAndFlush(item);
+        // A pack of a medicine draws on the medicine's stock, so it follows the same rule.
+        boolean medicine = markMedicine(businessId, cmd.globalProductId(), item, true, actorUserId)
+                || medicineRegistry.isMedicine(businessId, java.util.List.of(cmd.parentItemId()));
 
         applySellingPrice(
                 businessId,
@@ -126,15 +136,17 @@ public class GlobalCatalogAdoptLineExecutor {
                 cmd.sellingPrice(),
                 actorUserId,
                 "Global catalog adopt");
-        applyOpeningBalance(
-                businessId,
-                cmd.branchId(),
-                item.getId(),
-                cmd.openingQty(),
-                cmd.openingUnitCost(),
-                cmd.buyingPriceFallback(),
-                actorUserId
-        );
+        if (!medicine) {
+            applyOpeningBalance(
+                    businessId,
+                    cmd.branchId(),
+                    item.getId(),
+                    cmd.openingQty(),
+                    cmd.openingUnitCost(),
+                    cmd.buyingPriceFallback(),
+                    actorUserId
+            );
+        }
         supplierAdoptLinker.linkPrimaryTemplate(businessId, cmd.globalProductId(), item);
 
         return new AdoptResultLineResponse(
@@ -142,7 +154,7 @@ public class GlobalCatalogAdoptLineExecutor {
                 "imported",
                 item.getId(),
                 item.getSku(),
-                "Imported as variant of parent");
+                medicineMessage("Imported as variant of parent", medicine, cmd.openingQty()));
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -151,6 +163,9 @@ public class GlobalCatalogAdoptLineExecutor {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Existing product not found"));
         existing.setGlobalProductSourceId(cmd.globalProductId());
         itemRepository.saveAndFlush(existing);
+        // A product the shop already sells is never newly marked here: that would stop its sale
+        // until a class is confirmed. An existing medicine only has blank details filled in.
+        markMedicine(businessId, cmd.globalProductId(), existing, false, actorUserId);
 
         applySellingPrice(
                 businessId,
@@ -221,6 +236,39 @@ public class GlobalCatalogAdoptLineExecutor {
                 line.itemId(),
                 line.sku(),
                 appendMessage(line.message(), result.warning()));
+    }
+
+    /**
+     * Marks the adopted item as a medicine when the catalogue product is one. The item starts
+     * unclassified, carrying the catalogue's class only as a suggestion (ADR 0033).
+     */
+    private boolean markMedicine(
+            String businessId,
+            String globalProductId,
+            Item item,
+            boolean markIfNew,
+            String actorUserId
+    ) {
+        var template = catalogMedicineService.templateFor(globalProductId);
+        if (template == null) {
+            return false;
+        }
+        return medicineDetailsService.markFromCatalogue(businessId, item, template, markIfNew, actorUserId);
+    }
+
+    /**
+     * Opening stock is not posted for a medicine: a batch with no lot number or expiry date could
+     * never be sold. The message says so instead of failing the line.
+     */
+    private static String medicineMessage(String base, boolean medicine, BigDecimal openingQty) {
+        if (!medicine) {
+            return base;
+        }
+        String note = "Marked as a medicine. Confirm its class in Pharmacy before selling";
+        if (openingQty != null && openingQty.compareTo(BigDecimal.ZERO) > 0) {
+            note += ". Opening stock was not added: receive it with its lot number and expiry date";
+        }
+        return base + "; " + note;
     }
 
     private static void applyWebPublished(Item item, Boolean webPublished) {

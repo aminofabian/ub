@@ -74,6 +74,25 @@ public interface ItemMedicineDetailsRepository extends JpaRepository<ItemMedicin
             @Param("q") String likePattern
     );
 
+    /** Rows are {@code [ItemMedicineDetails, Item]}: live, active medicines whose generic name matches. */
+    @Query("""
+            select d, i
+              from ItemMedicineDetails d
+              join zelisline.ub.catalog.domain.Item i on i.id = d.itemId
+             where d.businessId = :businessId
+               and i.businessId = :businessId
+               and i.deletedAt is null
+               and i.active = true
+               and i.sellable = true
+               and lower(d.genericName) like :q
+             order by i.name asc, i.id asc
+            """)
+    List<Object[]> searchByGenericName(
+            @Param("businessId") String businessId,
+            @Param("q") String likePattern,
+            Pageable pageable
+    );
+
     /** Rows are {@code [DispensingClass, Long]}. */
     @Query("""
             select d.dispensingClass, count(d)

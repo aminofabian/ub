@@ -58,6 +58,14 @@ public class ItemMedicineDetails {
     private DispensingClass dispensingClass = DispensingClass.UNCLASSIFIED;
 
     /**
+     * The class the platform catalogue suggested when this medicine was adopted. Shown to the
+     * pharmacist for confirmation; it never decides what the till requires.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "suggested_class", length = 24)
+    private DispensingClass suggestedClass;
+
+    /**
      * When true (and the class is OTC) a refunded unit goes back on the shelf, as for any other
      * product. Otherwise a refunded medicine is quarantined for disposal.
      */

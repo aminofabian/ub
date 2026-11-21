@@ -20,6 +20,7 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.pharmacy.api.dto.BulkClassifyMedicinesRequest;
 import zelisline.ub.pharmacy.api.dto.BulkMarkMedicinesRequest;
 import zelisline.ub.pharmacy.api.dto.BulkMedicinesResult;
+import zelisline.ub.pharmacy.api.dto.ConfirmSuggestedClassesRequest;
 import zelisline.ub.pharmacy.api.dto.MedicineClassCountsResponse;
 import zelisline.ub.pharmacy.api.dto.MedicineDetailsResponse;
 import zelisline.ub.pharmacy.api.dto.MedicinePageResponse;
@@ -114,6 +115,18 @@ public class MedicinesController {
         var user = CurrentTenantUser.requireHuman(request);
         return medicineDetailsService.bulkClassify(
                 TenantRequestIds.resolveBusinessId(request), body, user.userId());
+    }
+
+    /** Accepts the catalogue's suggested class for the chosen unclassified medicines. */
+    @PostMapping("/confirm-suggested")
+    @PreAuthorize("hasPermission(null, 'pharmacy.manage')")
+    public BulkMedicinesResult confirmSuggested(
+            @Valid @RequestBody ConfirmSuggestedClassesRequest body,
+            HttpServletRequest request
+    ) {
+        var user = CurrentTenantUser.requireHuman(request);
+        return medicineDetailsService.confirmSuggested(
+                TenantRequestIds.resolveBusinessId(request), body.itemIds(), user.userId());
     }
 
     @PostMapping("/mark")

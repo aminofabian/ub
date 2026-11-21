@@ -17,6 +17,8 @@ public record MedicineDetailsResponse(
         String storageNote,
         String dispensingClass,
         boolean restockOnRefund,
-        Instant classSetAt
+        Instant classSetAt,
+        /** Catalogue suggestion awaiting the pharmacist's confirmation; null when there is none. */
+        String suggestedClass
 ) {
 }

@@ -211,6 +211,42 @@ class PharmacyTenantIsolationIT {
     }
 
     @Test
+    void theTillShowsNothingAboutAnotherShopsMedicinesOrLots() throws Exception {
+        String itemB = UUID.randomUUID().toString();
+        ItemMedicineDetails d = new ItemMedicineDetails();
+        d.setItemId(itemB);
+        d.setBusinessId(TENANT_B);
+        d.setGenericName("Zzgenericb");
+        medicineDetailsRepository.save(d);
+        mockMvc.perform(asA(post("/api/v1/pharmacy/till/medicines"))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"itemIds\":[\"" + itemB + "\"],\"branchId\":\"" + BRANCH_B + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.medicines.length()").value(0));
+        mockMvc.perform(asA(get("/api/v1/pharmacy/till/generic").param("q", "zzgenericb")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void aShopCannotConfirmAnotherShopsSuggestedClass() throws Exception {
+        String itemB = UUID.randomUUID().toString();
+        ItemMedicineDetails d = new ItemMedicineDetails();
+        d.setItemId(itemB);
+        d.setBusinessId(TENANT_B);
+        d.setSuggestedClass(zelisline.ub.pharmacy.domain.DispensingClass.PRESCRIPTION_ONLY);
+        medicineDetailsRepository.save(d);
+        mockMvc.perform(asA(post("/api/v1/pharmacy/medicines/confirm-suggested"))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"itemIds\":[\"" + itemB + "\"]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.changed").value(0));
+        assertEquals(
+                zelisline.ub.pharmacy.domain.DispensingClass.UNCLASSIFIED,
+                medicineDetailsRepository.findById(itemB).orElseThrow().getDispensingClass());
+    }
+
+    @Test
     void aShopWithMedicinesCannotLoadItsCatalogueOntoADesktopTill() throws Exception {
         ItemMedicineDetails d = new ItemMedicineDetails();
         d.setItemId(UUID.randomUUID().toString());

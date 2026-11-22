@@ -43,6 +43,7 @@ import zelisline.ub.platform.security.CurrentTenantUser;
 public class AuthController {
 
     private final AuthService authService;
+    private final zelisline.ub.marketplace.application.SupplierShopSignInService supplierShopSignInService;
     private final AuthRegistrationService authRegistrationService;
     private final LoginBranchDirectoryService loginBranchDirectoryService;
     private final RefreshTokenCookieSupport refreshTokenCookieSupport;
@@ -87,7 +88,41 @@ public class AuthController {
 
     @PostMapping("/login")
     public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest request, HttpServletRequest http) {
-        return toSessionResponse(authService.login(http, request));
+        try {
+            return toSessionResponse(authService.login(http, request));
+        } catch (org.springframework.web.server.ResponseStatusException refused) {
+            // A supplier's portal team may use their portal credentials on their own shop (P1-3). This is tried
+            // only after the normal login has refused, and any problem with it reports the original refusal.
+            int code = refused.getStatusCode().value();
+            if (code != 401 && code != 403) {
+                throw refused;
+            }
+            java.util.Optional<LoginResponse> viaPortal;
+            try {
+                viaPortal = supplierShopSignInService.signInToShop(http, request.email(), request.password());
+            } catch (RuntimeException ignored) {
+                throw refused;
+            }
+            if (viaPortal.isEmpty()) {
+                throw refused;
+            }
+            return toSessionResponse(viaPortal.get());
+        }
+    }
+
+    /**
+     * A supplier's portal team signing in to their own shop with their portal details: email or phone number, with
+     * the portal password or PIN. The normal login takes an email only, so a phone number comes through here.
+     */
+    @PostMapping("/login-supplier")
+    public ResponseEntity<LoginResponse> loginSupplier(
+            @Valid @RequestBody zelisline.ub.marketplace.api.dto.SupplierPortalLoginRequest request,
+            HttpServletRequest http
+    ) {
+        return toSessionResponse(supplierShopSignInService
+                .signInToShop(http, request.identifier(), request.password())
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.UNAUTHORIZED, "Incorrect phone/email or PIN/password.")));
     }
 
     @PostMapping("/login-pin")

@@ -29,6 +29,7 @@ public class SupplierPortalAuthController {
 
     private final SupplierPortalAuthService supplierPortalAuthService;
     private final SupplierPortalClaimService supplierPortalClaimService;
+    private final zelisline.ub.marketplace.application.SupplierShopSignInService supplierShopSignInService;
 
     @GetMapping("/claim/config")
     public SupplierPortalClaimPublicConfigResponse claimConfig() {
@@ -40,7 +41,22 @@ public class SupplierPortalAuthController {
             @Valid @RequestBody SupplierPortalLoginRequest request,
             jakarta.servlet.http.HttpServletRequest http
     ) {
-        return supplierPortalAuthService.login(request, http);
+        try {
+            return supplierPortalAuthService.login(request, http);
+        } catch (org.springframework.web.server.ResponseStatusException refused) {
+            // A linked shop user may use their shop password here (P1-3). Tried only after the portal's own login
+            // has refused, and any problem with it reports the original refusal.
+            if (refused.getStatusCode().value() != 401) {
+                throw refused;
+            }
+            java.util.Optional<SupplierPortalLoginResponse> viaShop;
+            try {
+                viaShop = supplierShopSignInService.signInToPortal(http, request.identifier(), request.password());
+            } catch (RuntimeException ignored) {
+                throw refused;
+            }
+            return viaShop.orElseThrow(() -> refused);
+        }
     }
 
     @PostMapping("/claim/send-code")

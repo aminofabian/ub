@@ -68,7 +68,8 @@ public class ShopSupplierTeamService {
         try {
             var existing = userRepository.findByBusinessIdAndEmailAndDeletedAtIsNull(businessId, email);
             if (existing.isPresent()) {
-                link(portalUser, existing.get().getId());
+                // Left as it is: this person already has shop details of their own. Joining a portal user to an
+                // existing shop account by email alone would let a portal password open that account.
                 return new ShopTeamInviteResponse.Row(name, email, "already_in_shop", null);
             }
             String roleKey = SupplierUserRoles.isAdmin(portalUser.getRoleKey()) ? ROLE_SHOP_ADMIN : ROLE_TRADE_DESK;

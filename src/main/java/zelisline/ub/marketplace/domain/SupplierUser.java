@@ -62,6 +62,14 @@ public class SupplierUser {
     @Column(name = "business_user_id", length = 36)
     private String businessUserId;
 
+    /** Wrong guesses on the shared sign-in (portal details on the shop, shop password on the portal). */
+    @Column(name = "shop_signin_failures", nullable = false)
+    private int shopSigninFailures;
+
+    /** While set and in the future, the shared sign-in is shut for this person. Neither own door is affected. */
+    @Column(name = "shop_signin_locked_until")
+    private Instant shopSigninLockedUntil;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

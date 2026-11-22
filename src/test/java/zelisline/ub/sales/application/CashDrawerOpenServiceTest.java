@@ -216,6 +216,31 @@ class CashDrawerOpenServiceTest {
     }
 
     @Test
+    void aNoSaleOpeningIsListedAndNotClaimedByANearbyCashSale() {
+        String shiftId = "22222222-2222-2222-2222-222222222222";
+        String saleId = "33333333-3333-3333-3333-333333333333";
+        when(shifts.findByIdAndBusinessId(shiftId, BIZ_A)).thenReturn(Optional.of(new Shift()));
+        CashDrawerOpen justOpened = loggedOpening("open-plain", NOW, null);
+        justOpened.setSource(CashDrawerOpenSource.TRIGGERED);
+        justOpened.setReason(CashDrawerOpenReason.UNKNOWN);
+        when(opens.findByBusinessIdAndShiftIdOrderByOpenedAtAsc(BIZ_A, shiftId))
+                .thenReturn(List.of(justOpened));
+        when(sales.findByBusinessIdAndShiftId(BIZ_A, shiftId))
+                .thenReturn(List.of(cashSale(saleId, 7L, NOW.plusSeconds(30))));
+        when(salePayments.findBySaleIdInAndMethod(any(), eq(SalesConstants.PAYMENT_METHOD_CASH)))
+                .thenReturn(List.of(cashPayment(saleId, "80.00")));
+        when(cashDrawouts.findByShiftIdOrderByCreatedAtDesc(shiftId)).thenReturn(List.of());
+
+        var log = service.log(BIZ_A, shiftId);
+
+        assertThat(log.rows()).hasSize(1);
+        assertThat(log.rows().get(0).matched()).isFalse();
+        assertThat(log.rows().get(0).reason()).isEqualTo(CashDrawerOpenReason.UNKNOWN);
+        assertThat(log.unmatched()).isEqualTo(1);
+        assertThat(tender(log.tenders(), "Receipt 7").coincided()).isFalse();
+    }
+
+    @Test
     void logMatchesCashAndAnApprovedDrawoutAndLeavesAReprintUnmatched() {
         String shiftId = "22222222-2222-2222-2222-222222222222";
         String saleId = "33333333-3333-3333-3333-333333333333";

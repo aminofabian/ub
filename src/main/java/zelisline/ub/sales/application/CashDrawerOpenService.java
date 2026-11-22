@@ -136,7 +136,7 @@ public class CashDrawerOpenService {
         List<CashDrawerOpenMatcher.CashSale> sales = cashSales(businessId, id);
         List<CashDrawerOpenMatcher.Drawout> drawouts = openDrawouts(id);
         Map<String, CashDrawerOpenMatcher.Hit> hits = CashDrawerOpenMatcher.match(
-                toMatchOpenings(openings),
+                toMatchOpenings(explainableOpenings(openings)),
                 sales,
                 drawouts);
         return toLog(openings, hits, sales, drawouts);
@@ -246,6 +246,17 @@ public class CashDrawerOpenService {
             return rows;
         }
         return rows.subList(rows.size() - LOG_MAX, rows.size());
+    }
+
+    /** A till pulse with no reason is the drawer opened on its own. A nearby sale must not claim it. */
+    private static List<CashDrawerOpen> explainableOpenings(List<CashDrawerOpen> openings) {
+        List<CashDrawerOpen> out = new ArrayList<>();
+        for (CashDrawerOpen row : openings) {
+            if (row.getReason() != CashDrawerOpenReason.UNKNOWN) {
+                out.add(row);
+            }
+        }
+        return out;
     }
 
     private List<CashDrawerOpenMatcher.Opening> toMatchOpenings(List<CashDrawerOpen> openings) {

@@ -30,6 +30,7 @@ import zelisline.ub.storefront.domain.WebOrderLine;
 import zelisline.ub.support.api.dto.CreateSupportConversationRequest;
 import zelisline.ub.support.api.dto.GuestThreadDto;
 import zelisline.ub.support.api.dto.SendSupportMessageRequest;
+import zelisline.ub.support.api.dto.SupportAppealDto;
 import zelisline.ub.support.api.dto.SupportAttachmentDto;
 import zelisline.ub.support.api.dto.SupportConversationDetailDto;
 import zelisline.ub.support.api.dto.SupportConversationDto;

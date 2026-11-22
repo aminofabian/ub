@@ -102,8 +102,5 @@ public interface MarketplaceSupplierRepository extends JpaRepository<Marketplace
 
     Optional<MarketplaceSupplier> findBySupplierNumber(String supplierNumber);
 
-    /** The passport bound to this shop, when the shop is a supplier's own (ADR 0038). */
-    Optional<MarketplaceSupplier> findFirstByBusinessId(String businessId);
-
     boolean existsByUsernameIgnoreCase(String username);
 }

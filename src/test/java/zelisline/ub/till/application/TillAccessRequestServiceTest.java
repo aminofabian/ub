@@ -216,7 +216,8 @@ class TillAccessRequestServiceTest {
         Business business = new Business();
         business.setId("biz");
         business.setName("Demo Shop");
-        when(businessRepository.findById("biz")).thenReturn(Optional.of(business));
+        // Not every caller reads the shop name (listing and approving only need the branch).
+        org.mockito.Mockito.lenient().when(businessRepository.findById("biz")).thenReturn(Optional.of(business));
         Branch branch = new Branch();
         branch.setId("br");
         branch.setName("Westlands");

@@ -106,12 +106,13 @@ public class MarketplaceAttachService {
     }
 
     /**
-     * Attach using another shop's local supplier row (platform discovery).
-     * Promotes that seed to a global passport if needed, then attaches.
+     * Kept for callers that still send a shop's supplier id from an old directory page. It attaches
+     * the <em>passport</em> behind that id and nothing else: it no longer promotes another shop's
+     * private supplier row to a passport, and it copies nothing from that shop's catalogue or costs
+     * (ADR 0038, P0.1). The public directory now hands out passport ids, so the id is usually one.
      *
-     * <p>Here {@code productIds} are the seed shop's supplier-product link ids (what the public
-     * supplier detail lists), because the passport's own product ids do not exist until the seed is
-     * promoted. They are mapped onto the passport's products by barcode (by name when it has none).
+     * <p>{@code productIds} are passport product ids; ids of the other shop's supplier-product links
+     * are still mapped onto passport products for older clients.
      */
     @Transactional
     public MarketplaceAttachResponse attachFromPlatformSeed(
@@ -119,55 +120,37 @@ public class MarketplaceAttachService {
             String sourceLocalSupplierId,
             Collection<String> productIds
     ) {
+        MarketplaceSupplier direct = marketplaceSupplierRepository.findById(sourceLocalSupplierId).orElse(null);
+        if (direct != null) {
+            assertFindable(direct);
+            return attachMarketplace(businessId, direct, null, toIdSet(productIds), null);
+        }
+
         Supplier source = supplierRepository.findByIdAndDeletedAtIsNull(sourceLocalSupplierId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
         if (businessId.equals(source.getBusinessId())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "This supplier already belongs to your business");
         }
-
-        MarketplaceSupplier marketplace;
-        if (source.getMarketplaceSupplierId() != null && !source.getMarketplaceSupplierId().isBlank()) {
-            marketplace = marketplaceSupplierRepository.findById(source.getMarketplaceSupplierId())
-                    .orElse(null);
-        } else {
-            marketplace = null;
-        }
-        if (marketplace == null) {
-            String phone = source.getPayoutPhone();
-            if (phone == null || phone.isBlank()) {
-                phone = supplierContactRepository
-                        .findBySupplierIdOrderByPrimaryContactDescNameAsc(source.getId())
-                        .stream()
-                        .map(SupplierContact::getPhone)
-                        .filter(p -> p != null && !p.isBlank())
-                        .findFirst()
-                        .orElse(null);
-            }
-            marketplace = passportService.createDraftPassport(
-                    source.getName(),
-                    phone,
-                    null,
-                    source.getVatPin());
-            source.setMarketplaceSupplierId(marketplace.getId());
-            supplierRepository.save(source);
-            identityIndexService.upsertTenantSupplier(source, phone, null);
-            try {
-                shopLinkService.ensureLinksAndCatalogue(marketplace.getId());
-            } catch (RuntimeException ignored) {
-                // Soft.
-            }
-        } else {
-            assertFindable(marketplace);
-            // Prefer the seed shop's real name over phone-derived "Supplier 2874".
-            passportService.upgradeNameIfPlaceholder(marketplace, source.getName());
-        }
-
-        Set<String> seedLinkIds = toIdSet(productIds);
-        Set<String> marketplaceProductIds = seedLinkIds == null
+        String passportId = source.getMarketplaceSupplierId();
+        MarketplaceSupplier marketplace = passportId == null || passportId.isBlank()
                 ? null
-                : mapSeedLinksToMarketplaceProducts(marketplace.getId(), source.getId(), seedLinkIds);
-        return attachMarketplace(businessId, marketplace, source.getId(), marketplaceProductIds, seedLinkIds);
+                : marketplaceSupplierRepository.findById(passportId).orElse(null);
+        if (marketplace == null) {
+            // Another shop's private supplier with no passport is not ours to copy.
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier is not available");
+        }
+        assertFindable(marketplace);
+
+        Set<String> chosenIds = toIdSet(productIds);
+        Set<String> marketplaceProductIds = null;
+        if (chosenIds != null) {
+            // Passport product ids pass straight through; an older client's link ids are mapped.
+            marketplaceProductIds = new HashSet<>(chosenIds);
+            marketplaceProductIds.addAll(
+                    mapSeedLinksToMarketplaceProducts(marketplace.getId(), source.getId(), chosenIds));
+        }
+        return attachMarketplace(businessId, marketplace, null, marketplaceProductIds, null);
     }
 
     /**

@@ -45,7 +45,7 @@ public class PurchaseOrder {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
-    /** manual | restock | marketplace */
+    /** manual | restock | marketplace | supplier_portal */
     @Column(name = "source", nullable = false, length = 16)
     private String source = "manual";
 

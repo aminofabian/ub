@@ -46,6 +46,10 @@ public class PublicHostResolverService {
     @Value("${app.tenancy.slug-domain-suffix:}")
     private String slugDomainSuffix;
 
+    /** Field-injected so the long-standing constructor (and what builds it) stays as it is. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ReservedHostnameGuard reservedHostnameGuard;
+
     private final DomainMappingRepository domainMappingRepository;
     private final BusinessRepository businessRepository;
     private final BranchRepository branchRepository;
@@ -200,7 +204,16 @@ public class PublicHostResolverService {
                     HttpStatus.BAD_REQUEST, "Could not generate a valid slug from the provided name");
         }
 
-        if (businessRepository.existsBySlugAndDeletedAtIsNull(slug)) {
+        // "marketplace", "supplier", "shop" and the like name platform surfaces (ADR 0038). Sign-up
+        // used to skip this check, so such an address could be taken here.
+        boolean reserved = reservedHostnameGuard != null && reservedHostnameGuard.isReservedLabel(slug);
+        if (reserved && slugChosen) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "That shop address is not available. Try a different one.");
+        }
+
+        if (reserved || businessRepository.existsBySlugAndDeletedAtIsNull(slug)) {
             if (slugChosen) {
                 throw new ResponseStatusException(
                         HttpStatus.CONFLICT,

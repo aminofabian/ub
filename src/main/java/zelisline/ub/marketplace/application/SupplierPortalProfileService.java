@@ -17,9 +17,11 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.api.dto.ClaimSupplierUsernameRequest;
 import zelisline.ub.marketplace.api.dto.LinkLocalSupplierRequest;
 import zelisline.ub.marketplace.api.dto.PatchSupplierPortalProfileRequest;
+import zelisline.ub.marketplace.api.dto.PatchSupplierPortalVisibilityRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalLinkCandidateRow;
 import zelisline.ub.marketplace.api.dto.SupplierPortalLinkedShopRow;
 import zelisline.ub.marketplace.api.dto.SupplierPortalProfileResponse;
+import zelisline.ub.marketplace.api.dto.SupplierPortalVisibilityResponse;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnection;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnectionStatuses;
 import zelisline.ub.marketplace.domain.MarketplaceSupplier;
@@ -126,6 +128,29 @@ public class SupplierPortalProfileService {
     }
 
     @Transactional(readOnly = true)
+    public SupplierPortalVisibilityResponse getVisibility(String marketplaceSupplierId) {
+        MarketplaceSupplier supplier = requireSupplier(marketplaceSupplierId);
+        return new SupplierPortalVisibilityResponse(supplier.isHidePrices(), supplier.isHideContacts());
+    }
+
+    /** A supplier stays in the directory; it chooses whether its prices and contacts show there. */
+    @Transactional
+    public SupplierPortalVisibilityResponse updateVisibility(
+            String marketplaceSupplierId,
+            PatchSupplierPortalVisibilityRequest request
+    ) {
+        MarketplaceSupplier supplier = requireSupplier(marketplaceSupplierId);
+        if (request.hidePrices() != null) {
+            supplier.setHidePrices(request.hidePrices());
+        }
+        if (request.hideContacts() != null) {
+            supplier.setHideContacts(request.hideContacts());
+        }
+        marketplaceSupplierRepository.save(supplier);
+        return new SupplierPortalVisibilityResponse(supplier.isHidePrices(), supplier.isHideContacts());
+    }
+
+    @Transactional(readOnly = true)
     public List<SupplierPortalLinkCandidateRow> listLinkCandidates(String marketplaceSupplierId) {
         MarketplaceSupplier supplier = requireSupplier(marketplaceSupplierId);
         // Heal first so tagged locals show up as linked shops, not stale candidates.
@@ -135,37 +160,12 @@ public class SupplierPortalProfileService {
         } catch (RuntimeException ignored) {
             // Soft.
         }
-        Map<String, SupplierPortalLinkCandidateRow> byLocalId = new LinkedHashMap<>();
-
-        String phone = StkPhoneNormalizer.normalize(supplier.getContactPhone());
-        if (phone == null) {
-            phone = SupplierIdentityNormalizer.normalizePhone(supplier.getContactPhone());
-        }
-        String alt = SupplierIdentityNormalizer.normalizePhone(supplier.getContactPhone());
-        if (alt == null) {
-            alt = phone;
-        }
-        if (phone != null) {
-            String tail = phone.length() >= 9 ? phone.substring(phone.length() - 9) : phone;
-            for (SupplierIdentityIndex row : identityIndexRepository.findTenantByPhoneVariants(
-                    phone, alt != null ? alt : phone, tail)) {
-                addCandidate(byLocalId, row, "phone", marketplaceSupplierId);
-            }
-        }
-        String email = SupplierIdentityNormalizer.normalizeEmail(supplier.getContactEmail());
-        if (email != null) {
-            for (SupplierIdentityIndex row : identityIndexRepository.findTenantByEmail(email)) {
-                addCandidate(byLocalId, row, "email", marketplaceSupplierId);
-            }
-        }
-        String namePrefix = SupplierIdentityNormalizer.normalizeName(supplier.getName());
-        if (namePrefix.length() >= 3) {
-            for (SupplierIdentityIndex row : identityIndexRepository.findTenantByNamePrefix(namePrefix)) {
-                addCandidate(byLocalId, row, "name", marketplaceSupplierId);
-            }
-        }
-
-        return byLocalId.values().stream().limit(CANDIDATE_LIMIT).toList();
+        // No candidates are offered. The list used to match other tenants' supplier rows by this
+        // account's contact phone, email and name, none of which is verified (the contact phone can be
+        // edited in the profile), so it told any signed-in supplier which shops buy from whom. A supplier
+        // can no longer link itself either (see linkLocalSupplier); the shop adds the supplier
+        // (ADR 0038, P0.4).
+        return List.of();
     }
 
     @Transactional
@@ -193,29 +193,13 @@ public class SupplierPortalProfileService {
             return toResponse(marketplace);
         }
 
-        BusinessSupplierConnection connection = connectionRepository
-                .findByBusinessIdAndMarketplaceSupplierId(local.getBusinessId(), marketplaceSupplierId)
-                .orElseGet(BusinessSupplierConnection::new);
-        if (connection.getId() != null
-                && connection.getLocalSupplierId() != null
-                && !connection.getLocalSupplierId().equals(localId)
-                && BusinessSupplierConnectionStatuses.ACTIVE.equals(connection.getStatus())) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Already linked to a different supplier at this shop");
-        }
-        connection.setBusinessId(local.getBusinessId());
-        connection.setMarketplaceSupplierId(marketplaceSupplierId);
-        connection.setLocalSupplierId(localId);
-        connection.setStatus(BusinessSupplierConnectionStatuses.ACTIVE);
-        connection.setCanViewPurchaseHistory(true);
-        connectionRepository.save(connection);
-
-        local.setMarketplaceSupplierId(marketplaceSupplierId);
-        supplierRepository.save(local);
-        identityIndexService.upsertTenantSupplier(local, local.getPayoutPhone(), null);
-
-        return toResponse(marketplace);
+        // A supplier cannot connect itself to a shop: that would open the shop's orders, invoices and
+        // payments for this supplier to whoever asked. Only the shop can add the supplier (ADR 0038,
+        // P0.4). Nothing is written.
+        throw new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Only the shop can add you. Ask the shop to add you from its Suppliers page using your "
+                        + "supplier number " + marketplace.getSupplierNumber() + ".");
     }
 
     private void addCandidate(

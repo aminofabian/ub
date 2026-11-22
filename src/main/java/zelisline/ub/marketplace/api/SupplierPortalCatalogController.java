@@ -3,6 +3,7 @@ package zelisline.ub.marketplace.api;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -13,11 +14,15 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.marketplace.api.dto.AddSupplierPortalPackRequest;
 import zelisline.ub.marketplace.api.dto.CreateSupplierPortalProductRequest;
 import zelisline.ub.marketplace.api.dto.PatchSupplierPortalProductRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalProductResponse;
@@ -61,6 +66,46 @@ public class SupplierPortalCatalogController {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return supplierPortalCatalogService.updateProduct(
                 principal.marketplaceSupplierId(), principal.userId(), productId, request);
+    }
+
+    @PostMapping("/{productId}/packs")
+    @PreAuthorize("hasPermission(null, 'supplier.catalog.write')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public SupplierPortalProductResponse addPack(
+            @PathVariable String productId,
+            @Valid @RequestBody AddSupplierPortalPackRequest request) {
+        SupplierPrincipal principal = CurrentSupplierUser.require();
+        return supplierPortalCatalogService.addPack(principal.marketplaceSupplierId(), productId, request);
+    }
+
+    @DeleteMapping("/{productId}/packs/{packId}")
+    @PreAuthorize("hasPermission(null, 'supplier.catalog.write')")
+    public SupplierPortalProductResponse removePack(
+            @PathVariable String productId,
+            @PathVariable String packId) {
+        SupplierPrincipal principal = CurrentSupplierUser.require();
+        return supplierPortalCatalogService.removePack(principal.marketplaceSupplierId(), productId, packId);
+    }
+
+    /** The supplier's own picture for one of its products. */
+    @PostMapping(value = "/{productId}/image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasPermission(null, 'supplier.catalog.write')")
+    public SupplierPortalProductResponse uploadImage(
+            @PathVariable String productId,
+            @RequestPart("file") MultipartFile file) {
+        SupplierPrincipal principal = CurrentSupplierUser.require();
+        byte[] bytes;
+        try {
+            bytes = file.getBytes();
+        } catch (java.io.IOException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The picture could not be read");
+        }
+        return supplierPortalCatalogService.setProductImage(
+                principal.marketplaceSupplierId(),
+                productId,
+                bytes,
+                file.getOriginalFilename(),
+                file.getContentType());
     }
 
     @DeleteMapping("/{productId}")

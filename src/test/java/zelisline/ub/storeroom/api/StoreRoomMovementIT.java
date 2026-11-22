@@ -93,6 +93,9 @@ class StoreRoomMovementIT {
     private static final String MOVEMENTS_PATH = "/api/v1/store-room/movements";
     private static final String DELEGATION_ON =
             "{\"inventory\":{\"stockLevels\":{\"allowStockEditForStockManager\":true}}}";
+    /** Since 2026-11-11 a stock manager may edit stock unless the owner switches it off. */
+    private static final String DELEGATION_OFF =
+            "{\"inventory\":{\"stockLevels\":{\"allowStockEditForStockManager\":false}}}";
 
     @Autowired
     private MockMvc mockMvc;
@@ -516,6 +519,7 @@ class StoreRoomMovementIT {
     void stockManagerWithoutDelegation_cannotTakeOut() throws Exception {
         // This is why the nav item is gated on the same setting: without it the page
         // would be visible and every take-out would 403.
+        businessRepository.save(withDelegationOff());
         record(stockManager, ROLE_STOCK_MANAGER, linkedRowId, "out", "spoilage", "1", null)
                 .andExpect(status().isForbidden());
 
@@ -691,6 +695,7 @@ class StoreRoomMovementIT {
         String id = recordAndGetId(owner, ROLE_OWNER, linkedRowId, "spoilage", "2");
 
         // A stock manager without the delegation toggle cannot approve either.
+        businessRepository.save(withDelegationOff());
         decide(stockManager, ROLE_STOCK_MANAGER, id, true, null)
                 .andExpect(status().isForbidden());
 
@@ -928,6 +933,12 @@ class StoreRoomMovementIT {
                 .header("X-Tenant-Id", TENANT)
                 .header(TestAuthenticationFilter.HEADER_USER_ID, owner.getId())
                 .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER));
+    }
+
+    private Business withDelegationOff() {
+        Business business = businessRepository.findById(TENANT).orElseThrow();
+        business.setSettings(DELEGATION_OFF);
+        return business;
     }
 
     private Business withDelegationOn() {

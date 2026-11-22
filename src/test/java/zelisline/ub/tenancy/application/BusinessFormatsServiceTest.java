@@ -140,4 +140,36 @@ class BusinessFormatsServiceTest {
                 .filter(f -> f.code().equals("bar")).findFirst().orElseThrow();
         assertThat(bar.selected()).isFalse();
     }
+
+    // ------------------------------------------------------------------
+    // The supplier format is the platform's to set (ADR 0038, P1)
+    // ------------------------------------------------------------------
+
+    @Test
+    void aShopCannotGiveItselfTheSupplierFormat() {
+        when(tenancy.currentStoreTypesForTenant(BIZ)).thenReturn(List.of("mini-mart"));
+
+        List<String> result = service.change(BIZ, List.of("mini-mart", "supplier"));
+
+        assertThat(result).containsExactly("mini-mart");
+    }
+
+    @Test
+    void aSupplierShopKeepsTheSupplierFormatWhateverItChanges() {
+        when(tenancy.currentStoreTypesForTenant(BIZ)).thenReturn(List.of("other", "supplier"));
+
+        List<String> result = service.change(BIZ, List.of("mini-mart"));
+
+        assertThat(result).containsExactly("mini-mart", "supplier");
+    }
+
+    @Test
+    void theFormatsPickerNeverOffersTheSupplierFormat() {
+        when(tenancy.currentStoreTypesForTenant(BIZ)).thenReturn(List.of("other", "supplier"));
+
+        assertThat(service.describe(BIZ))
+                .extracting(BusinessFormatsService.FormatState::code)
+                .doesNotContain("supplier")
+                .contains("other");
+    }
 }

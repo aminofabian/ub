@@ -26,6 +26,10 @@ public final class PurchasingConstants {
     public static final String PO_SOURCE_MANUAL = "manual";
     public static final String PO_SOURCE_RESTOCK = "restock";
     public static final String PO_SOURCE_MARKETPLACE = "marketplace";
+    /** Proposed by the supplier from the portal; stays a draft until the shop sends it (ADR 0038, P0.3). */
+    public static final String PO_SOURCE_SUPPLIER_PORTAL = "supplier_portal";
+    /** Made by the shop from an order a connected supplier sent it (ADR 0041). */
+    public static final String PO_SOURCE_TRADE_ORDER = "trade_order";
 
     public static final String SUPPLIER_LINE_PENDING = "pending";
     public static final String SUPPLIER_LINE_ACCEPTED = "accepted";

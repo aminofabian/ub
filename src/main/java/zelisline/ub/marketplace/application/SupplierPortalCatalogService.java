@@ -27,6 +27,7 @@ import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemImage;
 import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.marketplace.api.dto.AddSupplierPortalPackRequest;
 import zelisline.ub.marketplace.api.dto.CreateSupplierPortalProductRequest;
 import zelisline.ub.marketplace.api.dto.PatchSupplierPortalProductRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalProductResponse;
@@ -43,6 +44,8 @@ import zelisline.ub.marketplace.repository.MarketplaceSupplierProductRepository;
 import zelisline.ub.notifications.SupplierPortalNotificationTypes;
 import zelisline.ub.platform.application.PlatformSupplierPortalSettingsService;
 import zelisline.ub.platform.domain.PlatformSupplierPortalSettings;
+import zelisline.ub.platform.media.CloudinaryUploadResult;
+import zelisline.ub.platform.media.MediaStore;
 import zelisline.ub.suppliers.domain.SupplierProduct;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
 
@@ -61,6 +64,10 @@ public class SupplierPortalCatalogService {
     private final ItemRepository itemRepository;
     private final ItemImageRepository itemImageRepository;
     private final ObjectMapper objectMapper;
+    private final MediaStore mediaStore;
+
+    /** Largest product picture a supplier may upload. */
+    static final long MAX_IMAGE_BYTES = 8L * 1024 * 1024;
 
     @Transactional(readOnly = true)
     public Page<SupplierPortalProductResponse> listProducts(
@@ -121,6 +128,7 @@ public class SupplierPortalCatalogService {
         offer.setPackageUnit(defaultPackUnit(request.packUnit()));
         offer.setMinQty(BigDecimal.ONE);
         offer.setUnitPrice(request.unitPrice());
+        offer.setPriceConfirmed(true);
         offer.setCurrency(defaultCurrency(request.currency()));
         boolean requestedAvailable = request.available() == null || request.available();
         offer.setAvailable(!needsApproval && requestedAvailable);
@@ -315,6 +323,7 @@ public class SupplierPortalCatalogService {
             }
             if (request.unitPrice() != null) {
                 offer.setUnitPrice(request.unitPrice());
+                offer.setPriceConfirmed(true);
             }
             if (request.currency() != null) {
                 offer.setCurrency(defaultCurrency(request.currency()));
@@ -416,8 +425,113 @@ public class SupplierPortalCatalogService {
         return toResponse(product, null);
     }
 
+    /** Adds another pack (its own size and price) to a product. The supplier's own price, so public. */
+    @Transactional
+    public SupplierPortalProductResponse addPack(
+            String marketplaceSupplierId,
+            String productId,
+            AddSupplierPortalPackRequest request
+    ) {
+        requireProductEditsAllowed();
+        MarketplaceSupplierProduct product = requireProduct(marketplaceSupplierId, productId);
+        String unit = defaultPackUnit(request.packUnit());
+        List<MarketplaceSupplierPriceOffer> current =
+                priceOfferRepository.findCurrentOffers(product.getId(), Instant.now());
+        if (current.size() >= MAX_PACKS_PER_PRODUCT) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This product already has the most packs allowed");
+        }
+        for (MarketplaceSupplierPriceOffer existing : current) {
+            if (existing.getPackageSize() != null
+                    && existing.getPackageSize().compareTo(request.packSize()) == 0
+                    && unit.equalsIgnoreCase(existing.getPackageUnit())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "This pack is already on the product");
+            }
+        }
+        MarketplaceSupplierPriceOffer offer = new MarketplaceSupplierPriceOffer();
+        offer.setMarketplaceSupplierId(marketplaceSupplierId);
+        offer.setProductId(product.getId());
+        offer.setPackageSize(request.packSize());
+        offer.setPackageUnit(unit);
+        offer.setMinQty(BigDecimal.ONE);
+        offer.setUnitPrice(request.unitPrice());
+        offer.setPriceConfirmed(true);
+        offer.setCurrency(current.isEmpty() ? defaultCurrency(null) : current.get(0).getCurrency());
+        offer.setAvailable(true);
+        offer.setEffectiveFrom(Instant.now());
+        priceOfferRepository.save(offer);
+        return toResponse(product);
+    }
+
+    /** Retires one pack. A product always keeps at least one price. */
+    @Transactional
+    public SupplierPortalProductResponse removePack(
+            String marketplaceSupplierId,
+            String productId,
+            String packId
+    ) {
+        requireProductEditsAllowed();
+        MarketplaceSupplierProduct product = requireProduct(marketplaceSupplierId, productId);
+        MarketplaceSupplierPriceOffer offer = priceOfferRepository
+                .findByIdAndMarketplaceSupplierId(packId, marketplaceSupplierId)
+                .filter(o -> product.getId().equals(o.getProductId()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Pack not found"));
+        Instant now = Instant.now();
+        List<MarketplaceSupplierPriceOffer> current = priceOfferRepository.findCurrentOffers(product.getId(), now);
+        boolean isCurrent = current.stream().anyMatch(o -> o.getId().equals(offer.getId()));
+        if (isCurrent && current.size() <= 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "A product needs at least one price");
+        }
+        offer.setEffectiveTo(now);
+        priceOfferRepository.save(offer);
+        return toResponse(product);
+    }
+
+    /** Stores a picture the supplier uploaded for one of its own products. */
+    @Transactional
+    public SupplierPortalProductResponse setProductImage(
+            String marketplaceSupplierId,
+            String productId,
+            byte[] bytes,
+            String originalFilename,
+            String contentType
+    ) {
+        requireProductEditsAllowed();
+        MarketplaceSupplierProduct product = requireProduct(marketplaceSupplierId, productId);
+        if (bytes == null || bytes.length == 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a picture to upload");
+        }
+        if (bytes.length > MAX_IMAGE_BYTES) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The picture is too large (8 MB at most)");
+        }
+        if (contentType == null || !contentType.toLowerCase(Locale.ROOT).startsWith("image/")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Upload a picture file");
+        }
+        if (!mediaStore.isConfigured()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Image storage is not configured");
+        }
+        CloudinaryUploadResult stored = mediaStore.uploadImageToFolder(
+                bytes, originalFilename, "supplier-products/" + marketplaceSupplierId);
+        String url = stored == null ? null : blankToNull(stored.secureUrl());
+        if (url == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "The picture could not be stored");
+        }
+        product.setImageUrl(url);
+        productRepository.save(product);
+        return toResponse(product);
+    }
+
+    static final int MAX_PACKS_PER_PRODUCT = 8;
+
     private SupplierPortalProductResponse toResponse(MarketplaceSupplierProduct product, String imageUrl) {
-        MarketplaceSupplierPriceOffer offer = currentPrimaryOffer(product.getId()).orElse(null);
+        List<MarketplaceSupplierPriceOffer> offers =
+                priceOfferRepository.findCurrentOffers(product.getId(), Instant.now());
+        MarketplaceSupplierPriceOffer offer = offers.isEmpty() ? null : offers.get(0);
+        List<SupplierPortalProductResponse.Pack> packs = offers.stream()
+                .map(o -> new SupplierPortalProductResponse.Pack(
+                        o.getId(), o.getPackageSize(), o.getPackageUnit(), o.getUnitPrice(), o.getCurrency()))
+                .toList();
+        // The supplier's own upload wins over a picture borrowed from a connected shop's product.
+        String ownImage = blankToNull(product.getImageUrl());
         var pending = editRequestRepository.findFirstByProductIdAndStatusOrderByCreatedAtDesc(
                 product.getId(), MarketplaceSupplierProductEditRequest.PENDING);
         return new SupplierPortalProductResponse(
@@ -439,7 +553,9 @@ public class SupplierPortalCatalogService {
                 product.getUpdatedAt(),
                 pending.map(MarketplaceSupplierProductEditRequest::getId).orElse(null),
                 pending.map(p -> readMap(p.getProposedJson())).orElse(null),
-                blankToNull(imageUrl));
+                ownImage != null ? ownImage : blankToNull(imageUrl),
+                offer != null && offer.isPriceConfirmed(),
+                packs);
     }
 
     /**

@@ -17,14 +17,12 @@ public interface SupplierInvoiceRepository extends JpaRepository<SupplierInvoice
             SELECT si FROM SupplierInvoice si
             JOIN Supplier s ON s.id = si.supplierId
             WHERE s.deletedAt IS NULL
-              AND (
-                s.marketplaceSupplierId = :marketplaceSupplierId
-                OR EXISTS (
-                  SELECT 1 FROM BusinessSupplierConnection c
-                  WHERE c.localSupplierId = s.id
-                    AND c.marketplaceSupplierId = :marketplaceSupplierId
-                    AND c.status = 'active'
-                )
+              AND EXISTS (
+                SELECT 1 FROM BusinessSupplierConnection c
+                WHERE c.businessId = s.businessId
+                  AND c.marketplaceSupplierId = :marketplaceSupplierId
+                  AND c.status = 'active'
+                  AND (c.localSupplierId = s.id OR s.marketplaceSupplierId = :marketplaceSupplierId)
               )
             ORDER BY si.invoiceDate DESC, si.createdAt DESC
             """)

@@ -14,6 +14,8 @@ public record PublicCartResponse(
         String catalogBranchName,
         Instant expiresAt,
         BigDecimal subtotal,
-        List<PublicCartLineResponse> lines
+        List<PublicCartLineResponse> lines,
+        /** True on a supplier's shop: the cart can be sent as a trade order (ADR 0040). Absent otherwise. */
+        Boolean tradeOrders
 ) {
 }

@@ -100,7 +100,31 @@ public class MarketplaceSupplier {
     @Column(name = "contact_person", length = 255)
     private String contactPerson;
 
+    /** The supplier's own shop, once it has opened one (ADR 0038, P1). Null = portal only. */
+    @Column(name = "business_id", length = 36, unique = true)
+    private String businessId;
+
+    /** Shown in the public supplier directory. Set when the supplier claims the passport (ADR 0038). */
+    @Column(name = "listed", nullable = false)
+    private boolean listed;
+
+    /** The supplier keeps its prices off public pages. */
+    @Column(name = "hide_prices", nullable = false)
+    private boolean hidePrices;
+
+    /** The supplier keeps its phone and email off public pages. */
+    @Column(name = "hide_contacts", nullable = false)
+    private boolean hideContacts;
+
     /** draft | active | suspended */
+    /** The supplier's own dispatch lead time in working days (SUPPLIER_ENGAGEMENT_DESIGN.md D5). */
+    @Column(name = "dispatch_lead_working_days", nullable = false)
+    private int dispatchLeadWorkingDays = 2;
+
+    /** The dates the supplier marks as closed, as a JSON array of ISO dates. Null when none. */
+    @Column(name = "closed_dates_json", columnDefinition = "TEXT")
+    private String closedDatesJson;
+
     @Column(name = "status", nullable = false, length = 16)
     private String status = MarketplaceSupplierStatuses.DRAFT;
 

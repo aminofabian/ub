@@ -64,6 +64,10 @@ public class Item {
     @Column(name = "is_weighed", nullable = false)
     private boolean weighed;
 
+    /** The least a shopper may order online (ADR 0038, P1-5). Null = no minimum. The till ignores it. */
+    @Column(name = "min_order_qty", precision = 14, scale = 4)
+    private BigDecimal minOrderQty;
+
     /** When true, Margin Guard approve/hard does not block below-cost sales. */
     @Column(name = "is_clearance", nullable = false)
     private boolean clearance;

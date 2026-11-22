@@ -293,7 +293,7 @@ public class PublicWebCheckoutService {
      * adjustment matches physical FIFO/FEFO allocations (avoids failure when batches were updated without
      * refreshing the item-level counter).
      */
-    private void reconcileCurrentStockFromBatches(Item item, String businessId, String branchId) {
+    public void reconcileCurrentStockFromBatches(Item item, String businessId, String branchId) {
         List<Object[]> rows = inventoryBatchRepository.sumQuantityRemainingForItemsAtBranch(
                 businessId,
                 branchId,

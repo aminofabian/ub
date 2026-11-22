@@ -62,6 +62,11 @@ public class BusinessFormatsService {
     @Transactional
     public List<String> change(String businessId, List<String> desired) {
         Set<String> wanted = normalized(desired);
+        Set<String> current = normalized(tenancyService.currentStoreTypesForTenant(businessId));
+        // Formats the platform assigned (a supplier's wholesale shop) are not the shop's to add or
+        // drop: whatever was asked, they stay exactly as they are.
+        wanted.removeIf(StoreTypeCodes.SYSTEM_TYPES::contains);
+        boolean keepsSystemFormat = current.stream().anyMatch(StoreTypeCodes.SYSTEM_TYPES::contains);
         if (wanted.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose at least one business format.");
         }
@@ -70,7 +75,13 @@ public class BusinessFormatsService {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown business format: " + code);
             }
         }
-        Set<String> current = normalized(tenancyService.currentStoreTypesForTenant(businessId));
+        if (keepsSystemFormat) {
+            for (String code : current) {
+                if (StoreTypeCodes.SYSTEM_TYPES.contains(code)) {
+                    wanted.add(code);
+                }
+            }
+        }
         Set<String> removed = new LinkedHashSet<>(current);
         removed.removeAll(wanted);
         if (!removed.isEmpty()) {

@@ -41,6 +41,7 @@ public class ServingIntakeListener {
                 event.createdAt(),
                 java.util.List.of(),
                 null,
+                null,
                 null
         );
         servingTicketService.openFromConversation(conversation, dto);

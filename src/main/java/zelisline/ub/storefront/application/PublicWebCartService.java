@@ -23,6 +23,8 @@ import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.domain.ItemImage;
 import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
+import zelisline.ub.pricing.api.dto.ItemPriceBreakDto;
+import zelisline.ub.pricing.application.ItemTradeTermsService;
 import zelisline.ub.pricing.application.PricingService;
 import zelisline.ub.storefront.api.dto.PublicCartLineResponse;
 import zelisline.ub.storefront.api.dto.PublicCartResponse;
@@ -49,6 +51,8 @@ public class PublicWebCartService {
     private final StorefrontCatalogStockService storefrontCatalogStockService;
 
     private final zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry;
+    private final ItemTradeTermsService itemTradeTermsService;
+    private final zelisline.ub.tenancy.application.TenancyService tenancyService;
 
     public PublicWebCartService(
             PublicStorefrontContextService storefrontContextService,
@@ -58,8 +62,12 @@ public class PublicWebCartService {
             PricingService pricingService,
             ItemImageRepository itemImageRepository,
             StorefrontCatalogStockService storefrontCatalogStockService,
-            zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry
+            zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry,
+            ItemTradeTermsService itemTradeTermsService,
+            zelisline.ub.tenancy.application.TenancyService tenancyService
     ) {
+        this.tenancyService = tenancyService;
+        this.itemTradeTermsService = itemTradeTermsService;
         this.medicineRegistry = medicineRegistry;
         this.storefrontContextService = storefrontContextService;
         this.webCartRepository = webCartRepository;
@@ -106,6 +114,7 @@ public class PublicWebCartService {
         }
         Item item = requireWebItem(ctx, itemId);
         StorefrontOnlinePurchaseRules.requireValidQuantity(item, q);
+        requireMinimumOrder(item, q);
         BigDecimal available = availableQtyAtCatalogBranch(ctx, itemId);
         if (available.compareTo(BigDecimal.ZERO) <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "This item is out of stock at this store");
@@ -218,6 +227,7 @@ public class PublicWebCartService {
                 .stream()
                 .collect(Collectors.toMap(Item::getId, i -> i));
         Map<String, BigDecimal> prices = loadPrices(businessId, ctx.catalogBranch().getId(), itemIds);
+        Map<String, List<ItemPriceBreakDto>> breaks = itemTradeTermsService.breaksByItem(businessId, itemIds);
         BigDecimal grandTotal = BigDecimal.ZERO;
         List<CheckoutLine> out = new ArrayList<>();
         List<String> unpricedLabels = new ArrayList<>();
@@ -229,6 +239,8 @@ public class PublicWebCartService {
             }
             StorefrontOnlinePurchaseRules.requireWebCartEligible(it);
             StorefrontOnlinePurchaseRules.requireValidQuantity(it, row.getQuantity());
+            // Checked again here: the shop may have set or raised the minimum since the line was added.
+            requireMinimumOrder(it, row.getQuantity());
             BigDecimal avail = availableQtyAtCatalogBranch(ctx, row.getItemId());
             if (row.getQuantity().compareTo(avail) > 0) {
                 throw new ResponseStatusException(
@@ -237,7 +249,8 @@ public class PublicWebCartService {
                                 + avail.stripTrailingZeros().toPlainString()
                                 + " left at this store for an item in your cart)");
             }
-            BigDecimal unit = prices.get(row.getItemId());
+            BigDecimal unit = ItemTradeTermsService.unitPriceFor(
+                    prices.get(row.getItemId()), row.getQuantity(), breaks.get(row.getItemId()));
             if (unit == null) {
                 unpricedLabels.add(checkoutItemLabel(it));
                 continue;
@@ -266,6 +279,16 @@ public class PublicWebCartService {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "No online price for " + label + ". Set a shelf price in Products before adding to cart.");
+        }
+    }
+
+    private static void requireMinimumOrder(Item item, BigDecimal quantity) {
+        BigDecimal minimum = item.getMinOrderQty();
+        if (minimum != null && quantity.compareTo(minimum) < 0) {
+            String name = item.getName() != null && !item.getName().isBlank() ? item.getName().trim() : "this item";
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "The minimum order for " + name + " is " + minimum.stripTrailingZeros().toPlainString());
         }
     }
 
@@ -306,7 +329,8 @@ public class PublicWebCartService {
                     ctx.catalogBranch().getName(),
                     cart.getExpiresAt(),
                     null,
-                    List.of()
+                    List.of(),
+                    takesTradeOrders(ctx)
             );
         }
         List<String> itemIds = lines.stream().map(WebCartLine::getItemId).toList();
@@ -315,6 +339,7 @@ public class PublicWebCartService {
                 .stream()
                 .collect(Collectors.toMap(Item::getId, i -> i));
         Map<String, BigDecimal> prices = loadPrices(businessId, ctx.catalogBranch().getId(), itemIds);
+        Map<String, List<ItemPriceBreakDto>> breaks = itemTradeTermsService.breaksByItem(businessId, itemIds);
         Map<String, String> thumbs = firstGalleryUrlByItemIds(itemIds);
         List<PublicCartLineResponse> out = new ArrayList<>();
         BigDecimal subtotal = BigDecimal.ZERO;
@@ -324,7 +349,8 @@ public class PublicWebCartService {
             if (it == null || !it.isWebPublished() || !it.isActive()) {
                 continue;
             }
-            BigDecimal unit = prices.get(L.getItemId());
+            BigDecimal shelf = prices.get(L.getItemId());
+            BigDecimal unit = ItemTradeTermsService.unitPriceFor(shelf, L.getQuantity(), breaks.get(L.getItemId()));
             BigDecimal lineTotal = null;
             if (unit != null) {
                 lineTotal = unit.multiply(L.getQuantity()).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
@@ -342,7 +368,9 @@ public class PublicWebCartService {
                     unit,
                     lineTotal,
                     it.isWeighed(),
-                    blankToNull(it.getUnitType())
+                    blankToNull(it.getUnitType()),
+                    unit != null && shelf != null && unit.compareTo(shelf) < 0 ? shelf : null,
+                    it.getMinOrderQty()
             ));
         }
         return new PublicCartResponse(
@@ -352,8 +380,16 @@ public class PublicWebCartService {
                 ctx.catalogBranch().getName(),
                 cart.getExpiresAt(),
                 allPriced && !out.isEmpty() ? subtotal : null,
-                out
+                out,
+                takesTradeOrders(ctx)
         );
+    }
+
+    /** True for a supplier's shop, null (left out of the response) for every other shop. */
+    private Boolean takesTradeOrders(PublicStorefrontContext ctx) {
+        boolean supplier = zelisline.ub.tenancy.api.dto.StoreTypeCodes.isSupplierBusiness(
+                tenancyService.currentStoreTypesForTenant(ctx.business().getId()));
+        return supplier ? Boolean.TRUE : null;
     }
 
     private Map<String, BigDecimal> loadPrices(String businessId, String branchId, List<String> itemIds) {

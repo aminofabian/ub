@@ -20,7 +20,33 @@ public final class StoreTypeCodes {
     /** Every valid code, derived from {@link #PATTERN} so the two never drift. */
     public static final List<String> ALL = List.of(PATTERN.split("\\|"));
 
-    private static final Set<String> ALL_SET = Set.copyOf(ALL);
+    /**
+     * A wholesale supplier's shop (ADR 0038). Assigned by the platform when a supplier opens its
+     * shop from the supplier portal; it is not in {@link #PATTERN} or {@link #ALL}, so onboarding
+     * and the formats picker never offer it and a request cannot ask for it. As with every other
+     * format, branch on {@link #isSupplierBusiness}, never on the code by name.
+     */
+    public static final Set<String> SUPPLIER_TYPES = Set.of("supplier");
+
+    /** Formats only the platform sets or clears. A shop keeps them through any change it makes itself. */
+    public static final Set<String> SYSTEM_TYPES = SUPPLIER_TYPES;
+
+    private static final Set<String> ALL_SET = java.util.stream.Stream
+            .concat(ALL.stream(), SYSTEM_TYPES.stream())
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+
+    /** True when one of the business's formats is a supplier's wholesale shop. */
+    public static boolean isSupplierBusiness(Collection<String> storeTypes) {
+        if (storeTypes == null) {
+            return false;
+        }
+        for (String raw : storeTypes) {
+            if (raw != null && SUPPLIER_TYPES.contains(raw.trim().toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     /** True when {@code code} is a known store-format code (case-insensitive, trimmed). */
     public static boolean isValidCode(String code) {

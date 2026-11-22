@@ -32,8 +32,10 @@ public class PublicMarketplaceController {
     public Page<PublicMarketplaceSupplierSearchRow> searchSuppliers(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String location,
+            @RequestParam(required = false) String coverage,
+            @RequestParam(defaultValue = "false") boolean shopsOnly,
             Pageable pageable) {
-        return publicMarketplaceSearchService.searchSuppliers(q, location, pageable);
+        return publicMarketplaceSearchService.searchSuppliers(q, location, coverage, shopsOnly, pageable);
     }
 
     /** Global supplier passport at kiosk.ke/s/{username} — linked shops only. */

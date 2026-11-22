@@ -22,5 +22,7 @@ public record SupportMessageDto(
         /** Set when the body was edited after sending. */
         Instant editedAt,
         /** Set when the message was unsent; body/attachment are blanked. */
-        Instant deletedAt
+        Instant deletedAt,
+        /** Set on a supplier's order appeal: the order it is about. Null otherwise. */
+        SupportAppealDto appeal
 ) {}

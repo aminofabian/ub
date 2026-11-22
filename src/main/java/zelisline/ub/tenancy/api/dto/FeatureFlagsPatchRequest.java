@@ -56,6 +56,41 @@ public record FeatureFlagsPatchRequest(
          * Email stock (with buying and selling prices) and today's sales when a shift
          * closes. Absent keeps the default, which is on.
          */
-        Boolean shiftsEmailCloseReports
+        Boolean shiftsEmailCloseReports,
+        /**
+         * Supplier shops only: let clerks take counter orders that the cashier is paid for. Absent keeps the
+         * stored value; the default is off.
+         */
+        Boolean supplierCounterOrders
 ) {
+
+    /** The fields before {@code supplierCounterOrders} was added; it is left unchanged. */
+    public FeatureFlagsPatchRequest(
+            PosDraftsFeatureFlagsPatch posDrafts,
+            Boolean butcherPosEnabled,
+            Boolean posCashierPriceEdit,
+            Boolean posCashierCreateProduct,
+            Boolean posCashierWeighedToggle,
+            Boolean posCashierAddPhoto,
+            Boolean posCashierOrderPad,
+            Boolean posCashierOrderConfirm,
+            Boolean posCashierDrawout,
+            Boolean posCashierClearSale,
+            Boolean posCashierClearAllSales,
+            Boolean posCashierMpesaCode,
+            Boolean posCatalogHybrid,
+            Boolean shiftsPrefillOpeningFromLastClose,
+            PosTillListenFeatureFlagsPatch tillListen,
+            HubAlertsFeatureFlagsPatch hubAlerts,
+            CashierDrawoutAccessPatch posCashierDrawoutAccess,
+            Boolean uiOpeningLoader,
+            Boolean shiftsDisabled,
+            Boolean shiftsEmailCloseReports
+    ) {
+        this(posDrafts, butcherPosEnabled, posCashierPriceEdit, posCashierCreateProduct, posCashierWeighedToggle,
+                posCashierAddPhoto, posCashierOrderPad, posCashierOrderConfirm, posCashierDrawout,
+                posCashierClearSale, posCashierClearAllSales, posCashierMpesaCode, posCatalogHybrid,
+                shiftsPrefillOpeningFromLastClose, tillListen, hubAlerts, posCashierDrawoutAccess,
+                uiOpeningLoader, shiftsDisabled, shiftsEmailCloseReports, null);
+    }
 }

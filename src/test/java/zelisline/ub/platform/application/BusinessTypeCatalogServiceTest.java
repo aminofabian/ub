@@ -175,7 +175,9 @@ class BusinessTypeCatalogServiceTest {
 
         int created = service.backfillMissingDefaults();
 
-        assertThat(created).isEqualTo(18);
+        // Every format code except the one that already exists; counted from the list so a new
+        // format does not break this test again.
+        assertThat(created).isEqualTo(zelisline.ub.platform.domain.BusinessTypeCatalogDefaults.ALL.size() - 1);
         verify(repository, never()).save(org.mockito.ArgumentMatchers.argThat(
                 e -> e != null && "bar".equals(e.getCode())));
     }

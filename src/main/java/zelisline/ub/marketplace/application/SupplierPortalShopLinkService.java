@@ -8,11 +8,14 @@ import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.catalog.domain.Item;
+import zelisline.ub.catalog.domain.ItemImage;
+import zelisline.ub.catalog.repository.ItemImageRepository;
 import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnection;
 import zelisline.ub.marketplace.domain.BusinessSupplierConnectionStatuses;
@@ -62,6 +65,7 @@ public class SupplierPortalShopLinkService {
     private final MarketplaceSupplierProductRepository productRepository;
     private final MarketplaceSupplierPriceOfferRepository priceOfferRepository;
     private final ItemRepository itemRepository;
+    private final ItemImageRepository itemImageRepository;
 
     @Transactional
     public int ensureLinksAndCatalogue(String marketplaceSupplierId) {
@@ -254,7 +258,13 @@ public class SupplierPortalShopLinkService {
     }
 
     /**
-     * @return true when a new ACTIVE connection was created or an existing one reactivated
+     * Tags a shop's supplier row to this passport, but only where that shop already holds an ACTIVE
+     * connection to it. It never creates a connection and never changes a connection's status: a
+     * connection becomes ACTIVE on the shop's own action (connect / attach), not because someone
+     * claimed a matching phone or email (ADR 0038, P0.4). A shop that suspended a supplier stays
+     * suspended.
+     *
+     * @return true when the shop's supplier row was newly tagged
      */
     private boolean ensureConnection(String marketplaceSupplierId, Supplier local, String matchPhone) {
         if (local.getMarketplaceSupplierId() != null
@@ -268,55 +278,35 @@ public class SupplierPortalShopLinkService {
             if (!marketplaceSupplierId.equals(existing.getMarketplaceSupplierId())) {
                 return false;
             }
-            boolean changed = false;
             if (!BusinessSupplierConnectionStatuses.ACTIVE.equals(existing.getStatus())) {
-                existing.setStatus(BusinessSupplierConnectionStatuses.ACTIVE);
-                changed = true;
+                // Pending or suspended: the shop decides. Nothing in the shop's records is touched.
+                return false;
             }
-            if (local.getMarketplaceSupplierId() == null) {
-                local.setMarketplaceSupplierId(marketplaceSupplierId);
-                supplierRepository.save(local);
-                changed = true;
-            }
-            backfillPayoutPhone(local, matchPhone);
-            if (changed) {
-                connectionRepository.save(existing);
-                return true;
-            }
-            return false;
+            return tagLocalIfUntagged(marketplaceSupplierId, local, matchPhone);
         }
 
-        if (connectionRepository.existsByBusinessIdAndMarketplaceSupplierId(
-                local.getBusinessId(), marketplaceSupplierId)) {
-            // Another local at this shop already linked — still tag this local for orders/catalogue.
-            if (local.getMarketplaceSupplierId() == null) {
-                local.setMarketplaceSupplierId(marketplaceSupplierId);
-                supplierRepository.save(local);
-                backfillPayoutPhone(local, matchPhone);
-                return true;
-            }
-            return false;
+        // Another supplier row at this shop is the connected one. Tag this row too so its orders
+        // reach the portal, but only while that connection is ACTIVE.
+        boolean shopConnected = connectionRepository
+                .findByBusinessIdAndMarketplaceSupplierId(local.getBusinessId(), marketplaceSupplierId)
+                .map(c -> BusinessSupplierConnectionStatuses.ACTIVE.equals(c.getStatus()))
+                .orElse(false);
+        if (shopConnected) {
+            return tagLocalIfUntagged(marketplaceSupplierId, local, matchPhone);
         }
 
-        BusinessSupplierConnection connection = new BusinessSupplierConnection();
-        connection.setBusinessId(local.getBusinessId());
-        connection.setMarketplaceSupplierId(marketplaceSupplierId);
-        connection.setLocalSupplierId(local.getId());
-        connection.setStatus(BusinessSupplierConnectionStatuses.ACTIVE);
-        connection.setCanViewPurchaseHistory(true);
-        connectionRepository.saveAndFlush(connection);
+        // No connection at this shop: a matching phone or email proves nothing about the shop's
+        // consent, so nothing is written into its tenant.
+        return false;
+    }
 
+    private boolean tagLocalIfUntagged(String marketplaceSupplierId, Supplier local, String matchPhone) {
+        if (local.getMarketplaceSupplierId() != null) {
+            return false;
+        }
         local.setMarketplaceSupplierId(marketplaceSupplierId);
-        backfillPayoutPhone(local, matchPhone);
         supplierRepository.save(local);
-        try {
-            identityIndexService.upsertTenantSupplier(
-                    local,
-                    matchPhone != null ? matchPhone : local.getPayoutPhone(),
-                    null);
-        } catch (RuntimeException ex) {
-            log.warn("identity upsert after heal skipped for {}: {}", local.getId(), ex.getMessage());
-        }
+        backfillPayoutPhone(local, matchPhone);
         return true;
     }
 
@@ -356,10 +346,13 @@ public class SupplierPortalShopLinkService {
             return false;
         }
         String barcode = blankToNull(item.getBarcode());
-        if (barcode != null
-                && productRepository.existsByMarketplaceSupplierIdAndBarcodeIgnoreCase(
-                        marketplaceSupplierId, barcode)) {
-            return false;
+        if (barcode != null) {
+            var existing = productRepository.findFirstByMarketplaceSupplierIdAndBarcodeIgnoreCase(
+                    marketplaceSupplierId, barcode);
+            if (existing.isPresent()) {
+                fillMissingImage(existing.get(), item);
+                return false;
+            }
         }
         if (barcode == null
                 && productRepository.existsByMarketplaceSupplierIdAndNameIgnoreCase(
@@ -376,6 +369,7 @@ public class SupplierPortalShopLinkService {
         product.setPackSize(link.getPackSize());
         product.setPackUnit(blankToNull(link.getPackUnit()));
         product.setMinOrderQty(link.getMinOrderQty());
+        product.setImageUrl(resolveItemImageUrl(item));
         product.setStatus(MarketplaceSupplierProductStatuses.ACTIVE);
         productRepository.save(product);
 
@@ -395,8 +389,46 @@ public class SupplierPortalShopLinkService {
         offer.setCurrency("KES");
         offer.setAvailable(true);
         offer.setEffectiveFrom(Instant.now());
+        // This is the shop's own cost, not a price the supplier published: it stays unconfirmed, so
+        // the public directory never shows it (ADR 0038, P0.1).
+        offer.setPriceConfirmed(false);
         priceOfferRepository.save(offer);
         return true;
+    }
+
+    /** Gives a passport product a picture when it has none, from the connected shop's product. */
+    private void fillMissingImage(MarketplaceSupplierProduct product, Item item) {
+        if (product.getImageUrl() != null && !product.getImageUrl().isBlank()) {
+            return;
+        }
+        String url = resolveItemImageUrl(item);
+        if (url != null) {
+            product.setImageUrl(url);
+            productRepository.save(product);
+        }
+    }
+
+    /** First public http(s) image of a shop product: its own image key, else its first gallery image. */
+    private String resolveItemImageUrl(Item item) {
+        String key = blankToNull(item.getImageKey());
+        if (key != null && (key.startsWith("http://") || key.startsWith("https://"))) {
+            return key;
+        }
+        if (item.getId() == null) {
+            return null;
+        }
+        Sort order = Sort.by(Sort.Order.asc("sortOrder"), Sort.Order.asc("id"));
+        for (ItemImage image : itemImageRepository.findByItemIdIn(List.of(item.getId()), order)) {
+            String secure = blankToNull(image.getSecureUrl());
+            if (secure != null) {
+                return secure;
+            }
+            String s3Key = blankToNull(image.getS3Key());
+            if (s3Key != null && (s3Key.startsWith("http://") || s3Key.startsWith("https://"))) {
+                return s3Key;
+            }
+        }
+        return null;
     }
 
     private static String blankToNull(String value) {

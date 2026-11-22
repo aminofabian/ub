@@ -51,7 +51,8 @@ class TillDeviceServiceTest {
     void resolveLabelIgnoresRawDeviceUuid() {
         String key = "04dd48d2-575f-4bb6-ad01-3a21efeb2260";
         assertEquals("Till 04dd48d2", TillDeviceService.resolveLabel(key, key));
-        assertEquals("Till 04dd48d2", TillDeviceService.resolveLabel(key, "other-device-key-01"));
+        // A label that is itself a raw device id is ignored; the name comes from this till's own key.
+        assertEquals("Till otherdev", TillDeviceService.resolveLabel(key, "other-device-key-01"));
     }
 
     @Test

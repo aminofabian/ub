@@ -151,6 +151,8 @@ class CustomerPhoneVerificationApiIT {
 
         when(messagingSettingsService.resolveForTest(TENANT, zelisline.ub.messaging.domain.SmsSendReason.OTP))
                 .thenReturn(testMessagingConfig());
+        // The service now asks for the OTP configuration directly.
+        when(messagingSettingsService.resolveForOtp(TENANT)).thenReturn(testMessagingConfig());
         messageCaptor = ArgumentCaptor.forClass(String.class);
         when(customerMessageDispatcher.deliverBothChannels(any(), anyString(), messageCaptor.capture()))
                 .thenReturn(new CustomerMessageDispatcher.DeliveryResult(

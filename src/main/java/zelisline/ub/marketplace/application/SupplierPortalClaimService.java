@@ -719,6 +719,18 @@ public class SupplierPortalClaimService {
         if (marketplaceSupplierId == null) {
             return;
         }
+        // A claimed passport joins the public directory (ADR 0038, P0.1).
+        try {
+            marketplaceSupplierRepository.findById(marketplaceSupplierId).ifPresent(passport -> {
+                if (!passport.isListed()
+                        && MarketplaceSupplierStatuses.ACTIVE.equalsIgnoreCase(passport.getStatus())) {
+                    passport.setListed(true);
+                    marketplaceSupplierRepository.save(passport);
+                }
+            });
+        } catch (RuntimeException ex) {
+            log.warn("supplier passport listing skipped for {}: {}", marketplaceSupplierId, rootMessage(ex));
+        }
         try {
             // Prefer the heal service — matches phone variants + already-tagged locals
             // and imports shop-linked products into the portal catalogue.
@@ -728,14 +740,8 @@ public class SupplierPortalClaimService {
                     "supplier portal auto-link shops skipped for {}: {}",
                     marketplaceSupplierId,
                     rootMessage(ex));
-            // Fallback to legacy phone-index link only.
-            if (phone != null && !phone.isBlank()) {
-                try {
-                    linkLocalsByPhone(marketplaceSupplierId, phone);
-                } catch (RuntimeException ignored) {
-                    // Already logged above.
-                }
-            }
+            // No fallback: the legacy phone-index link created ACTIVE connections in every shop
+            // holding that phone. A connection is the shop's choice (ADR 0038, P0.4).
         }
     }
 

@@ -763,7 +763,8 @@ public class StorefrontSettingsService {
                         && patch.posCashierDrawoutAccess() == null
                         && patch.uiOpeningLoader() == null
                         && patch.shiftsDisabled() == null
-                        && patch.shiftsEmailCloseReports() == null)) {
+                        && patch.shiftsEmailCloseReports() == null
+                        && patch.supplierCounterOrders() == null)) {
             return currentSettings;
         }
         ObjectNode root = parseRoot(currentSettings);
@@ -846,6 +847,11 @@ public class StorefrontSettingsService {
                 flags,
                 FeatureFlagService.FLAG_SHIFTS_EMAIL_CLOSE_REPORTS,
                 patch.shiftsEmailCloseReports()
+        );
+        putFlagIfPresent(
+                flags,
+                FeatureFlagService.FLAG_SUPPLIER_COUNTER_ORDERS,
+                patch.supplierCounterOrders()
         );
         if (patch.tillListen() != null) {
             applyTillListenFlags(flags, patch.tillListen());

@@ -25,6 +25,8 @@ import zelisline.ub.onboarding.progress.api.dto.SetupProgressSubMilestoneDto;
 import zelisline.ub.onboarding.sequence.application.MerchantOnboardingGateService;
 import zelisline.ub.opsalerts.application.BusinessOpsAlertSettingsService;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
+import zelisline.ub.wholesale.api.dto.SupplierReadinessResponse;
+import zelisline.ub.wholesale.application.SupplierReadinessService;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
@@ -51,6 +53,8 @@ public class SetupProgressService {
     private final ObjectProvider<zelisline.ub.serviceops.application.ServiceSetupFacts> serviceSetupFacts;
     /** Absent in a deployment without the restaurant module; a food shop then gets the standard steps. */
     private final ObjectProvider<zelisline.ub.restaurant.application.RestaurantSetupFacts> restaurantSetupFacts;
+    /** The supplier readiness steps (SUPPLIER_ENGAGEMENT_DESIGN.md §12). Off unless the flags are on. */
+    private final SupplierReadinessService supplierReadinessService;
 
     @Transactional
     public SetupProgressResponse getForBusiness(String businessId) {
@@ -227,7 +231,9 @@ public class SetupProgressService {
                     false);
         }
 
-        String currentKey = defs.stream()
+        List<StepDef> all = new ArrayList<>(defs);
+        all.addAll(supplierStepDefs(business.getId()));
+        String currentKey = all.stream()
                 .filter(s -> !s.done())
                 .map(StepDef::key)
                 .findFirst()
@@ -235,7 +241,7 @@ public class SetupProgressService {
 
         List<SetupProgressStepDto> steps = new ArrayList<>();
         boolean foundCurrent = false;
-        for (StepDef def : defs) {
+        for (StepDef def : all) {
             String status;
             if (def.done()) {
                 status = "completed";
@@ -259,7 +265,8 @@ public class SetupProgressService {
 
         boolean snoozed = prefs.snoozed(now);
         boolean dismissed = prefs.dismissedAt() != null && (percent >= DISMISS_MIN_PERCENT || shopReady);
-        boolean visible = shopCreated && !shopReady && !snoozed && !dismissed;
+        boolean supplierOpen = all.stream().skip(defs.size()).anyMatch(d -> !d.done());
+        boolean visible = shopCreated && (!shopReady || supplierOpen) && !snoozed && !dismissed;
 
         return new SetupProgressResponse(
                 visible,
@@ -513,6 +520,21 @@ public class SetupProgressService {
                 "/business/settings",
                 null,
                 List.of(sub("enable", "Enable your storefront", 10, done)));
+    }
+
+    /**
+     * The supplier checklist as setup steps. Weighted zero, so they never move the shop's percentage or
+     * its ready state; they only appear while the supplier flags are on and the shop has a passport.
+     */
+    private List<StepDef> supplierStepDefs(String businessId) {
+        SupplierReadinessResponse readiness = supplierReadinessService.readiness(businessId);
+        if (!readiness.enabled()) {
+            return List.of();
+        }
+        return readiness.steps().stream()
+                .map(s -> new StepDef("supplier_" + s.key(), s.label(), false, s.done(), 0, 0,
+                        s.actionUrl(), null, List.of()))
+                .toList();
     }
 
     private static SetupProgressSubMilestoneDto sub(String key, String label, int points, boolean completed) {

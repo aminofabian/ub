@@ -338,10 +338,9 @@ class PharmacyTenantIsolationIT {
                         .content("{\"branchId\":\"" + BRANCH_B + "\",\"clientVisitId\":\"" + UUID.randomUUID()
                                 + "\",\"patientId\":\"" + patientB + "\"}")))
                 .andExpect(status().isNotFound());
-        // B's branch shows A nothing.
+        // B's branch shows A nothing: a branch that is not A's is refused outright.
         mockMvc.perform(asA(get("/api/v1/clinic/visits").param("branchId", BRANCH_B)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.visits.length()").value(0));
+                .andExpect(status().isNotFound());
         // Nothing was written to B's visit.
         assertEquals(0, prescriptionRepository.count());
     }

@@ -12,6 +12,11 @@ public record PublicCustomerTabResponse(
         BigDecimal walletBalance,
         List<TabPurchaseRowResponse> purchases,
         boolean pageSealed,
-        boolean pageUnlocked
+        boolean pageUnlocked,
+        /**
+         * True when the balance and purchases were withheld: the page has no PIN yet, or it has one
+         * and this viewer has not entered it. Whoever holds the phone sets the PIN with a texted code.
+         */
+        boolean restricted
 ) {
 }

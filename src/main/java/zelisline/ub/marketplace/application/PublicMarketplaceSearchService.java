@@ -1,94 +1,118 @@
 package zelisline.ub.marketplace.application;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.stream.Collectors;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import lombok.RequiredArgsConstructor;
-import zelisline.ub.catalog.application.ProductDisplayName;
-import zelisline.ub.catalog.domain.Item;
-import zelisline.ub.catalog.domain.ItemImage;
-import zelisline.ub.catalog.repository.CategoryRepository;
-import zelisline.ub.catalog.repository.ItemImageRepository;
-import zelisline.ub.catalog.repository.ItemRepository;
 import zelisline.ub.marketplace.api.dto.MarketplaceSupplierDetailResponse;
 import zelisline.ub.marketplace.api.dto.PublicMarketplaceProductSearchRow;
 import zelisline.ub.marketplace.api.dto.PublicMarketplaceSupplierSearchRow;
-import zelisline.ub.suppliers.SupplierCodes;
-import zelisline.ub.suppliers.application.SupplierPackOfferResolver;
+import zelisline.ub.marketplace.domain.MarketplaceSupplier;
+import zelisline.ub.marketplace.domain.MarketplaceSupplierPriceOffer;
+import zelisline.ub.marketplace.domain.MarketplaceSupplierProduct;
+import zelisline.ub.marketplace.domain.MarketplaceSupplierProductStatuses;
+import zelisline.ub.marketplace.domain.MarketplaceSupplierStatuses;
+import zelisline.ub.marketplace.repository.MarketplaceSupplierPriceOfferRepository;
+import zelisline.ub.marketplace.repository.MarketplaceSupplierProductRepository;
+import zelisline.ub.marketplace.repository.MarketplaceSupplierRepository;
 import zelisline.ub.suppliers.domain.Supplier;
-import zelisline.ub.suppliers.domain.SupplierContact;
-import zelisline.ub.suppliers.domain.SupplierProduct;
-import zelisline.ub.suppliers.repository.SupplierContactRepository;
-import zelisline.ub.suppliers.repository.SupplierProductRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
-import zelisline.ub.tenancy.application.BranchLocalityLabels;
-import zelisline.ub.tenancy.application.BusinessOnboardingSettingsService;
-import zelisline.ub.tenancy.domain.Branch;
-import zelisline.ub.tenancy.domain.Business;
-import zelisline.ub.tenancy.repository.BranchRepository;
-import zelisline.ub.tenancy.repository.BusinessRepository;
 
 /**
- * Public directory over tenant-owned suppliers and their linked catalogue items.
- * Only active, non-deleted suppliers that have at least one active product link are listed.
+ * Public supplier directory (ADR 0038, P0.1).
+ *
+ * <p>It lists <em>passports</em> ({@code marketplace_suppliers}) that are listed and active, with the
+ * passport's own products, its confirmed prices and the contact details the supplier entered for
+ * itself. A supplier can hide its prices and its contacts. It never reads a shop's supplier rows,
+ * product links, items, costs, contacts or payout details: those are the shop's private records.
+ * Every {@code id} in these payloads is a passport id or a passport product id.
+ *
+ * <p>A shop's supplier id is still accepted on the detail lookups, because older links and screens
+ * send one; it only resolves to the listed passport that row is tagged to.
  */
 @Service
 @RequiredArgsConstructor
 public class PublicMarketplaceSearchService {
 
+    private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {
+    };
+
+    private final MarketplaceSupplierRepository marketplaceSupplierRepository;
+    private final MarketplaceSupplierProductRepository productRepository;
+    private final MarketplaceSupplierPriceOfferRepository priceOfferRepository;
     private final SupplierRepository supplierRepository;
-    private final SupplierProductRepository supplierProductRepository;
-    private final SupplierContactRepository supplierContactRepository;
-    private final SupplierPackOfferResolver supplierPackOfferResolver;
-    private final ItemRepository itemRepository;
-    private final ItemImageRepository itemImageRepository;
-    private final CategoryRepository categoryRepository;
-    private final BusinessRepository businessRepository;
-    private final BranchRepository branchRepository;
-    private final BusinessOnboardingSettingsService businessOnboardingSettingsService;
-    private final MarketplaceSlugService marketplaceSlugService;
+    private final ObjectMapper objectMapper;
+    private final zelisline.ub.tenancy.repository.BusinessRepository businessRepository;
+    private final zelisline.ub.tenancy.application.StorefrontSettingsService storefrontSettingsService;
 
     @Transactional(readOnly = true)
     public Page<PublicMarketplaceSupplierSearchRow> searchSuppliers(
             String q, String location, Pageable pageable) {
-        String query = blankToNull(q);
+        return searchSuppliers(q, location, null, false, pageable);
+    }
+
+    /**
+     * As above, narrowed to suppliers that deliver to {@code coverage} (one of their delivery
+     * regions contains it) and, with {@code shopsOnly}, to suppliers that have their own shop open
+     * online (P3-2).
+     */
+    @Transactional(readOnly = true)
+    public Page<PublicMarketplaceSupplierSearchRow> searchSuppliers(
+            String q, String location, String coverage, boolean shopsOnly, Pageable pageable) {
         String locationFilter = blankToNull(location);
-        // Fetch a wider page when filtering by location (resolved in-memory from branches/settings).
-        Pageable fetchPage = locationFilter != null
+        String coverageFilter = blankToNull(coverage) == null ? null : coverage.trim().toLowerCase(java.util.Locale.ROOT);
+        boolean filtered = locationFilter != null || coverageFilter != null || shopsOnly;
+        // Fetch a wider page when filtering (location, coverage and "has a shop" are resolved in memory).
+        Pageable fetchPage = filtered
                 ? Pageable.ofSize(Math.max(pageable.getPageSize() * 8, 80)).withPage(0)
                 : pageable;
-        Page<Supplier> page = supplierRepository.searchPublicDirectory(query, fetchPage);
-        Map<String, ListingLocation> locationsByBusiness = resolveLocationsByBusinessId(
-                page.getContent().stream().map(Supplier::getBusinessId).toList());
+        Page<MarketplaceSupplier> page =
+                marketplaceSupplierRepository.searchPublicDirectory(blankToEmpty(q), fetchPage);
 
         List<PublicMarketplaceSupplierSearchRow> rows = new ArrayList<>();
-        for (Supplier supplier : page.getContent()) {
-            ListingLocation loc = locationsByBusiness.getOrDefault(
-                    supplier.getBusinessId(), ListingLocation.empty());
+        for (MarketplaceSupplier passport : page.getContent()) {
+            ListingLocation loc = locationOf(passport);
             if (locationFilter != null && !loc.matches(locationFilter)) {
                 continue;
             }
-            rows.add(toSupplierRow(supplier, loc));
+            PublicMarketplaceSupplierSearchRow row = toSupplierRow(passport, loc);
+            if (shopsOnly && row.shopSlug() == null) {
+                continue;
+            }
+            if (coverageFilter != null) {
+                final String wanted = coverageFilter;
+                boolean delivers = row.deliveryRegions() != null && row.deliveryRegions().stream()
+                        .anyMatch(region -> region != null && region.toLowerCase(java.util.Locale.ROOT).contains(wanted));
+                if (!delivers) {
+                    continue;
+                }
+            }
+            rows.add(row);
         }
-        if (locationFilter != null) {
+        if (filtered) {
             return slicePage(rows, pageable);
         }
         return new PageImpl<>(rows, pageable, page.getTotalElements());
@@ -97,47 +121,60 @@ public class PublicMarketplaceSearchService {
     @Transactional(readOnly = true)
     public Page<PublicMarketplaceProductSearchRow> searchProducts(
             String q, String location, String supplierId, Pageable pageable) {
-        // Hibernate binds nulls poorly in OR IS NULL checks — use "" as "no filter".
-        String query = blankToNull(q);
-        String queryParam = query != null ? query : "";
         String locationFilter = blankToNull(location);
-        String supplierFilter = blankToNull(supplierId);
-        String supplierParam = supplierFilter != null ? supplierFilter : "";
         Pageable fetchPage = locationFilter != null
                 ? Pageable.ofSize(Math.max(pageable.getPageSize() * 8, 120)).withPage(0)
                 : pageable;
-        Page<SupplierProduct> page = supplierProductRepository.searchPublicDirectory(
-                queryParam, supplierParam, fetchPage);
-        List<SupplierProduct> links = page.getContent();
-        Map<String, Item> itemsById = loadItems(links.stream().map(SupplierProduct::getItemId).toList());
-        Map<String, Supplier> suppliersById = loadSuppliers(
-                links.stream().map(SupplierProduct::getSupplierId).toList());
-        Map<String, ListingLocation> locationsByBusiness = resolveLocationsByBusinessId(
-                suppliersById.values().stream().map(Supplier::getBusinessId).toList());
-        Map<String, Integer> productCounts = productCountsBySupplierId(suppliersById.keySet());
-        Map<String, String> thumbs = resolveThumbnailUrls(itemsById.values());
-        Map<String, String> categories = categoryNamesById(
-                itemsById.values().stream().map(Item::getCategoryId).filter(Objects::nonNull).toList());
+        Page<MarketplaceSupplierProduct> page = productRepository.searchPublicDirectory(
+                blankToEmpty(q), blankToEmpty(supplierId), fetchPage);
 
-        List<PublicMarketplaceProductSearchRow> rows = new ArrayList<>(links.size());
-        for (SupplierProduct link : links) {
-            Item item = itemsById.get(link.getItemId());
-            Supplier supplier = suppliersById.get(link.getSupplierId());
-            if (item == null || supplier == null) {
+        Map<String, MarketplaceSupplier> passportsById = new LinkedHashMap<>();
+        List<String> passportIds = page.getContent().stream()
+                .map(MarketplaceSupplierProduct::getMarketplaceSupplierId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        for (MarketplaceSupplier passport : marketplaceSupplierRepository.findAllById(passportIds)) {
+            passportsById.put(passport.getId(), passport);
+        }
+        Map<String, Integer> productCounts = new LinkedHashMap<>();
+        Instant now = Instant.now();
+
+        List<PublicMarketplaceProductSearchRow> rows = new ArrayList<>(page.getContent().size());
+        for (MarketplaceSupplierProduct product : page.getContent()) {
+            MarketplaceSupplier passport = passportsById.get(product.getMarketplaceSupplierId());
+            if (passport == null || !isPublic(passport)) {
                 continue;
             }
-            ListingLocation loc = locationsByBusiness.getOrDefault(
-                    supplier.getBusinessId(), ListingLocation.empty());
+            ListingLocation loc = locationOf(passport);
             if (locationFilter != null && !loc.matches(locationFilter)) {
                 continue;
             }
-            String imageUrl = item.getId() != null ? thumbs.get(item.getId()) : null;
-            String categoryName = item.getCategoryId() != null
-                    ? categories.get(item.getCategoryId())
-                    : null;
-            int supplierProductCount = productCounts.getOrDefault(supplier.getId(), 0);
-            rows.add(toProductRow(
-                    link, item, supplier, imageUrl, categoryName, loc, supplierProductCount));
+            int supplierProductCount = productCounts.computeIfAbsent(passport.getId(), this::activeProductCount);
+            MarketplaceSupplierPriceOffer offer = passport.isHidePrices()
+                    ? null
+                    : primaryPublicOffer(product.getId(), now);
+            rows.add(new PublicMarketplaceProductSearchRow(
+                    product.getId(),
+                    product.getName(),
+                    MarketplaceSlugService.productSlug(product.getName(), product.getId()),
+                    blankToNull(product.getBarcode()),
+                    blankToNull(product.getSku()),
+                    blankToNull(product.getCategoryName()),
+                    blankToNull(product.getImageUrl()),
+                    passport.getId(),
+                    passport.getName(),
+                    passportSlug(passport),
+                    null,
+                    supplierProductCount,
+                    loc.primary(),
+                    loc.locations(),
+                    product.getPackSize(),
+                    blankToNull(product.getPackUnit()),
+                    product.getMinOrderQty(),
+                    offer != null ? offer.getUnitPrice() : null,
+                    offer != null ? offer.getCurrency() : null,
+                    true));
         }
         if (locationFilter != null) {
             return slicePage(rows, pageable);
@@ -147,27 +184,41 @@ public class PublicMarketplaceSearchService {
 
     @Transactional(readOnly = true)
     public List<String> listLocations() {
-        Page<Supplier> page = supplierRepository.searchPublicDirectory(
-                null, Pageable.ofSize(200).withPage(0));
-        Map<String, ListingLocation> locationsByBusiness = resolveLocationsByBusinessId(
-                page.getContent().stream().map(Supplier::getBusinessId).toList());
+        Page<MarketplaceSupplier> page = marketplaceSupplierRepository.searchPublicDirectory(
+                "", Pageable.ofSize(200).withPage(0));
         Set<String> out = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
-        for (ListingLocation loc : locationsByBusiness.values()) {
-            out.addAll(loc.locations());
+        for (MarketplaceSupplier passport : page.getContent()) {
+            out.addAll(locationOf(passport).locations());
         }
         return List.copyOf(out);
     }
 
+    /** {@code supplierId} is a passport id; a shop's supplier id resolves to its listed passport. */
     @Transactional(readOnly = true)
     public MarketplaceSupplierDetailResponse getSupplierDetail(String supplierId) {
-        Supplier supplier = supplierRepository.findByIdAndDeletedAtIsNull(supplierId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
-        return buildSupplierDetail(supplier);
+        String needle = blankToNull(supplierId);
+        if (needle == null) {
+            throw notFound("Supplier not found");
+        }
+        Optional<MarketplaceSupplier> direct = marketplaceSupplierRepository.findById(needle);
+        if (direct.isPresent()) {
+            if (!isPublic(direct.get())) {
+                throw notFound("Supplier is not available");
+            }
+            return buildSupplierDetail(direct.get());
+        }
+        MarketplaceSupplier viaShopRow = supplierRepository.findByIdAndDeletedAtIsNull(needle)
+                .map(Supplier::getMarketplaceSupplierId)
+                .filter(id -> id != null && !id.isBlank())
+                .flatMap(marketplaceSupplierRepository::findById)
+                .filter(PublicMarketplaceSearchService::isPublic)
+                .orElseThrow(() -> notFound("Supplier not found"));
+        return buildSupplierDetail(viaShopRow);
     }
 
     @Transactional(readOnly = true)
     public MarketplaceSupplierDetailResponse getSupplierDetailBySlug(String slug) {
-        return buildSupplierDetail(marketplaceSlugService.resolveSupplierBySlug(slug));
+        return buildSupplierDetail(resolvePassportBySlug(slug));
     }
 
     /**
@@ -180,7 +231,7 @@ public class PublicMarketplaceSearchService {
         MarketplaceSupplierDetailResponse detail = getSupplierDetailBySlug(supplierSlug);
         String needle = blankToNull(productSlug);
         if (needle == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found");
+            throw notFound("Product not found");
         }
         boolean found = detail.products().stream().anyMatch(p -> needle.equalsIgnoreCase(p.slug()));
         if (!found) {
@@ -193,456 +244,263 @@ public class PublicMarketplaceSearchService {
             }
         }
         if (!found) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found");
+            throw notFound("Product not found");
         }
         return detail;
     }
 
-    private MarketplaceSupplierDetailResponse buildSupplierDetail(Supplier supplier) {
-        if (!"active".equalsIgnoreCase(supplier.getStatus())
-                || SupplierCodes.SYSTEM_UNASSIGNED.equals(supplier.getCode())) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier is not available");
+    private MarketplaceSupplier resolvePassportBySlug(String slug) {
+        String needle = blankToNull(slug);
+        String idPrefix = needle != null ? MarketplaceSlugService.extractIdPrefix(needle) : null;
+        if (idPrefix == null) {
+            throw notFound("Supplier not found");
         }
-        String supplierSlug = marketplaceSlugService.supplierSlug(supplier);
-
-        ListingLocation loc = resolveLocationsByBusinessId(List.of(supplier.getBusinessId()))
-                .getOrDefault(supplier.getBusinessId(), ListingLocation.empty());
-
-        List<SupplierProduct> links =
-                supplierProductRepository.listActivePublicForSupplier(supplier.getId());
-        Map<String, Item> itemsById = loadItems(links.stream().map(SupplierProduct::getItemId).toList());
-        Map<String, List<SupplierPackOfferResolver.ResolvedPack>> packsByLinkId = supplierPackOfferResolver
-                .resolveByLink(links.stream().collect(Collectors.toMap(SupplierProduct::getId, SupplierProduct::getItemId)));
-        List<String> parentIds = itemsById.values().stream()
-                .map(Item::getVariantOfItemId)
-                .filter(Objects::nonNull)
-                .map(String::trim)
-                .filter(id -> !id.isEmpty())
-                .filter(id -> !itemsById.containsKey(id))
-                .distinct()
-                .toList();
-        if (!parentIds.isEmpty()) {
-            itemsById.putAll(loadItems(parentIds));
+        List<MarketplaceSupplier> candidates = marketplaceSupplierRepository.findListedActiveByIdPrefix(idPrefix);
+        for (MarketplaceSupplier candidate : candidates) {
+            if (needle.equalsIgnoreCase(passportSlug(candidate))) {
+                return candidate;
+            }
         }
-        Map<String, String> thumbs = resolveThumbnailUrls(itemsById.values());
-        Map<String, String> categories = categoryNamesById(
-                itemsById.values().stream().map(Item::getCategoryId).filter(Objects::nonNull).toList());
+        // The name may have changed since the link was shared.
+        if (candidates.size() == 1) {
+            return candidates.get(0);
+        }
+        if (candidates.isEmpty()) {
+            // Links shared before ADR 0038 carry a shop's supplier id. Follow it to the listed
+            // passport that row is tagged to, and to nothing else.
+            Set<String> passportIds = new LinkedHashSet<>();
+            for (Supplier shopRow : supplierRepository.findPublicActiveByIdPrefix(idPrefix)) {
+                String passportId = shopRow.getMarketplaceSupplierId();
+                if (passportId != null && !passportId.isBlank()) {
+                    passportIds.add(passportId);
+                }
+            }
+            if (passportIds.size() == 1) {
+                Optional<MarketplaceSupplier> passport =
+                        marketplaceSupplierRepository.findById(passportIds.iterator().next());
+                if (passport.isPresent() && isPublic(passport.get())) {
+                    return passport.get();
+                }
+            }
+        }
+        throw notFound("Supplier not found");
+    }
+
+    private MarketplaceSupplierDetailResponse buildSupplierDetail(MarketplaceSupplier passport) {
+        ListingLocation loc = locationOf(passport);
+        Instant now = Instant.now();
+
+        List<MarketplaceSupplierProduct> shelf = new ArrayList<>(productRepository
+                .findByMarketplaceSupplierIdAndStatus(passport.getId(), MarketplaceSupplierProductStatuses.ACTIVE));
+        shelf.sort(Comparator.comparing(
+                (MarketplaceSupplierProduct p) -> p.getName() == null ? "" : p.getName().toLowerCase(Locale.ROOT)));
 
         List<MarketplaceSupplierDetailResponse.MarketplaceCatalogProductPreview> products = new ArrayList<>();
-        for (SupplierProduct link : links) {
-            Item item = itemsById.get(link.getItemId());
-            if (item == null || item.getDeletedAt() != null || !item.isActive()) {
-                continue;
-            }
-            BigDecimal price = resolveBuyingPrice(link, item);
-            String displayName = displayItemName(item);
-            String categoryName = item.getCategoryId() != null
-                    ? categories.get(item.getCategoryId())
-                    : null;
-            String variantOfItemId = blankToNull(item.getVariantOfItemId());
-            Item parentItem = variantOfItemId != null ? itemsById.get(variantOfItemId) : null;
-            String parentItemName = parentItem != null
-                    ? blankToNull(parentItem.getName())
-                    : null;
-            if (parentItemName == null && displayName != null) {
-                int sep = displayName.indexOf(" · ");
-                if (sep > 0) {
-                    parentItemName = displayName.substring(0, sep).trim();
-                }
-            }
-            String parentKey = variantOfItemId != null ? variantOfItemId : item.getId();
-            String parentImageUrl = thumbs.get(parentKey);
-            if (parentImageUrl == null && parentItemName != null) {
-                // Fall back to this row's image only when the row itself is the parent.
-                if (variantOfItemId == null) {
-                    parentImageUrl = thumbs.get(item.getId());
-                }
-            }
+        for (MarketplaceSupplierProduct product : shelf) {
+            List<MarketplaceSupplierPriceOffer> offers = passport.isHidePrices()
+                    ? List.of()
+                    : publicOffers(product.getId(), now);
+            MarketplaceSupplierPriceOffer primary = offers.isEmpty() ? null : offers.get(0);
+            String imageUrl = blankToNull(product.getImageUrl());
             products.add(new MarketplaceSupplierDetailResponse.MarketplaceCatalogProductPreview(
-                    link.getId(),
-                    displayName,
-                    MarketplaceSlugService.productSlug(displayName, link.getId()),
-                    item.getBarcode(),
-                    link.getSupplierSku() != null && !link.getSupplierSku().isBlank()
-                            ? link.getSupplierSku()
-                            : item.getSku(),
-                    categoryName,
-                    thumbs.get(item.getId()),
-                    link.getPackSize(),
-                    link.getPackUnit(),
-                    link.getMinOrderQty(),
-                    price,
-                    price != null ? currencyFor(supplier.getBusinessId()) : null,
-                    link.isActive(),
-                    item.getId(),
-                    variantOfItemId,
-                    parentItemName,
-                    parentImageUrl,
-                    packsByLinkId.getOrDefault(link.getId(), List.of()).stream()
-                            .map(PublicMarketplaceSearchService::toPackOptionPreview)
-                            .toList()));
+                    product.getId(),
+                    product.getName(),
+                    MarketplaceSlugService.productSlug(product.getName(), product.getId()),
+                    blankToNull(product.getBarcode()),
+                    blankToNull(product.getSku()),
+                    blankToNull(product.getCategoryName()),
+                    imageUrl,
+                    product.getPackSize(),
+                    blankToNull(product.getPackUnit()),
+                    product.getMinOrderQty(),
+                    primary != null ? primary.getUnitPrice() : null,
+                    primary != null ? primary.getCurrency() : null,
+                    true,
+                    product.getId(),
+                    null,
+                    null,
+                    imageUrl,
+                    toPackPreviews(offers)));
         }
 
-        List<SupplierContact> contactRows = supplierContactRepository
-                .findBySupplierIdOrderByPrimaryContactDescNameAsc(supplier.getId());
-        List<MarketplaceSupplierDetailResponse.MarketplaceContactPreview> contacts = contactRows.stream()
-                .filter(PublicMarketplaceSearchService::hasContactInfo)
-                .map(c -> new MarketplaceSupplierDetailResponse.MarketplaceContactPreview(
-                        blankToNull(c.getName()),
-                        blankToNull(c.getRoleLabel()),
-                        blankToNull(c.getPhone()),
-                        blankToNull(c.getEmail()),
-                        c.isPrimaryContact()))
-                .toList();
-
-        SupplierContact primary = contactRows.stream().findFirst().orElse(null);
-        String businessName = businessName(supplier.getBusinessId());
-        String description = supplier.getNotes();
-        if ((description == null || description.isBlank()) && businessName != null) {
-            description = "Supplier listed by " + businessName;
-        }
-        String contactPhone = primary != null ? blankToNull(primary.getPhone()) : null;
-        if (contactPhone == null) {
-            contactPhone = blankToNull(supplier.getPayoutPhone());
-        }
-        String contactEmail = primary != null ? blankToNull(primary.getEmail()) : null;
-
+        // Contacts are the supplier's own (from its passport) and only while it has not hidden them.
+        // Payment, payout and credit fields stay empty: those came from a shop's own supplier record.
+        String contactPhone = publicContactPhone(passport);
+        String contactEmail = publicContactEmail(passport);
+        List<MarketplaceSupplierDetailResponse.MarketplaceContactPreview> contacts =
+                contactPhone == null && contactEmail == null
+                        ? List.of()
+                        : List.of(new MarketplaceSupplierDetailResponse.MarketplaceContactPreview(
+                                publicContactName(passport), null, contactPhone, contactEmail, true));
         return new MarketplaceSupplierDetailResponse(
-                supplier.getId(),
-                supplier.getName(),
-                supplierSlug,
-                description,
-                blankToNull(supplier.getSupplierType()),
-                businessName,
+                passport.getId(),
+                passport.getName(),
+                passportSlug(passport),
+                blankToNull(passport.getDescription()),
+                null,
+                null,
                 loc.primary(),
                 loc.locations(),
-                supplier.getStatus(),
+                passport.getStatus(),
                 contactEmail,
                 contactPhone,
                 contacts,
-                blankToNull(supplier.getPaymentMethodPreferred()),
-                blankToNull(supplier.getPaymentDetails()),
-                blankToNull(supplier.getPayoutType()),
-                blankToNull(supplier.getPayoutPhone()),
-                supplier.getCreditTermsDays(),
-                loc.locations(),
-                buildTags(supplier, businessName),
-                products);
+                null,
+                null,
+                null,
+                null,
+                null,
+                readJsonList(passport.getDeliveryRegionsJson()),
+                readJsonList(passport.getCategoryTagsJson()),
+                products,
+                openShopSlug(passport));
     }
 
-    private PublicMarketplaceSupplierSearchRow toSupplierRow(Supplier supplier, ListingLocation loc) {
-        String businessName = businessName(supplier.getBusinessId());
-        String description = supplier.getNotes();
-        if ((description == null || description.isBlank()) && businessName != null) {
-            description = "Listed by " + businessName;
-        }
-        List<SupplierContact> contacts = supplierContactRepository
-                .findBySupplierIdOrderByPrimaryContactDescNameAsc(supplier.getId());
-        SupplierContact primary = contacts.stream().findFirst().orElse(null);
-        int productCount = (int) Math.min(
-                Integer.MAX_VALUE,
-                supplierProductRepository.countActivePublicForSupplier(supplier.getId()));
-        String slug = marketplaceSlugService.supplierSlug(supplier);
-        String contactPhone = primary != null ? blankToNull(primary.getPhone()) : null;
-        if (contactPhone == null) {
-            contactPhone = blankToNull(supplier.getPayoutPhone());
-        }
-        String contactEmail = primary != null ? blankToNull(primary.getEmail()) : null;
-
-        return new PublicMarketplaceSupplierSearchRow(
-                supplier.getId(),
-                supplier.getName(),
-                slug,
-                description,
-                blankToNull(supplier.getSupplierType()),
-                businessName,
-                loc.primary(),
-                loc.locations(),
-                productCount,
-                primary != null ? blankToNull(primary.getName()) : null,
-                contactPhone,
-                contactEmail,
-                blankToNull(supplier.getPaymentMethodPreferred()),
-                blankToNull(supplier.getPayoutType()),
-                loc.locations(),
-                buildTags(supplier, businessName));
-    }
-
-    private PublicMarketplaceProductSearchRow toProductRow(
-            SupplierProduct link,
-            Item item,
-            Supplier supplier,
-            String imageUrl,
-            String categoryName,
-            ListingLocation loc,
-            int supplierProductCount
-    ) {
-        BigDecimal price = resolveBuyingPrice(link, item);
-        String displayName = displayItemName(item);
-        String supplierSlug = marketplaceSlugService.supplierSlug(supplier);
-        return new PublicMarketplaceProductSearchRow(
-                link.getId(),
-                displayName,
-                MarketplaceSlugService.productSlug(displayName, link.getId()),
-                item.getBarcode(),
-                link.getSupplierSku() != null && !link.getSupplierSku().isBlank()
-                        ? link.getSupplierSku()
-                        : item.getSku(),
-                categoryName,
-                imageUrl,
-                link.getSupplierId(),
-                supplier.getName(),
-                supplierSlug,
-                blankToNull(supplier.getSupplierType()),
-                supplierProductCount,
-                loc.primary(),
-                loc.locations(),
-                link.getPackSize(),
-                link.getPackUnit(),
-                link.getMinOrderQty(),
-                price,
-                price != null ? currencyFor(supplier.getBusinessId()) : null,
-                link.isActive());
-    }
-
-    private Map<String, Integer> productCountsBySupplierId(Collection<String> supplierIds) {
-        Map<String, Integer> out = new LinkedHashMap<>();
-        if (supplierIds == null || supplierIds.isEmpty()) {
-            return out;
-        }
-        for (String supplierId : supplierIds) {
-            if (supplierId == null) {
-                continue;
-            }
-            out.put(
-                    supplierId,
-                    (int) Math.min(
-                            Integer.MAX_VALUE,
-                            supplierProductRepository.countActivePublicForSupplier(supplierId)));
-        }
-        return out;
-    }
-
-    private static BigDecimal resolveBuyingPrice(SupplierProduct link, Item item) {
-        if (link.getDefaultCostPrice() != null) {
-            return link.getDefaultCostPrice();
-        }
-        if (link.getLastCostPrice() != null) {
-            return link.getLastCostPrice();
-        }
-        if (item != null && item.getBuyingPrice() != null) {
-            return item.getBuyingPrice();
-        }
-        return null;
-    }
-
-    private Map<String, ListingLocation> resolveLocationsByBusinessId(Collection<String> businessIds) {
-        Map<String, ListingLocation> out = new LinkedHashMap<>();
-        if (businessIds == null || businessIds.isEmpty()) {
-            return out;
-        }
-        List<String> distinct = businessIds.stream().filter(Objects::nonNull).distinct().toList();
-        if (distinct.isEmpty()) {
-            return out;
-        }
-        Map<String, Business> businesses = new LinkedHashMap<>();
-        for (Business business : businessRepository.findAllById(distinct)) {
-            businesses.put(business.getId(), business);
-        }
-        for (String businessId : distinct) {
-            Business business = businesses.get(businessId);
-            List<Branch> branches = branchRepository.findByBusinessIdAndDeletedAtIsNullOrderByNameAsc(businessId);
-            var onboarding = business != null
-                    ? businessOnboardingSettingsService.readFromSettingsJson(business.getSettings())
-                    : null;
-            List<String> labels =
-                    BranchLocalityLabels.fromOnboardingAndBranches(onboarding, branches);
-            out.put(businessId, ListingLocation.of(labels));
-        }
-        return out;
-    }
-
-    private static MarketplaceSupplierDetailResponse.MarketplacePackOptionPreview toPackOptionPreview(
-            SupplierPackOfferResolver.ResolvedPack pack
-    ) {
-        return new MarketplaceSupplierDetailResponse.MarketplacePackOptionPreview(
-                pack.optionId(),
-                pack.label(),
-                pack.packUnit(),
-                pack.unitsPerPack(),
-                pack.unitPrice(),
-                pack.eachPrice());
-    }
-
-    private Map<String, Item> loadItems(Collection<String> itemIds) {
-        Map<String, Item> out = new LinkedHashMap<>();
-        if (itemIds == null || itemIds.isEmpty()) {
-            return out;
-        }
-        List<String> distinct = itemIds.stream().filter(Objects::nonNull).distinct().toList();
-        if (distinct.isEmpty()) {
-            return out;
-        }
-        for (Item item : itemRepository.findAllById(distinct)) {
-            out.put(item.getId(), item);
-        }
-        return out;
-    }
-
-    private Map<String, Supplier> loadSuppliers(Collection<String> supplierIds) {
-        Map<String, Supplier> out = new LinkedHashMap<>();
-        if (supplierIds == null || supplierIds.isEmpty()) {
-            return out;
-        }
-        List<String> distinct = supplierIds.stream().filter(Objects::nonNull).distinct().toList();
-        if (distinct.isEmpty()) {
-            return out;
-        }
-        for (Supplier supplier : supplierRepository.findAllById(distinct)) {
-            out.put(supplier.getId(), supplier);
-        }
-        return out;
-    }
-
-    private Map<String, String> resolveThumbnailUrls(Collection<Item> items) {
-        Map<String, String> out = new LinkedHashMap<>();
-        if (items == null || items.isEmpty()) {
-            return out;
-        }
-        List<String> itemIds = items.stream().map(Item::getId).filter(Objects::nonNull).distinct().toList();
-        Map<String, String> gallery = firstGalleryImageUrlByItemId(itemIds);
-        for (Item item : items) {
-            String thumb = resolveListThumbnail(item, gallery);
-            if (thumb != null && !thumb.isBlank() && item.getId() != null) {
-                out.put(item.getId(), thumb);
-            }
-        }
-        return out;
-    }
-
-    private Map<String, String> firstGalleryImageUrlByItemId(Collection<String> itemIds) {
-        Map<String, String> out = new LinkedHashMap<>();
-        if (itemIds == null || itemIds.isEmpty()) {
-            return out;
-        }
-        Sort galleryOrder = Sort.by(Sort.Order.asc("itemId"), Sort.Order.asc("sortOrder"), Sort.Order.asc("id"));
-        List<ItemImage> rows = itemImageRepository.findByItemIdIn(itemIds, galleryOrder);
-        for (ItemImage img : rows) {
-            String url = resolveImageRowPublicUrl(img);
-            if (url == null || img.getItemId() == null) {
-                continue;
-            }
-            out.putIfAbsent(img.getItemId(), url);
-        }
-        return out;
-    }
-
-    private static String resolveImageRowPublicUrl(ItemImage img) {
-        String secure = img.getSecureUrl();
-        if (secure != null && !secure.isBlank()) {
-            return secure.trim();
-        }
-        String key = img.getS3Key();
-        if (key != null) {
-            String k = key.trim();
-            if (k.startsWith("http://") || k.startsWith("https://")) {
-                return k;
-            }
-        }
-        return null;
-    }
-
-    private static String resolveListThumbnail(Item i, Map<String, String> galleryFirstUrlByItemId) {
-        String k = i.getImageKey();
-        if (k != null && (k.startsWith("http://") || k.startsWith("https://"))) {
-            return k.trim();
-        }
-        return galleryFirstUrlByItemId.get(i.getId());
-    }
-
-    private Map<String, String> categoryNamesById(Collection<String> categoryIds) {
-        Map<String, String> out = new LinkedHashMap<>();
-        if (categoryIds == null || categoryIds.isEmpty()) {
-            return out;
-        }
-        List<String> distinct = categoryIds.stream()
-                .filter(Objects::nonNull)
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .distinct()
-                .toList();
-        if (distinct.isEmpty()) {
-            return out;
-        }
-        categoryRepository.findAllById(distinct).forEach(c -> out.put(c.getId(), c.getName()));
-        return out;
-    }
-
-    private String businessName(String businessId) {
+    /** The supplier's own shop, only when it exists and its online shop is switched on (ADR 0038, P1-9). */
+    private String openShopSlug(MarketplaceSupplier passport) {
+        String businessId = passport.getBusinessId();
         if (businessId == null || businessId.isBlank()) {
             return null;
         }
-        return businessRepository.findByIdAndDeletedAtIsNull(businessId)
-                .map(Business::getName)
+        return businessRepository.findById(businessId)
+                .filter(shop -> {
+                    try {
+                        var settings = storefrontSettingsService.readFromSettingsJson(shop.getSettings());
+                        return settings != null && settings.enabled();
+                    } catch (RuntimeException unreadable) {
+                        return false;
+                    }
+                })
+                .map(shop -> blankToNull(shop.getSlug()))
                 .orElse(null);
     }
 
-    private String currencyFor(String businessId) {
-        if (businessId == null || businessId.isBlank()) {
-            return "KES";
-        }
-        return businessRepository.findByIdAndDeletedAtIsNull(businessId)
-                .map(Business::getCurrency)
-                .filter(c -> c != null && !c.isBlank())
-                .orElse("KES");
+    private PublicMarketplaceSupplierSearchRow toSupplierRow(MarketplaceSupplier passport, ListingLocation loc) {
+        return new PublicMarketplaceSupplierSearchRow(
+                passport.getId(),
+                passport.getName(),
+                passportSlug(passport),
+                blankToNull(passport.getDescription()),
+                null,
+                null,
+                loc.primary(),
+                loc.locations(),
+                activeProductCount(passport.getId()),
+                publicContactPhone(passport) == null && publicContactEmail(passport) == null
+                        ? null
+                        : publicContactName(passport),
+                publicContactPhone(passport),
+                publicContactEmail(passport),
+                null,
+                null,
+                readJsonList(passport.getDeliveryRegionsJson()),
+                readJsonList(passport.getCategoryTagsJson()),
+                openShopSlug(passport));
     }
 
-    private static List<String> buildTags(Supplier supplier, String businessName) {
-        List<String> tags = new ArrayList<>();
-        if (supplier.getSupplierType() != null && !supplier.getSupplierType().isBlank()) {
-            tags.add(supplier.getSupplierType());
-        }
-        if (supplier.getPaymentMethodPreferred() != null && !supplier.getPaymentMethodPreferred().isBlank()) {
-            tags.add(supplier.getPaymentMethodPreferred());
-        }
-        if (businessName != null && !businessName.isBlank()) {
-            tags.add(businessName);
-        }
-        return tags;
+    private int activeProductCount(String passportId) {
+        return (int) Math.min(
+                Integer.MAX_VALUE,
+                productRepository.countByMarketplaceSupplierIdAndStatus(
+                        passportId, MarketplaceSupplierProductStatuses.ACTIVE));
     }
 
-    private static String displayItemName(Item item) {
-        if (item == null) {
-            return "Product";
-        }
-        String name = item.getName();
-        if (name != null && !name.isBlank() && !looksLikeUuid(name)) {
-            if (item.getVariantName() != null && !item.getVariantName().isBlank()) {
-                return ProductDisplayName.join(name, item.getVariantName());
+    /**
+     * Current offers whose price the supplier set itself. A price imported from a shop's cost is
+     * not public, and neither is a zero placeholder.
+     */
+    private List<MarketplaceSupplierPriceOffer> publicOffers(String productId, Instant now) {
+        List<MarketplaceSupplierPriceOffer> out = new ArrayList<>();
+        for (MarketplaceSupplierPriceOffer offer : priceOfferRepository.findCurrentOffers(productId, now)) {
+            if (offer.isPriceConfirmed()
+                    && offer.getUnitPrice() != null
+                    && offer.getUnitPrice().signum() > 0) {
+                out.add(offer);
             }
-            return name.trim();
         }
-        if (item.getVariantName() != null && !item.getVariantName().isBlank()) {
-            return item.getVariantName().trim();
-        }
-        if (item.getBarcode() != null && !item.getBarcode().isBlank()) {
-            return item.getBarcode().trim();
-        }
-        if (item.getSku() != null && !item.getSku().isBlank()) {
-            return item.getSku().trim();
-        }
-        return "Product";
+        return out;
     }
 
-    private static boolean looksLikeUuid(String value) {
-        return value != null && value.matches(
-                "(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
+    private MarketplaceSupplierPriceOffer primaryPublicOffer(String productId, Instant now) {
+        List<MarketplaceSupplierPriceOffer> offers = publicOffers(productId, now);
+        return offers.isEmpty() ? null : offers.get(0);
     }
 
-    private static boolean hasContactInfo(SupplierContact c) {
-        return (c.getName() != null && !c.getName().isBlank())
-                || (c.getPhone() != null && !c.getPhone().isBlank())
-                || (c.getEmail() != null && !c.getEmail().isBlank());
+    /** Pack choices exist only when the supplier published more than one offer for the product. */
+    private static List<MarketplaceSupplierDetailResponse.MarketplacePackOptionPreview> toPackPreviews(
+            List<MarketplaceSupplierPriceOffer> offers) {
+        if (offers.size() < 2) {
+            return List.of();
+        }
+        List<MarketplaceSupplierDetailResponse.MarketplacePackOptionPreview> out = new ArrayList<>();
+        for (MarketplaceSupplierPriceOffer offer : offers) {
+            BigDecimal size = offer.getPackageSize();
+            BigDecimal each = size != null && size.signum() > 0
+                    ? offer.getUnitPrice().divide(size, 2, RoundingMode.HALF_UP)
+                    : null;
+            out.add(new MarketplaceSupplierDetailResponse.MarketplacePackOptionPreview(
+                    offer.getId(),
+                    null,
+                    blankToNull(offer.getPackageUnit()),
+                    size,
+                    offer.getUnitPrice(),
+                    each));
+        }
+        return out;
+    }
+
+    private static String publicContactPhone(MarketplaceSupplier passport) {
+        return passport.isHideContacts() ? null : blankToNull(passport.getContactPhone());
+    }
+
+    private static String publicContactEmail(MarketplaceSupplier passport) {
+        return passport.isHideContacts() ? null : blankToNull(passport.getContactEmail());
+    }
+
+    private static String publicContactName(MarketplaceSupplier passport) {
+        String person = blankToNull(passport.getContactPerson());
+        return person != null ? person : blankToNull(passport.getName());
+    }
+
+    private static boolean isPublic(MarketplaceSupplier passport) {
+        return passport.isListed()
+                && MarketplaceSupplierStatuses.ACTIVE.equalsIgnoreCase(passport.getStatus());
+    }
+
+    private static String passportSlug(MarketplaceSupplier passport) {
+        return MarketplaceSlugService.buildSlug(passport.getName(), passport.getId(), "supplier");
+    }
+
+    /** The area the supplier named, then the regions it delivers to. */
+    private ListingLocation locationOf(MarketplaceSupplier passport) {
+        Set<String> labels = new LinkedHashSet<>();
+        String area = blankToNull(passport.getContactLocation());
+        if (area != null) {
+            labels.add(area);
+        }
+        for (String region : readJsonList(passport.getDeliveryRegionsJson())) {
+            String label = blankToNull(region);
+            if (label != null) {
+                labels.add(label);
+            }
+        }
+        return ListingLocation.of(new ArrayList<>(labels));
+    }
+
+    private List<String> readJsonList(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<String> values = objectMapper.readValue(json, STRING_LIST);
+            return values == null ? List.of() : values.stream().filter(Objects::nonNull).toList();
+        } catch (Exception ex) {
+            return List.of();
+        }
+    }
+
+    private static ResponseStatusException notFound(String message) {
+        return new ResponseStatusException(HttpStatus.NOT_FOUND, message);
     }
 
     private static <T> Page<T> slicePage(List<T> rows, Pageable pageable) {
@@ -656,6 +514,11 @@ public class PublicMarketplaceSearchService {
             return null;
         }
         return value.trim();
+    }
+
+    private static String blankToEmpty(String value) {
+        String trimmed = blankToNull(value);
+        return trimmed == null ? "" : trimmed;
     }
 
     private record ListingLocation(String primary, List<String> locations) {

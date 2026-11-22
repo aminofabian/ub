@@ -20,6 +20,7 @@ import zelisline.ub.opsalerts.domain.BusinessOpsAlertSettings;
 import zelisline.ub.suppliers.repository.SupplierProductRepository;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
+import zelisline.ub.wholesale.api.dto.SupplierReadinessResponse;
 
 @ExtendWith(MockitoExtension.class)
 class SetupProgressServiceTest {
@@ -44,6 +45,8 @@ class SetupProgressServiceTest {
     private ObjectProvider<zelisline.ub.restaurant.application.RestaurantSetupFacts> restaurantSetupFacts;
     @Mock
     private zelisline.ub.restaurant.application.RestaurantSetupFacts restaurantFacts;
+    @Mock
+    private zelisline.ub.wholesale.application.SupplierReadinessService supplierReadinessService;
 
     private SetupProgressService service;
 
@@ -59,7 +62,12 @@ class SetupProgressServiceTest {
                 new ObjectMapper(),
                 smsCreditService,
                 serviceSetupFacts,
-                restaurantSetupFacts);
+                restaurantSetupFacts,
+                supplierReadinessService);
+        // Supplier steps are off unless the flags are on, which these tests never turn on.
+        org.mockito.Mockito.lenient()
+                .when(supplierReadinessService.readiness(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(SupplierReadinessResponse.off());
     }
 
     @Test
@@ -123,6 +131,29 @@ class SetupProgressServiceTest {
 
         assertThat(response.shopReady()).isTrue();
         assertThat(response.visible()).isFalse();
+    }
+
+    @Test
+    void supplierStepsKeepTheBannerUpAfterTheShopIsReady() {
+        Business business = business("biz-1", "{}");
+        when(businessRepository.findByIdAndDeletedAtIsNull("biz-1")).thenReturn(java.util.Optional.of(business));
+        when(gateService.snapshot("biz-1")).thenReturn(snapshot(true, 5, 0, 1, true, true, true));
+        when(opsAlertSettingsService.resolveForBusiness("biz-1")).thenReturn(verifiedPhone());
+        when(supplierProductRepository.countActiveLinksForBusiness("biz-1")).thenReturn(2L);
+        when(itemRepository.existsActiveVariantByBusinessId("biz-1")).thenReturn(false);
+        when(smsCreditService.getIfAvailable()).thenReturn(null);
+        when(supplierReadinessService.readiness("biz-1")).thenReturn(new SupplierReadinessResponse(
+                true,
+                java.util.List.of(new SupplierReadinessResponse.Step("claim_page", "Claim your page", false,
+                        "/supplier-portal/claim")),
+                java.util.List.of()));
+
+        var response = service.getForBusiness("biz-1");
+
+        assertThat(response.shopReady()).isTrue();
+        assertThat(response.visible()).isTrue();
+        assertThat(response.currentStepKey()).isEqualTo("supplier_claim_page");
+        assertThat(response.percentComplete()).isEqualTo(100);
     }
 
     @Test

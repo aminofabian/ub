@@ -17,6 +17,10 @@ public interface MarketplaceEscrowHoldRepository extends JpaRepository<Marketpla
 
     List<MarketplaceEscrowHold> findByPurchaseOrderIdAndStatus(String purchaseOrderId, String status);
 
+    /** The latest hold a shop placed against one of its own purchase orders. */
+    Optional<MarketplaceEscrowHold> findFirstByBusinessIdAndPurchaseOrderIdOrderByCreatedAtDesc(
+            String businessId, String purchaseOrderId);
+
     List<MarketplaceEscrowHold> findByBusinessIdOrderByCreatedAtDesc(String businessId, Pageable pageable);
 
     List<MarketplaceEscrowHold> findByStatusOrderByCreatedAtAsc(String status, Pageable pageable);

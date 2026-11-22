@@ -58,7 +58,10 @@ public class PublicCustomerTabService {
         }
         boolean sealed = resolved.account().isPageSealed();
         boolean unlocked = pageSealService.isCustomerTabUnlocked(resolved.account(), unlockToken);
-        if (sealed && !unlocked) {
+        // A tab is private until its owner has set a PIN and entered it (owner decision, 2026-11-22).
+        // A page with no PIN used to show the balance and purchases to anyone who had the link, and
+        // the link is only a phone number.
+        if (!sealed || !unlocked) {
             return new PublicCustomerTabResponse(
                     resolved.customer().getName(),
                     display,
@@ -67,8 +70,9 @@ public class PublicCustomerTabService {
                     null,
                     null,
                     List.of(),
-                    true,
-                    false);
+                    sealed,
+                    false,
+                    true);
         }
         BigDecimal owed = resolved.account().getBalanceOwed() != null
                 ? resolved.account().getBalanceOwed()
@@ -87,7 +91,8 @@ public class PublicCustomerTabService {
                 wallet,
                 purchases,
                 sealed,
-                unlocked);
+                unlocked,
+                false);
     }
 
     @Transactional

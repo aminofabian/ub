@@ -514,6 +514,26 @@ public class SupportService {
         return persistMessage(conversation, SupportMessage.SENDER_TENANT, userId, userName, request);
     }
 
+    /**
+     * A supplier's appeal about one counted order, posted into its own support thread. One appeal per order:
+     * the client message id makes a repeat return the first message.
+     */
+    @Transactional
+    public SupportMessageDto sendTenantAppeal(
+            String businessId, String userId, String clientMessageId, String body, String payloadJson
+    ) {
+        String userName = resolveUserName(businessId, userId);
+        SupportConversation conversation = ensureConversation(businessId, userId, userName, null);
+        reopenIfResolved(conversation);
+        return messageRepository
+                .findByConversationIdAndClientMessageId(conversation.getId(), clientMessageId)
+                .map(this::toMessageDto)
+                .orElseGet(() -> persistNewMessage(
+                        conversation, SupportMessage.SENDER_TENANT, userId, userName,
+                        new SendSupportMessageRequest(body, null, null, null, clientMessageId),
+                        clientMessageId, SupportMessage.KIND_ORDER_APPEAL, payloadJson));
+    }
+
     @Transactional
     public boolean markTenantRead(String businessId) {
         return findByBusinessId(businessId).map(this::markGuestRead).orElse(false);
@@ -1159,6 +1179,15 @@ public class SupportService {
             String senderUserId, String senderName, SendSupportMessageRequest request,
             String clientMessageId
     ) {
+        return persistNewMessage(conversation, senderType, senderUserId, senderName, request,
+                clientMessageId, SupportMessage.KIND_TEXT, null);
+    }
+
+    private SupportMessageDto persistNewMessage(
+            SupportConversation conversation, String senderType,
+            String senderUserId, String senderName, SendSupportMessageRequest request,
+            String clientMessageId, String messageKind, String payloadJson
+    ) {
         SupportAttachmentDto attachment = normalizeAttachment(request == null ? null : request.attachment());
         String body = normalizeBody(request == null ? null : request.body(), attachment);
         String replyToMessageId = blankToNull(request == null ? null : request.replyToMessageId());
@@ -1183,6 +1212,8 @@ public class SupportService {
         message.setBody(body);
         message.setReplyToMessageId(replyToMessageId);
         message.setClientMessageId(clientMessageId);
+        message.setMessageKind(messageKind);
+        message.setPayloadJson(payloadJson);
         if (attachment != null) {
             message.setAttachmentUrl(attachment.url());
             message.setAttachmentPublicId(blankToNull(attachment.publicId()));
@@ -1199,7 +1230,7 @@ public class SupportService {
         eventPublisher.publishEvent(new SupportEvents.SupportMessageSentEvent(
                 conversation.getBusinessId(), conversation.getId(), message.getId(),
                 senderType, senderUserId, senderName, message.getBody(),
-                SupportMessage.KIND_TEXT,
+                messageKind,
                 null,
                 null,
                 toAttachmentDto(message),
@@ -1556,7 +1587,8 @@ public class SupportService {
                 message.getCreatedAt(),
                 deleted || reactions == null ? List.of() : reactions,
                 message.getEditedAt(),
-                message.getDeletedAt()
+                message.getDeletedAt(),
+                deleted ? null : parseAppeal(message)
         );
     }
 
@@ -1900,6 +1932,20 @@ public class SupportService {
             return "Message";
         }
         return body.length() > 160 ? body.substring(0, 160) + "…" : body;
+    }
+
+    private SupportAppealDto parseAppeal(SupportMessage message) {
+        if (!SupportMessage.KIND_ORDER_APPEAL.equals(message.getMessageKind())
+                || message.getPayloadJson() == null || message.getPayloadJson().isBlank()) {
+            return null;
+        }
+        try {
+            String orderId = objectMapper.readTree(message.getPayloadJson()).path("orderId").asText(null);
+            return orderId == null || orderId.isBlank() ? null : new SupportAppealDto(orderId);
+        } catch (Exception ex) {
+            log.debug("Could not parse appeal payload for message {}: {}", message.getId(), ex.toString());
+            return null;
+        }
     }
 
     private SupportOrderCardDto parseOrderCard(SupportMessage message) {

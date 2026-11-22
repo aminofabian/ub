@@ -51,6 +51,13 @@ public class MarketplaceSupplierPriceOffer {
     @Column(name = "available", nullable = false)
     private boolean available = true;
 
+    /**
+     * True once the supplier set this price in the portal. A price copied in from a shop's own cost
+     * stays false and is never shown publicly (ADR 0038, P0.1).
+     */
+    @Column(name = "price_confirmed", nullable = false)
+    private boolean priceConfirmed;
+
     @Column(name = "effective_from", nullable = false)
     private Instant effectiveFrom;
 

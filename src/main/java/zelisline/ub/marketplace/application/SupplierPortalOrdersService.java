@@ -62,6 +62,7 @@ public class SupplierPortalOrdersService {
     private final BranchResolutionService branchResolutionService;
     private final MarketplaceEscrowService marketplaceEscrowService;
     private final ObjectMapper objectMapper;
+    private final zelisline.ub.marketplace.repository.MarketplaceSupplierRepository marketplaceSupplierRepository;
 
     @Transactional
     public List<SupplierPortalOrderListRow> listOrders(String marketplaceSupplierId) {
@@ -98,15 +99,31 @@ public class SupplierPortalOrdersService {
         return toDetail(po);
     }
 
+    /** Unsent proposals one supplier may leave with one shop supplier before the shop acts on them. */
+    static final int MAX_OPEN_PROPOSALS_PER_SHOP = 5;
+
     /**
-     * Supplier-taken order for a connected shop: creates a Path A PO from linked
-     * products, marks it sent, and auto-accepts every line so the shop can receive.
+     * Supplier-taken order for a connected shop: a <em>proposal</em>. It is written as the shop's
+     * draft Path A PO and nothing more — never sent, never accepted — so an outsider cannot book a
+     * committed order into a shop's books (ADR 0038, P0.3). The shop sends it from its own side;
+     * only then does the supplier respond to it like any other order.
      */
     @Transactional
     public SupplierPortalOrderDetailResponse createOrder(
             String marketplaceSupplierId,
             CreateSupplierPortalOrderRequest request
     ) {
+        // A supplier with its own shop takes orders there and sends them across the trade lane
+        // (ADR 0041), where the shop confirms and writes its own purchase order. Writing a draft
+        // into the shop's books is kept only for a supplier that has no shop (P2-3, decision D10).
+        boolean hasOwnShop = marketplaceSupplierRepository.findById(marketplaceSupplierId)
+                .map(passport -> passport.getBusinessId() != null && !passport.getBusinessId().isBlank())
+                .orElse(false);
+        if (hasOwnShop) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Take this order in your shop's trade desk, then send it to the shop from there.");
+        }
         try {
             shopLinkService.ensureLinksAndCatalogue(marketplaceSupplierId);
         } catch (RuntimeException ignored) {
@@ -123,6 +140,17 @@ public class SupplierPortalOrdersService {
 
         String businessId = link.getBusinessId();
         String localSupplierId = link.getLocalSupplierId();
+        long openProposals = purchaseOrderRepository.countByBusinessIdAndSupplierIdAndStatusAndSource(
+                businessId,
+                localSupplierId,
+                PurchasingConstants.PO_DRAFT,
+                PurchasingConstants.PO_SOURCE_SUPPLIER_PORTAL);
+        if (openProposals >= MAX_OPEN_PROPOSALS_PER_SHOP) {
+            throw new ResponseStatusException(
+                    HttpStatus.TOO_MANY_REQUESTS,
+                    "This shop still has orders from you waiting for its confirmation. "
+                            + "Ask the shop to confirm or cancel them first.");
+        }
         String branchId = branchResolutionService.resolveDefaultBranch(businessId);
 
         Set<String> seenItems = new HashSet<>();
@@ -173,20 +201,9 @@ public class SupplierPortalOrdersService {
 
         PurchaseOrder po = purchaseOrderRepository.findByIdAndBusinessId(created.id(), businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Order missing"));
-        Instant now = Instant.now();
-        po.setStatus(PurchasingConstants.PO_SENT);
-        po.setSource(PurchasingConstants.PO_SOURCE_MARKETPLACE);
-        po.setSentToSupplierAt(now);
-        po.setSupplierResponseAt(now);
-        po.setDeliveryStatus(PurchasingConstants.DELIVERY_NOT_SHIPPED);
+        // Stays the shop's draft: no sent time, no supplier response, lines left pending.
+        po.setSource(PurchasingConstants.PO_SOURCE_SUPPLIER_PORTAL);
         purchaseOrderRepository.save(po);
-
-        for (PurchaseOrderLine poLine : purchaseOrderLineRepository
-                .findByPurchaseOrderIdOrderBySortOrderAscIdAsc(po.getId())) {
-            poLine.setSupplierLineStatus(PurchasingConstants.SUPPLIER_LINE_ACCEPTED);
-            poLine.setQtyAccepted(poLine.getQtyOrdered());
-            purchaseOrderLineRepository.save(poLine);
-        }
 
         logPerformanceEvent(marketplaceSupplierId, businessId, "po_supplier_taken", po.getId());
         return toDetail(po);
@@ -199,6 +216,7 @@ public class SupplierPortalOrdersService {
             SupplierPortalRespondRequest request
     ) {
         PurchaseOrder po = requirePortalOrder(marketplaceSupplierId, purchaseOrderId);
+        requireSentByShop(po);
         if (po.getSupplierResponseAt() != null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Purchase order already has a supplier response");
         }
@@ -234,6 +252,7 @@ public class SupplierPortalOrdersService {
             SupplierPortalShipRequest request
     ) {
         PurchaseOrder po = requirePortalOrder(marketplaceSupplierId, purchaseOrderId);
+        requireSentByShop(po);
         if (po.getSupplierResponseAt() == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Respond to the order before updating delivery");
         }
@@ -337,6 +356,14 @@ public class SupplierPortalOrdersService {
                 po.getSupplierResponseAt(),
                 po.getDeliveryStatus(),
                 lineRows);
+    }
+
+    /** A proposal the shop has not sent yet is read-only to the supplier. */
+    private static void requireSentByShop(PurchaseOrder po) {
+        if (po.getSentToSupplierAt() == null || PurchasingConstants.PO_DRAFT.equals(po.getStatus())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, "The shop has not confirmed this order yet");
+        }
     }
 
     private PurchaseOrder requirePortalOrder(String marketplaceSupplierId, String purchaseOrderId) {

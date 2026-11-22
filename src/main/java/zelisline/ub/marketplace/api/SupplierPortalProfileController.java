@@ -16,8 +16,10 @@ import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.api.dto.ClaimSupplierUsernameRequest;
 import zelisline.ub.marketplace.api.dto.LinkLocalSupplierRequest;
 import zelisline.ub.marketplace.api.dto.PatchSupplierPortalProfileRequest;
+import zelisline.ub.marketplace.api.dto.PatchSupplierPortalVisibilityRequest;
 import zelisline.ub.marketplace.api.dto.SupplierPortalLinkCandidateRow;
 import zelisline.ub.marketplace.api.dto.SupplierPortalProfileResponse;
+import zelisline.ub.marketplace.api.dto.SupplierPortalVisibilityResponse;
 import zelisline.ub.marketplace.application.SupplierPortalProfileService;
 import zelisline.ub.platform.security.CurrentSupplierUser;
 import zelisline.ub.platform.security.SupplierPrincipal;
@@ -35,6 +37,21 @@ public class SupplierPortalProfileController {
     public SupplierPortalProfileResponse getProfile() {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return supplierPortalProfileService.getProfile(principal.marketplaceSupplierId());
+    }
+
+    @GetMapping("/visibility")
+    @PreAuthorize("hasPermission(null, 'supplier.catalog.read')")
+    public SupplierPortalVisibilityResponse getVisibility() {
+        SupplierPrincipal principal = CurrentSupplierUser.require();
+        return supplierPortalProfileService.getVisibility(principal.marketplaceSupplierId());
+    }
+
+    @PatchMapping("/visibility")
+    @PreAuthorize("hasPermission(null, 'supplier.profile.write')")
+    public SupplierPortalVisibilityResponse updateVisibility(
+            @RequestBody PatchSupplierPortalVisibilityRequest request) {
+        SupplierPrincipal principal = CurrentSupplierUser.require();
+        return supplierPortalProfileService.updateVisibility(principal.marketplaceSupplierId(), request);
     }
 
     @PatchMapping

@@ -198,6 +198,27 @@ public class FeatureFlagService {
     /** Local IndexedDB mirror and offline mutation replay for grocery drafts. */
     public static final String FLAG_GROCERY_DRAFTS_OFFLINE_MIRROR = "grocery_drafts.offline_mirror";
 
+    /** Supplier engagement, master switch (SUPPLIER_ENGAGEMENT_DESIGN.md). Off by default. */
+    public static final String FLAG_SUPPLIER_ENGAGEMENT = "supplier_engagement";
+
+    /** The supplier readiness checklist. Needs {@link #FLAG_SUPPLIER_ENGAGEMENT} as well. Off by default. */
+    public static final String FLAG_SUPPLIER_ENGAGEMENT_READINESS = "supplier_engagement.readiness";
+
+    /** Supplier milestones (the first order supplied). Needs {@link #FLAG_SUPPLIER_ENGAGEMENT} as well. Off by default. */
+    public static final String FLAG_SUPPLIER_ENGAGEMENT_MILESTONES = "supplier_engagement.milestones";
+
+    /** Supplier standing over 90 days (supplier-only). Needs {@link #FLAG_SUPPLIER_ENGAGEMENT} as well. Off by default. */
+    public static final String FLAG_SUPPLIER_ENGAGEMENT_STANDING = "supplier_engagement.standing";
+
+    /** Trust lines on a supplier's public page: true lines only, from verified buyers, sampled. Off by default. */
+    public static final String FLAG_SUPPLIER_ENGAGEMENT_BUYER_LINES = "supplier_engagement.buyer_lines";
+
+    /**
+     * A supplier shop that also sells over the counter: a clerk takes the order and prints the invoice, and the
+     * cashier takes the payment. The supplier turns it on itself. Off by default.
+     */
+    public static final String FLAG_SUPPLIER_COUNTER_ORDERS = "supplier.counter_orders";
+
     /**
      * Read all feature flags for a business. Returns an empty map when the
      * business or its settings are absent.

@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -42,13 +43,17 @@ public class MarketplaceSupplierController {
         return marketplaceConnectService.getSupplierDetail(id);
     }
 
-    /** Legacy: connect by another tenant's local supplier id. Prefer /attach. */
+    /**
+     * Retired (ADR 0038, P0.1). It copied another tenant's private supplier row (name, VAT PIN, payout
+     * phone, contacts and costs) into the caller's shop from nothing more than that row's id. Shops add
+     * a supplier through {@code /attach}, which works from the supplier's own passport.
+     */
     @PostMapping("/{id}/connect")
     @PreAuthorize("hasPermission(null, 'marketplace.suppliers.connect')")
-    @ResponseStatus(HttpStatus.CREATED)
     public MarketplaceConnectResponse connect(@PathVariable String id, HttpServletRequest request) {
         CurrentTenantUser.require(request);
-        return marketplaceConnectService.connect(TenantRequestIds.resolveBusinessId(request), id);
+        throw new ResponseStatusException(
+                HttpStatus.GONE, "This way of adding a supplier has been retired. Add the supplier from Suppliers.");
     }
 
     /**

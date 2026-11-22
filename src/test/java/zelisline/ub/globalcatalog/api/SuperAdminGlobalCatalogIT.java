@@ -318,8 +318,8 @@ class SuperAdminGlobalCatalogIT {
                                 csv.getBytes(java.nio.charset.StandardCharsets.UTF_8)))
                         .header("Authorization", "Bearer " + saToken))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.createdCount").value(1))
-                .andExpect(jsonPath("$.updatedCount").value(0));
+                .andExpect(jsonPath("$.summary.create").value(1))
+                .andExpect(jsonPath("$.summary.update").value(0));
 
         assertTrue(globalProductRepository.findAll().stream()
                 .anyMatch(p -> "Imported Chips".equals(p.getName())

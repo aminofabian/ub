@@ -72,14 +72,10 @@ class InsightsDigestServiceAbandonedCartTest {
 
     @Test
     void stopsAfterThreeAttempts() {
-        Notification last = new Notification();
-        last.setCreatedAt(Instant.now().minus(3, ChronoUnit.DAYS));
+        // Three already sent: the answer is no before the last one's date is even looked up.
         when(notificationRepository.countByBusinessIdAndTypeAndCreatedAtGreaterThanEqual(
                         eq("biz"), eq(NotificationTypes.ABANDONED_CART), any()))
                 .thenReturn(3L);
-        when(notificationRepository.findFirstByBusinessIdAndTypeOrderByCreatedAtDesc(
-                        "biz", NotificationTypes.ABANDONED_CART))
-                .thenReturn(last);
 
         assertThat(service.shouldSendAbandonedCartDigest("biz", streakSince, 2, 3)).isFalse();
     }

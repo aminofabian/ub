@@ -44,6 +44,30 @@ public interface MarketplaceSupplierProductRepository extends JpaRepository<Mark
             @Param("status") String status,
             Pageable pageable);
 
+    /** Public directory products: listed, active passports only. Pass "" for no filter. */
+    @Query("""
+            SELECT p FROM MarketplaceSupplierProduct p
+            JOIN MarketplaceSupplier s ON s.id = p.marketplaceSupplierId
+            WHERE s.status = 'active'
+              AND s.listed = TRUE
+              AND p.status = 'active'
+              AND (:supplierId = '' OR p.marketplaceSupplierId = :supplierId)
+              AND (:q = ''
+                   OR LOWER(p.name) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(COALESCE(p.barcode, '')) LIKE LOWER(CONCAT('%', :q, '%'))
+                   OR LOWER(COALESCE(p.sku, '')) LIKE LOWER(CONCAT('%', :q, '%')))
+            ORDER BY p.name ASC
+            """)
+    Page<MarketplaceSupplierProduct> searchPublicDirectory(
+            @Param("q") String q,
+            @Param("supplierId") String supplierId,
+            Pageable pageable);
+
+    long countByMarketplaceSupplierIdAndStatus(String marketplaceSupplierId, String status);
+
+    Optional<MarketplaceSupplierProduct> findFirstByMarketplaceSupplierIdAndBarcodeIgnoreCase(
+            String marketplaceSupplierId, String barcode);
+
     Optional<MarketplaceSupplierProduct> findByIdAndMarketplaceSupplierId(String id, String marketplaceSupplierId);
 
     List<MarketplaceSupplierProduct> findByMarketplaceSupplierIdAndStatus(

@@ -89,10 +89,34 @@ class PublicCustomerTabApiIT {
     @SuppressWarnings("unused")
     private DomainMappingRepository domainMappingRepository;
 
+    /** The shop in this test has no payment gateway set up; the push itself is not what is under test. */
+    @MockitoBean
+    private zelisline.ub.payments.application.PaymentGatewayStkService paymentGatewayStkService;
+
     private CreditAccount account;
 
     @BeforeEach
     void seed() {
+        org.mockito.Mockito.when(paymentGatewayStkService.initiate(
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any()))
+                .thenReturn(zelisline.ub.payments.application.PaymentGatewayStkService.StkPushOutcome.accepted(
+                        "DARAJA", "test-config", "STUB-tab-test", "Accepted"));
+        // The tab's own payment request goes through the six-argument form.
+        org.mockito.Mockito.when(paymentGatewayStkService.initiate(
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any()))
+                .thenReturn(zelisline.ub.payments.application.PaymentGatewayStkService.StkPushOutcome.accepted(
+                        "DARAJA", "test-config", "STUB-tab-test", "Accepted"));
         mpesaStkIntentRepository.deleteAll();
         publicPaymentClaimRepository.deleteAll();
         creditTransactionRepository.deleteAll();
@@ -135,14 +159,18 @@ class PublicCustomerTabApiIT {
     }
 
     @Test
-    void overview_returnsBalanceAndShopName() throws Exception {
+    void overview_withoutAPin_showsNamesButNoBalance() throws Exception {
+        // A tab is private until its owner sets a PIN: the link is only a phone number.
         mockMvc.perform(get("/api/v1/public/credits/tabs/" + PHONE)
                         .header("X-Tenant-Id", TENANT))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.customerName").value("Amina"))
                 .andExpect(jsonPath("$.shopName").value("Palmart"))
-                .andExpect(jsonPath("$.balanceOwed").value(500.00))
-                .andExpect(jsonPath("$.walletBalance").value(0.00))
+                .andExpect(jsonPath("$.restricted").value(true))
+                .andExpect(jsonPath("$.pageSealed").value(false))
+                .andExpect(jsonPath("$.balanceOwed").doesNotExist())
+                .andExpect(jsonPath("$.walletBalance").doesNotExist())
+                .andExpect(jsonPath("$.purchases.length()").value(0))
                 .andExpect(jsonPath("$.phoneDisplay").value(PHONE));
     }
 
@@ -151,7 +179,8 @@ class PublicCustomerTabApiIT {
         mockMvc.perform(get("/api/v1/public/credits/tabs/254714282874")
                         .header("X-Tenant-Id", TENANT))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.balanceOwed").value(500.00));
+                .andExpect(jsonPath("$.customerName").value("Amina"))
+                .andExpect(jsonPath("$.restricted").value(true));
     }
 
     @Test

@@ -44,6 +44,8 @@ import zelisline.ub.platform.security.PublicCreditClaimRateLimiter;
 import zelisline.ub.platform.security.PublicPickupMtaaniQuoteRateLimitFilter;
 import zelisline.ub.platform.security.PublicStorefrontIpRateLimiter;
 import zelisline.ub.platform.security.PublicStorefrontRateLimitFilter;
+import zelisline.ub.platform.security.PublicSupplierPageRateLimitFilter;
+import zelisline.ub.platform.security.PublicSupplierPageRateLimiter;
 import zelisline.ub.platform.security.PublicSupportRateLimitFilter;
 import zelisline.ub.platform.security.PublicSupportRateLimiter;
 import zelisline.ub.platform.security.JwtAuthenticationFilter;
@@ -104,6 +106,7 @@ public class SecurityConfig {
             PublicCreditClaimRateLimitFilter publicCreditClaimRateLimitFilter,
             PublicContactMessageRateLimitFilter publicContactMessageRateLimitFilter,
             PublicSupportRateLimitFilter publicSupportRateLimitFilter,
+            PublicSupplierPageRateLimitFilter publicSupplierPageRateLimitFilter,
             PublicPickupMtaaniQuoteRateLimitFilter publicPickupMtaaniQuoteRateLimitFilter,
             LoginRateLimitFilter loginRateLimitFilter,
             RefreshRateLimitFilter refreshRateLimitFilter,
@@ -235,6 +238,7 @@ public class SecurityConfig {
         http.addFilterAfter(publicContactMessageRateLimitFilter, PublicCreditClaimRateLimitFilter.class);
         http.addFilterAfter(publicSupportRateLimitFilter, PublicContactMessageRateLimitFilter.class);
         http.addFilterAfter(publicPickupMtaaniQuoteRateLimitFilter, PublicSupportRateLimitFilter.class);
+        http.addFilterAfter(publicSupplierPageRateLimitFilter, PublicSupportRateLimitFilter.class);
         http.addFilterAfter(loginRateLimitFilter, PublicContactMessageRateLimitFilter.class);
         http.addFilterAfter(refreshRateLimitFilter, LoginRateLimitFilter.class);
         http.addFilterAfter(jwtAuthenticationFilter, RefreshRateLimitFilter.class);
@@ -273,6 +277,13 @@ public class SecurityConfig {
             PublicSupportRateLimiter publicSupportRateLimiter
     ) {
         return new PublicSupportRateLimitFilter(publicSupportRateLimiter);
+    }
+
+    @Bean
+    public PublicSupplierPageRateLimitFilter publicSupplierPageRateLimitFilter(
+            PublicSupplierPageRateLimiter publicSupplierPageRateLimiter
+    ) {
+        return new PublicSupplierPageRateLimitFilter(publicSupplierPageRateLimiter);
     }
 
     @Bean
@@ -365,6 +376,7 @@ public class SecurityConfig {
                 "X-Guest-Token",
                 "X-Guest-Phone",
                 "X-Page-Unlock",
+                "X-Marketplace-Buyer",
                 TestAuthenticationFilter.HEADER_USER_ID,
                 TestAuthenticationFilter.HEADER_ROLE_ID
         ));

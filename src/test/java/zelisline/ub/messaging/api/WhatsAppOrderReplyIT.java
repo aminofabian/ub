@@ -113,6 +113,12 @@ class WhatsAppOrderReplyIT {
 
     @Test
     void confirmCommand_advancesOrder() throws Exception {
+        // Fulfilment needs a paid order on every channel, WhatsApp included
+        // (WebOrdersAdminIT.fulfillment_whatsAppPendingStillRequiresPayment): the shop marks it paid first.
+        WebOrder paid = webOrderRepository.findById(orderId).orElseThrow();
+        paid.setStatus(WebOrderStatuses.PAID);
+        webOrderRepository.save(paid);
+
         mockMvc.perform(post("/webhooks/whatsapp")
                         .contentType("application/json")
                         .content(payload("CONFIRM " + WebOrderCodes.code(orderId), SHOP_DIGITS)))

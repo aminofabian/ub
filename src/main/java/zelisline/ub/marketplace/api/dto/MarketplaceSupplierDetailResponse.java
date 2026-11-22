@@ -23,7 +23,9 @@ public record MarketplaceSupplierDetailResponse(
         Integer creditTermsDays,
         List<String> deliveryRegions,
         List<String> categoryTags,
-        List<MarketplaceCatalogProductPreview> products
+        List<MarketplaceCatalogProductPreview> products,
+        /** The address (slug) of the supplier's own shop, when it has one that is open online. Null otherwise. */
+        String shopSlug
 ) {
     public record MarketplaceContactPreview(
             String name,

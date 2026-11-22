@@ -97,9 +97,17 @@ class MobilePublishCallbackIT {
                 .andExpect(status().isNoContent());
 
         Business updated = businessRepository.findBySlugAndDeletedAtIsNull(SLUG).orElseThrow();
-        org.assertj.core.api.Assertions.assertThat(updated.getSettings())
-                .contains("\"status\":\"submitted\"")
-                .contains("https://github.com/org/repo/actions/runs/1")
-                .contains("completedAt");
+        // Read it as JSON: the test database hands a JSON column back as a quoted string, which the
+        // service already allows for when it reads settings.
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(updated.getSettings());
+        if (root.isTextual()) {
+            root = mapper.readTree(root.asText());
+        }
+        com.fasterxml.jackson.databind.JsonNode publish = root.at("/mobile/publish");
+        org.assertj.core.api.Assertions.assertThat(publish.path("status").asText()).isEqualTo("submitted");
+        org.assertj.core.api.Assertions.assertThat(publish.path("workflowUrl").asText())
+                .isEqualTo("https://github.com/org/repo/actions/runs/1");
+        org.assertj.core.api.Assertions.assertThat(publish.path("completedAt").asText()).isNotBlank();
     }
 }

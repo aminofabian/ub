@@ -27,6 +27,10 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
  * and forbidden channel subscriptions are rejected.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+// Same in-memory database as every other IT. Without the test profile this class started the app
+// against the developer's own MySQL and failed wherever that needs a password.
+@org.springframework.test.context.ActiveProfiles("test")
+@org.springframework.test.context.TestPropertySource(properties = "spring.jpa.hibernate.ddl-auto=create-drop")
 @Tag("integration")
 class RealtimeWebSocketSecurityIT {
 
@@ -46,40 +50,35 @@ class RealtimeWebSocketSecurityIT {
     @Test
     @DisplayName("WebSocket connect without ticket returns 401")
     void connectWithoutTicket() throws Exception {
-        StandardWebSocketClient client = new StandardWebSocketClient();
-        CompletableFuture<Boolean> closed = new CompletableFuture<>();
+        assertThat(connectionRefused(URI.create(wsBaseUrl))).isTrue();
+    }
 
+    /**
+     * True when the server did not let the connection stand. A handshake the server refuses (401)
+     * never opens a session, so the client reports it as a failed connect, not as a close; a
+     * session that did open and was then dropped reports a close status other than normal.
+     */
+    private static boolean connectionRefused(URI uri) throws Exception {
+        StandardWebSocketClient client = new StandardWebSocketClient();
+        CompletableFuture<Boolean> refused = new CompletableFuture<>();
         client.execute(new TextWebSocketHandler() {
             @Override
             public void afterConnectionClosed(WebSocketSession session,
                                               org.springframework.web.socket.CloseStatus status) {
-                closed.complete(!status.equals(org.springframework.web.socket.CloseStatus.NORMAL));
+                refused.complete(!status.equals(org.springframework.web.socket.CloseStatus.NORMAL));
             }
-        }, new WebSocketHttpHeaders(), URI.create(wsBaseUrl));
-
-        Boolean abnormal = closed.get(5, TimeUnit.SECONDS);
-        assertThat(abnormal).isTrue();
+        }, new WebSocketHttpHeaders(), uri).whenComplete((session, error) -> {
+            if (error != null) {
+                refused.complete(true);
+            }
+        });
+        return refused.get(5, TimeUnit.SECONDS);
     }
 
     @Test
     @DisplayName("WebSocket connect with invalid ticket returns 401")
     void connectWithInvalidTicket() throws Exception {
-        StandardWebSocketClient client = new StandardWebSocketClient();
-        CompletableFuture<Integer> closeCode = new CompletableFuture<>();
-
-        URI uri = URI.create(wsBaseUrl + "?ticket=invalid-ticket-value");
-        client.execute(new TextWebSocketHandler() {
-            @Override
-            public void afterConnectionClosed(WebSocketSession session,
-                                              org.springframework.web.socket.CloseStatus status) {
-                closeCode.complete(status.getCode());
-            }
-        }, new WebSocketHttpHeaders(), uri);
-
-        Integer code = closeCode.get(5, TimeUnit.SECONDS);
-        assertThat(code).isNotNull();
-        // Server sets 401 on handshake rejection — browser sees as abnormal closure
-        assertThat(code).isNotEqualTo(1000);
+        assertThat(connectionRefused(URI.create(wsBaseUrl + "?ticket=invalid-ticket-value"))).isTrue();
     }
 
     @Test
@@ -119,18 +118,7 @@ class RealtimeWebSocketSecurityIT {
         assertThat(firstOpened.get(5, TimeUnit.SECONDS)).isTrue();
 
         // Second connection with same ticket should be rejected
-        StandardWebSocketClient client2 = new StandardWebSocketClient();
-        CompletableFuture<Integer> closeCode = new CompletableFuture<>();
-        client2.execute(new TextWebSocketHandler() {
-            @Override
-            public void afterConnectionClosed(WebSocketSession session,
-                                              org.springframework.web.socket.CloseStatus status) {
-                closeCode.complete(status.getCode());
-            }
-        }, new WebSocketHttpHeaders(), uri);
-
-        Integer code = closeCode.get(5, TimeUnit.SECONDS);
-        assertThat(code).isNotNull().isNotEqualTo(1000);
+        assertThat(connectionRefused(uri)).isTrue();
     }
 
     @Test

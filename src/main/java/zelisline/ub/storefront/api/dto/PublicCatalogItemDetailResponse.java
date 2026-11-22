@@ -27,6 +27,10 @@ public record PublicCatalogItemDetailResponse(
         List<PublicCatalogVariantResponse> variants,
         String onlinePurchaseMode,
         boolean weighed,
-        String unitType
+        String unitType,
+        /** The least that may be ordered online, when the shop set one. */
+        BigDecimal minOrderQty,
+        /** Lower prices from set quantities, lowest quantity first. Absent when there are none. */
+        List<zelisline.ub.pricing.api.dto.ItemPriceBreakDto> priceBreaks
 ) {
 }

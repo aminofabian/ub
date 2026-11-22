@@ -18,6 +18,8 @@ public record PublicMarketplaceSupplierSearchRow(
         String paymentMethodPreferred,
         String payoutType,
         List<String> deliveryRegions,
-        List<String> categoryTags
+        List<String> categoryTags,
+        /** The address (slug) of the supplier's own shop, when it has one that is open online. Null otherwise. */
+        String shopSlug
 ) {
 }

@@ -16,6 +16,11 @@ public record PublicSupplierPortalResponse(
         int invoiceCount,
         List<PublicSupplierSupplyRow> supplies,
         List<PublicSupplierMovementRow> movements,
-        List<String> linkedProducts
+        List<String> linkedProducts,
+        /**
+         * True when the figures were withheld: the viewer has not unlocked the page with its PIN and
+         * is not a signed-in supplier this shop connected. The zeros are then not real balances.
+         */
+        boolean restricted
 ) {
 }

@@ -65,6 +65,7 @@ public class PublicStorefrontCatalogService {
     private final ItemTypeRepository itemTypeRepository;
     private final StorefrontCatalogStockService storefrontCatalogStockService;
     private final zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry;
+    private final zelisline.ub.pricing.application.ItemTradeTermsService itemTradeTermsService;
 
     public PublicStorefrontCatalogService(
             PublicStorefrontContextService storefrontContextService,
@@ -75,8 +76,10 @@ public class PublicStorefrontCatalogService {
             CategoryRepository categoryRepository,
             ItemTypeRepository itemTypeRepository,
             StorefrontCatalogStockService storefrontCatalogStockService,
-            zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry
+            zelisline.ub.pharmacy.application.MedicineRegistry medicineRegistry,
+            zelisline.ub.pricing.application.ItemTradeTermsService itemTradeTermsService
     ) {
+        this.itemTradeTermsService = itemTradeTermsService;
         this.medicineRegistry = medicineRegistry;
         this.storefrontContextService = storefrontContextService;
         this.itemRepository = itemRepository;
@@ -277,7 +280,9 @@ public class PublicStorefrontCatalogService {
                 listPublishedVariants(ctx, parentId),
                 onlineMode(ctx, item),
                 item.isWeighed(),
-                blankToNull(item.getUnitType())
+                blankToNull(item.getUnitType()),
+                item.getMinOrderQty(),
+                priceBreaksOrNull(ctx, item)
         );
     }
 
@@ -317,8 +322,18 @@ public class PublicStorefrontCatalogService {
                 listPublishedVariants(ctx, parentId),
                 onlineMode(ctx, item),
                 item.isWeighed(),
-                blankToNull(item.getUnitType())
+                blankToNull(item.getUnitType()),
+                item.getMinOrderQty(),
+                priceBreaksOrNull(ctx, item)
         );
+    }
+
+    private List<zelisline.ub.pricing.api.dto.ItemPriceBreakDto> priceBreaksOrNull(
+            PublicStorefrontContext ctx, Item item) {
+        List<zelisline.ub.pricing.api.dto.ItemPriceBreakDto> breaks = itemTradeTermsService
+                .breaksByItem(ctx.business().getId(), List.of(item.getId()))
+                .get(item.getId());
+        return breaks == null || breaks.isEmpty() ? null : breaks;
     }
 
     @Transactional(readOnly = true)

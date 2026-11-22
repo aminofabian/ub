@@ -42,7 +42,18 @@ public class ReservedHostnameGuard {
             "superadmin",
             "platform",
             "null",
-            "undefined"
+            "undefined",
+            // ADR 0038: the marketplace is its own host, and these name platform surfaces a shop
+            // or supplier shop must never be mistaken for.
+            "marketplace",
+            "supplier",
+            "suppliers",
+            "trade",
+            "wholesale",
+            "portal",
+            "s",
+            "shop",
+            "shops"
     );
 
     private final Set<String> platformHosts;

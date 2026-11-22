@@ -87,6 +87,10 @@ public class GroceryInvoice {
     @Column(name = "customer_id", length = 36)
     private String customerId;
 
+    /** Supplier counter orders: the buyer's trade account this invoice was priced for. */
+    @Column(name = "trade_account_id", length = 36)
+    private String tradeAccountId;
+
     @Column(name = "is_remote", nullable = false)
     private boolean remote;
 

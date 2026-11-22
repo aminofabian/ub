@@ -15,6 +15,10 @@ public record PublicCartLineResponse(
         BigDecimal unitPrice,
         BigDecimal lineTotal,
         boolean weighed,
-        String unitType
+        String unitType,
+        /** The shelf price, present only when this quantity earned a lower one. */
+        BigDecimal regularUnitPrice,
+        /** The least that may be ordered of this product, when the shop set one. */
+        BigDecimal minOrderQty
 ) {
 }

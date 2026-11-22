@@ -78,7 +78,10 @@ public class WhatsAppOrderExpiryService {
     @Transactional
     public void releaseStock(WebOrder order) {
         releaseOutstandingStock(
-                order,
+                order.getBusinessId(),
+                order.getCatalogBranchId(),
+                SalesConstants.STOCK_REFERENCE_TYPE_WEB_ORDER,
+                order.getId(),
                 InventoryConstants.MOVEMENT_WEB_ORDER_EXPIRY,
                 "Web order expired — stock released");
     }
@@ -90,17 +93,33 @@ public class WhatsAppOrderExpiryService {
     @Transactional
     public void releaseStockForVoid(WebOrder order) {
         releaseOutstandingStock(
-                order,
+                order.getBusinessId(),
+                order.getCatalogBranchId(),
+                SalesConstants.STOCK_REFERENCE_TYPE_WEB_ORDER,
+                order.getId(),
                 InventoryConstants.MOVEMENT_WEB_ORDER_VOID,
                 "Web order voided — stock released");
     }
 
-    private void releaseOutstandingStock(WebOrder order, String movementType, String notes) {
+    /**
+     * Puts back whatever a record still holds: the {@code MOVEMENT_SALE} movements under its
+     * reference, less what was already released. Web orders use it, and so does anything else
+     * that takes stock the same way under its own reference type (a trade order, ADR 0040).
+     */
+    @Transactional
+    public void releaseOutstandingStock(
+            String businessId,
+            String branchId,
+            String referenceType,
+            String referenceId,
+            String movementType,
+            String notes
+    ) {
         List<StockMovement> movements = stockMovementRepository
                 .findByBusinessIdAndReferenceTypeAndReferenceId(
-                        order.getBusinessId(),
-                        SalesConstants.STOCK_REFERENCE_TYPE_WEB_ORDER,
-                        order.getId());
+                        businessId,
+                        referenceType,
+                        referenceId);
         Map<String, BigDecimal> stillHeld = new HashMap<>();
         Map<String, BigDecimal> unitCost = new HashMap<>();
         Map<String, String> itemIds = new HashMap<>();
@@ -133,11 +152,11 @@ public class WhatsAppOrderExpiryService {
             Item item = itemId == null
                     ? null
                     : itemRepository
-                            .findByIdAndBusinessIdAndDeletedAtIsNull(itemId, order.getBusinessId())
+                            .findByIdAndBusinessIdAndDeletedAtIsNull(itemId, businessId)
                             .orElse(null);
             InventoryBatch batch = batchId == null
                     ? null
-                    : inventoryBatchRepository.findByIdAndBusinessId(batchId, order.getBusinessId()).orElse(null);
+                    : inventoryBatchRepository.findByIdAndBusinessId(batchId, businessId).orElse(null);
             // Units going back into a batch that was quarantined meanwhile stay off sale, so
             // sellable on-hand (current_stock) must not grow; releasing the batch adds them then.
             boolean intoQuarantine = batch != null
@@ -151,21 +170,21 @@ public class WhatsAppOrderExpiryService {
                 inventoryBatchRepository.save(batch);
             }
             StockMovement release = new StockMovement();
-            release.setBusinessId(order.getBusinessId());
-            release.setBranchId(order.getCatalogBranchId());
+            release.setBusinessId(businessId);
+            release.setBranchId(branchId);
             release.setItemId(itemId);
             release.setBatchId(batchId);
             release.setMovementType(movementType);
-            release.setReferenceType(SalesConstants.STOCK_REFERENCE_TYPE_WEB_ORDER);
-            release.setReferenceId(order.getId());
+            release.setReferenceType(referenceType);
+            release.setReferenceId(referenceId);
             release.setQuantityDelta(qtyBack);
             release.setUnitCost(unitCost.get(entry.getKey()));
             release.setNotes(notes);
             stockMovementRepository.save(release);
             if (intoQuarantine) {
                 StockMovement hold = new StockMovement();
-                hold.setBusinessId(order.getBusinessId());
-                hold.setBranchId(order.getCatalogBranchId());
+                hold.setBusinessId(businessId);
+                hold.setBranchId(branchId);
                 hold.setItemId(itemId);
                 hold.setBatchId(batchId);
                 hold.setMovementType(InventoryConstants.MOVEMENT_QUARANTINE);

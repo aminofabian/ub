@@ -75,6 +75,7 @@ public class PublicSupplierPortalService {
     private final ContactMessageRepository contactMessageRepository;
     private final zelisline.ub.marketplace.application.SupplierPortalMessagesService messagesService;
     private final PageSealService pageSealService;
+    private final zelisline.ub.marketplace.application.SupplierPortalShopAccess supplierPortalShopAccess;
     private final JdbcTemplate jdbc;
     private final PackageVariantStockResolver packageVariantStockResolver;
     private final InventoryBatchRepository inventoryBatchRepository;
@@ -96,7 +97,7 @@ public class PublicSupplierPortalService {
                 ? supplier.getPrepaymentBalance()
                 : BigDecimal.ZERO;
 
-        if (supplier.isPageSealed() && !pageSealService.isShopSupplierUnlocked(supplier, unlockToken)) {
+        if (!viewerMaySeeBooks(supplier, unlockToken)) {
             return new PublicSupplierPortalResponse(
                     supplier.getName(),
                     slug,
@@ -109,7 +110,8 @@ public class PublicSupplierPortalService {
                     0,
                     List.of(),
                     List.of(),
-                    List.of());
+                    List.of(),
+                    true);
         }
 
         var history = purchaseHistoryService.purchaseHistory(businessId, supplier.getId(), SUPPLY_LIMIT);
@@ -140,7 +142,8 @@ public class PublicSupplierPortalService {
                 history.summary().invoiceCount(),
                 supplies,
                 movements,
-                linked);
+                linked,
+                false);
     }
 
     @Transactional(readOnly = true)
@@ -162,7 +165,7 @@ public class PublicSupplierPortalService {
         LocalDate periodStart = periodStart(today, period);
         LocalDate periodEnd = today;
 
-        if (supplier.isPageSealed() && !pageSealService.isShopSupplierUnlocked(supplier, unlockToken)) {
+        if (!viewerMaySeeBooks(supplier, unlockToken)) {
             return new PublicSupplierProductsSellingResponse(
                     period, periodStart, periodEnd, currency, sort, List.of());
         }
@@ -402,6 +405,19 @@ public class PublicSupplierPortalService {
                     saved.getId());
         }
         return new PublicSupplierComplaintResponse(true, saved.getId());
+    }
+
+    /**
+     * A shop's balance with a supplier, its supply history and what it sells of that supplier's
+     * goods are not public (ADR 0038, P0.2). They are shown to someone who unlocked the page with
+     * its PIN, or to a signed-in supplier this shop has connected. A page with no PIN used to be
+     * open to anyone who had the link; it now shows names only.
+     */
+    private boolean viewerMaySeeBooks(Supplier supplier, String unlockToken) {
+        if (supplier.isPageSealed() && pageSealService.isShopSupplierUnlocked(supplier, unlockToken)) {
+            return true;
+        }
+        return supplierPortalShopAccess.currentSupplierIsConnectedTo(supplier);
     }
 
     public Supplier resolveSupplierOrThrow(String businessId, String slugRaw) {

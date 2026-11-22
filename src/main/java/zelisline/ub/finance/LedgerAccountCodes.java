@@ -30,6 +30,8 @@ public final class LedgerAccountCodes {
     public static final String BANK_ACCOUNT = "1030";
     /** Customer tab / accounts receivable — POS credit tender (Phase 5). */
     public static final String ACCOUNTS_RECEIVABLE_CUSTOMERS = "1100";
+    /** What trade buyers owe a supplier's shop on sales invoices (ADR 0042). Kept apart from customer tabs. */
+    public static final String TRADE_RECEIVABLES = "1110";
     /** Customer prepaid wallet (liability) — Phase 5. */
     public static final String CUSTOMER_WALLET_LIABILITY = "1175";
     /** Till-side M-Pesa / mobile money clearing (manual reference in Phase 4). */

@@ -446,7 +446,7 @@ public class ShiftService {
                     .branchId(s.getBranchId())
                     .actor(userId, AuditEventActorType.USER)
                     .target("shift", s.getId())
-                    .targetLabel("Shift " + s.getId().substring(0, 8))
+                    .targetLabel("Shift " + (s.getId().length() > 8 ? s.getId().substring(0, 8) : s.getId()))
                     .shiftId(s.getId())
                     .oldState(map(
                             "expectedClosingCash", expected.toPlainString(),

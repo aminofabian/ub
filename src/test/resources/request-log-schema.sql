@@ -16,5 +16,14 @@ CREATE TABLE platform_request_log (
   success        BOOLEAN      NOT NULL,
   duration_ms    BIGINT       NOT NULL,
   ip             VARCHAR(64)  NULL,
-  load_test_run_id CHAR(36)   NULL
+  load_test_run_id CHAR(36)   NULL,
+  -- Added by V246 and later; kept in step with PlatformRequestLog.
+  error_title    VARCHAR(255) NULL,
+  error_detail   CLOB         NULL,
+  error_type     VARCHAR(255) NULL,
+  exception_class VARCHAR(255) NULL,
+  exception_chain CLOB        NULL,
+  stack_summary  CLOB         NULL,
+  user_agent     VARCHAR(512) NULL,
+  request_meta   CLOB         NULL
 );

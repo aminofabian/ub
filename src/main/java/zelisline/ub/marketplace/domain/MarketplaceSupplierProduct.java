@@ -51,6 +51,14 @@ public class MarketplaceSupplierProduct {
     @Column(name = "min_order_qty", precision = 14, scale = 4)
     private BigDecimal minOrderQty;
 
+    /** The same product in the supplier's own shop, once copied there (ADR 0038, P1). */
+    @Column(name = "item_id", length = 36)
+    private String itemId;
+
+    /** Public picture for the directory; absolute http(s) URL or null. */
+    @Column(name = "image_url", length = 2048)
+    private String imageUrl;
+
     /** active | inactive */
     @Column(name = "status", nullable = false, length = 16)
     private String status = MarketplaceSupplierProductStatuses.ACTIVE;

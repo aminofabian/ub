@@ -58,6 +58,10 @@ public class SupplierUser {
     @Column(name = "sessions_revoked_at")
     private Instant sessionsRevokedAt;
 
+    /** The shop user invited for this portal user, once the shop brought its portal team in. */
+    @Column(name = "business_user_id", length = 36)
+    private String businessUserId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

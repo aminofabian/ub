@@ -46,18 +46,24 @@ public class SupplierReadinessService {
         MarketplaceSupplier passport = marketplaceSupplierRepository.findFirstByBusinessId(businessId).orElse(null);
         boolean hasPassport = passport != null;
 
-        boolean claimed = hasPassport && passport.isListed()
+        // A supplier that came in through the portal has portal users; one that signed up as a shop has none and
+        // manages its page from inside the shop, so its steps point there.
+        boolean portalUsers = hasPassport
                 && !supplierUserRepository.findByMarketplaceSupplierIdAndActiveTrue(passport.getId()).isEmpty();
+        String pageUrl = portalUsers ? "/supplier-portal/claim" : "/storefront/supplier-page";
+        String profileUrl = portalUsers ? "/supplier-portal/profile" : "/storefront/supplier-page";
+        boolean claimed = hasPassport && passport.isListed();
         boolean paid = hasPassport && hasPayoutDetails(passport);
         boolean delivers = hasPassport && hasDeliveryRegions(passport);
         long sellable = onboardingGateService.snapshot(businessId).sellableSkuCount();
         boolean ordered = salesOrderRepository.existsByBusinessId(businessId);
 
         List<Step> steps = new ArrayList<>();
-        steps.add(new Step("claim_page", "Claim your page", claimed, "/supplier-portal/claim"));
-        steps.add(new Step("open_shop", "Open your wholesale shop", hasPassport, "/supplier-portal/claim"));
-        steps.add(new Step("payout", "Say how you are paid", paid, "/supplier-portal/payment-details"));
-        steps.add(new Step("delivery_areas", "Say where you deliver", delivers, "/supplier-portal/profile"));
+        steps.add(new Step("claim_page", "Claim your page", claimed, pageUrl));
+        steps.add(new Step("open_shop", "Open your wholesale shop", hasPassport, pageUrl));
+        steps.add(new Step("payout", "Say how you are paid", paid,
+                portalUsers ? "/supplier-portal/payment-details" : "/storefront/supplier-page"));
+        steps.add(new Step("delivery_areas", "Say where you deliver", delivers, profileUrl));
         steps.add(new Step("first_product", "Have something a buyer can order", sellable > 0, "/products"));
         steps.add(new Step("first_order", "Take your first order", ordered, "/storefront/trade-orders"));
         List<SupplierReadinessResponse.Milestone> milestones = milestoneRepository

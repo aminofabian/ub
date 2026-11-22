@@ -78,6 +78,15 @@ public class BusinessProfileSettingsService {
         }
         ObjectNode root = parseRoot(currentSettings);
         ObjectNode profile = copyNamespace(root, KEY_PROFILE);
+        // A format only the platform sets (a supplier's shop) stays through any change the shop makes itself,
+        // including the sign-up questions, which save the chosen formats again at every step.
+        normalized = new java.util.ArrayList<>(normalized);
+        for (String current : readStoreTypes(profile)) {
+            String code = current == null ? "" : current.trim().toLowerCase(java.util.Locale.ROOT);
+            if (zelisline.ub.tenancy.api.dto.StoreTypeCodes.SYSTEM_TYPES.contains(code) && !normalized.contains(code)) {
+                normalized.add(code);
+            }
+        }
         profile.put(KEY_STORE_TYPE, normalized.get(0));
         profile.set(KEY_STORE_TYPES, toArray(normalized));
         root.set(KEY_PROFILE, profile);

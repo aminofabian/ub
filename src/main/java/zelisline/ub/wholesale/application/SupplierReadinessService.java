@@ -54,8 +54,8 @@ public class SupplierReadinessService {
         // manages its page from inside the shop, so its steps point there.
         boolean portalUsers = hasPassport
                 && !supplierUserRepository.findByMarketplaceSupplierIdAndActiveTrue(passport.getId()).isEmpty();
-        String pageUrl = portalUsers ? "/supplier-portal/claim" : "/storefront/supplier-page";
-        String profileUrl = portalUsers ? "/supplier-portal/profile" : "/storefront/supplier-page";
+        String pageUrl = portalUsers ? "/supplier-portal/claim" : "/trade/your-page";
+        String profileUrl = portalUsers ? "/supplier-portal/profile" : "/trade/your-page";
         boolean claimed = hasPassport && passport.isListed();
         boolean paid = hasPassport && hasPayoutDetails(passport);
         boolean delivers = hasPassport && hasDeliveryRegions(passport);
@@ -66,12 +66,12 @@ public class SupplierReadinessService {
         steps.add(new Step("claim_page", "Claim your page", claimed, pageUrl));
         steps.add(new Step("open_shop", "Open your wholesale shop", hasPassport, pageUrl));
         steps.add(new Step("payout", "Say how you are paid", paid,
-                portalUsers ? "/supplier-portal/payment-details" : "/storefront/supplier-page"));
+                portalUsers ? "/supplier-portal/payment-details" : "/trade/your-page"));
         steps.add(new Step("delivery_areas", "Say where you deliver", delivers, profileUrl));
         // Priced, published online and in stock, not merely present. Only checked once there is a product at all.
         boolean canBeOrdered = sellable > 0 && (orderableService == null || orderableService.anyOrderable(businessId));
         steps.add(new Step("first_product", "Have something a buyer can order", canBeOrdered, "/products"));
-        steps.add(new Step("first_order", "Take your first order", ordered, "/storefront/trade-orders"));
+        steps.add(new Step("first_order", "Take your first order", ordered, "/trade"));
         List<SupplierReadinessResponse.Milestone> milestones = milestoneRepository
                 .findByBusinessIdOrderByAchievedAtAsc(businessId).stream()
                 .map(m -> new SupplierReadinessResponse.Milestone(m.getMilestoneKey(), m.getAchievedAt()))

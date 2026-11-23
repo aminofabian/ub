@@ -149,12 +149,12 @@ public class SupplierOverviewService {
         if (waiting > 0) {
             return new NextThing(
                     waiting == 1 ? "1 order is waiting for your answer" : waiting + " orders are waiting for your answer",
-                    "/storefront/trade-orders");
+                    "/trade");
         }
         if (toDispatch > 0) {
             return new NextThing(
                     toDispatch == 1 ? "1 accepted order is ready to dispatch" : toDispatch + " accepted orders are ready to dispatch",
-                    "/storefront/trade-orders");
+                    "/trade");
         }
         for (SupplierReadinessResponse.Step step : steps) {
             if (!step.done()) {

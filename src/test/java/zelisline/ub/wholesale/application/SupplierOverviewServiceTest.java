@@ -23,7 +23,7 @@ class SupplierOverviewServiceTest {
         var next = SupplierOverviewService.nextThing(3, 2, List.of(new Step("payout", "Say how you are paid", false, "/x")));
 
         assertThat(next.text()).isEqualTo("3 orders are waiting for your answer");
-        assertThat(next.url()).isEqualTo("/storefront/trade-orders");
+        assertThat(next.url()).isEqualTo("/trade");
     }
 
     @Test

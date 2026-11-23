@@ -84,6 +84,23 @@ import zelisline.ub.sales.repository.SalePaymentRepository;
 import zelisline.ub.sales.repository.SaleRepository;
 import zelisline.ub.sales.repository.ShiftRepository;
 import zelisline.ub.storefront.domain.WebOrder;
+import zelisline.ub.wholesale.domain.SalesOrder;
+import zelisline.ub.wholesale.domain.SalesOrderLine;
+import zelisline.ub.wholesale.repository.SalesOrderRepository;
+import zelisline.ub.wholesale.repository.SalesOrderLineRepository;
+import zelisline.ub.desktop.api.dto.SalesOrderSyncSnapshot;
+import zelisline.ub.desktop.api.dto.TradeActionSyncSnapshot;
+import zelisline.ub.desktop.application.DesktopTradeActionIngestService;
+import zelisline.ub.desktop.api.dto.TradeAccountSyncSnapshot;
+import zelisline.ub.desktop.api.dto.SalesInvoiceSyncSnapshot;
+import zelisline.ub.wholesale.domain.TradeAccount;
+import zelisline.ub.wholesale.domain.SalesInvoice;
+import zelisline.ub.wholesale.domain.SalesReceipt;
+import zelisline.ub.wholesale.domain.SalesCreditNote;
+import zelisline.ub.wholesale.repository.TradeAccountRepository;
+import zelisline.ub.wholesale.repository.SalesInvoiceRepository;
+import zelisline.ub.wholesale.repository.SalesReceiptRepository;
+import zelisline.ub.wholesale.repository.SalesCreditNoteRepository;
 import zelisline.ub.storefront.domain.WebOrderLine;
 import zelisline.ub.storefront.repository.WebOrderLineRepository;
 import zelisline.ub.storefront.repository.WebOrderRepository;
@@ -145,6 +162,13 @@ public class DesktopSyncController {
     private final SupplierInvoiceLineRepository supplierInvoiceLineRepository;
     private final WebOrderRepository webOrderRepository;
     private final WebOrderLineRepository webOrderLineRepository;
+    private final SalesOrderRepository salesOrderRepository;
+    private final SalesOrderLineRepository salesOrderLineRepository;
+    private final DesktopTradeActionIngestService tradeActionIngestService;
+    private final TradeAccountRepository tradeAccountRepository;
+    private final SalesInvoiceRepository salesInvoiceRepository;
+    private final SalesReceiptRepository salesReceiptRepository;
+    private final SalesCreditNoteRepository salesCreditNoteRepository;
     private final StockMovementRepository stockMovementRepository;
     private final zelisline.ub.pharmacy.application.DesktopTillPolicy desktopTillPolicy;
 
@@ -973,6 +997,136 @@ public class DesktopSyncController {
             .map(this::toWebOrderData)
             .toList();
         return new WebOrderSyncSnapshot(data);
+    }
+
+    /**
+     * Cloud -> till supplier-trade pull (S1): every trade order touched at/after
+     * {@code since}, with its lines, so a supplier sees "to answer" and "to
+     * dispatch" at the counter. Read-only on the till until the action push (S2).
+     * Idempotent on the till side (it upserts by order id).
+     */
+    @GetMapping("/trade-orders")
+    public SalesOrderSyncSnapshot cloudTradeOrders(
+            @RequestParam(defaultValue = "1970-01-01T00:00:00Z") String since,
+            HttpServletRequest request) {
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        Instant cursor = parseCursor(since);
+        List<SalesOrder> orders = salesOrderRepository
+            .findForDesktopSyncPull(businessId, cursor, PageRequest.of(0, 500));
+        List<SalesOrderSyncSnapshot.OrderData> data = orders.stream()
+            .map(this::toTradeOrderData)
+            .toList();
+        return new SalesOrderSyncSnapshot(data);
+    }
+
+    /**
+     * Till -> cloud: apply queued supplier-trade actions (S2). Each is applied through the cloud's own
+     * SalesOrderService, idempotent by action id. Returns one outcome per action; an action that hits a
+     * transient error is simply left out, so the till keeps it pending and retries.
+     */
+    @PostMapping("/trade-actions")
+    public TradeActionSyncSnapshot.Ack ingestTradeActions(
+            @Valid @RequestBody TradeActionSyncSnapshot request,
+            HttpServletRequest httpRequest) {
+        String businessId = TenantRequestIds.resolveBusinessId(httpRequest);
+        List<TradeActionSyncSnapshot.Outcome> outcomes = new java.util.ArrayList<>();
+        if (request.actions() != null) {
+            for (TradeActionSyncSnapshot.Action action : request.actions()) {
+                try {
+                    outcomes.add(tradeActionIngestService.applyOne(businessId, action));
+                } catch (Exception e) {
+                    // Transient: do not log it, do not report it -- the till retries next flush.
+                    log.warn("[DesktopSync] trade action {} deferred: {}", action.id(), e.getMessage());
+                }
+            }
+        }
+        return new TradeActionSyncSnapshot.Ack(outcomes);
+    }
+
+    /** Cloud -> till: buyer accounts touched at/after the cursor (S3). */
+    @GetMapping("/trade-accounts")
+    public TradeAccountSyncSnapshot cloudTradeAccounts(
+            @RequestParam(defaultValue = "1970-01-01T00:00:00Z") String since,
+            HttpServletRequest request) {
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        List<TradeAccount> rows = tradeAccountRepository
+            .findForDesktopSyncPull(businessId, parseCursor(since), PageRequest.of(0, 500));
+        return new TradeAccountSyncSnapshot(rows.stream().map(a -> new TradeAccountSyncSnapshot.AccountData(
+            a.getId(), a.getBusinessId(), a.getPhoneKey(), a.getBuyerPhone(), a.getBuyerName(),
+            a.getBusinessName(), a.getNote(), a.getStatus(), a.getCreditLimit(), a.getTermsDays(),
+            a.getBuyerBusinessId(), a.getDiscountPercent(), a.getCreatedAt(), a.getUpdatedAt())).toList());
+    }
+
+    /** Cloud -> till: invoices (with receipts and credit notes) touched at/after the cursor (S3). */
+    @GetMapping("/trade-invoices")
+    public SalesInvoiceSyncSnapshot cloudTradeInvoices(
+            @RequestParam(defaultValue = "1970-01-01T00:00:00Z") String since,
+            HttpServletRequest request) {
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        List<SalesInvoice> rows = salesInvoiceRepository
+            .findForDesktopSyncPull(businessId, parseCursor(since), PageRequest.of(0, 500));
+        return new SalesInvoiceSyncSnapshot(rows.stream().map(this::toInvoiceData).toList());
+    }
+
+    private SalesInvoiceSyncSnapshot.InvoiceData toInvoiceData(SalesInvoice inv) {
+        List<SalesInvoiceSyncSnapshot.ReceiptData> receipts = salesReceiptRepository
+            .findByInvoiceIdAndBusinessIdOrderByCreatedAtAsc(inv.getId(), inv.getBusinessId())
+            .stream()
+            .map(r -> new SalesInvoiceSyncSnapshot.ReceiptData(
+                r.getId(), r.getAmount(), r.getMethod(), r.getReference(), r.getReceivedOn(), r.getCreatedAt()))
+            .toList();
+        List<SalesInvoiceSyncSnapshot.CreditNoteData> notes = salesCreditNoteRepository
+            .findByInvoiceIdAndBusinessIdOrderByCreatedAtAsc(inv.getId(), inv.getBusinessId())
+            .stream()
+            .map(n -> new SalesInvoiceSyncSnapshot.CreditNoteData(
+                n.getId(), n.getAmount(), n.getReason(), n.getCreatedAt()))
+            .toList();
+        return new SalesInvoiceSyncSnapshot.InvoiceData(
+            inv.getId(), inv.getBusinessId(), inv.getSalesOrderId(), inv.getInvoiceNo(), inv.getStatus(),
+            inv.getCurrency(), inv.getTotal(), inv.getAmountPaid(), inv.getAmountCredited(), inv.getCostOfGoods(),
+            inv.getIssuedOn(), inv.getDueOn(), inv.getBuyerName(), inv.getBuyerBusinessName(), inv.getBuyerPhone(),
+            inv.getCreatedAt(), inv.getUpdatedAt(), receipts, notes);
+    }
+
+    private SalesOrderSyncSnapshot.OrderData toTradeOrderData(SalesOrder order) {
+        List<SalesOrderSyncSnapshot.LineData> lines = salesOrderLineRepository
+            .findByOrderIdAndBusinessIdOrderByLineIndexAsc(order.getId(), order.getBusinessId())
+            .stream()
+            .map(l -> new SalesOrderSyncSnapshot.LineData(
+                l.getId(),
+                l.getItemId(),
+                l.getItemName(),
+                l.getQuantity(),
+                l.getUnitPrice(),
+                l.getLineTotal(),
+                l.getLineIndex(),
+                l.getStatus(),
+                l.getAcceptedQty()))
+            .toList();
+        return new SalesOrderSyncSnapshot.OrderData(
+            order.getId(),
+            order.getBusinessId(),
+            order.getBranchId(),
+            order.getStatus(),
+            order.getSource(),
+            order.getCurrency(),
+            order.getTotal(),
+            order.getBuyerName(),
+            order.getBuyerPhone(),
+            order.getBuyerEmail(),
+            order.getBuyerBusinessName(),
+            order.getBuyerBusinessId(),
+            order.getBuyerPhoneKey(),
+            order.getPaymentTerms(),
+            order.getTradeAccountId(),
+            order.isOverCreditLimit(),
+            order.getNotes(),
+            order.getAnsweredAt(),
+            order.getDispatchedAt(),
+            order.getCreatedAt(),
+            order.getUpdatedAt(),
+            lines
+        );
     }
 
     private WebOrderSyncSnapshot.OrderData toWebOrderData(WebOrder order) {

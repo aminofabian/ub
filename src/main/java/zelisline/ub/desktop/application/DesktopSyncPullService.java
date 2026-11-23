@@ -67,6 +67,22 @@ import zelisline.ub.suppliers.domain.SupplierContact;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
 import zelisline.ub.suppliers.repository.SupplierRepository;
 import zelisline.ub.storefront.domain.WebOrder;
+import zelisline.ub.wholesale.domain.SalesOrder;
+import zelisline.ub.wholesale.domain.SalesOrderLine;
+import zelisline.ub.wholesale.repository.SalesOrderRepository;
+import zelisline.ub.wholesale.repository.SalesOrderLineRepository;
+import zelisline.ub.desktop.api.dto.SalesOrderSyncSnapshot;
+import zelisline.ub.desktop.api.dto.TradeAccountSyncSnapshot;
+import zelisline.ub.desktop.api.dto.SalesInvoiceSyncSnapshot;
+import zelisline.ub.wholesale.domain.TradeAccount;
+import zelisline.ub.wholesale.domain.SalesInvoice;
+import zelisline.ub.wholesale.domain.SalesReceipt;
+import zelisline.ub.wholesale.domain.SalesCreditNote;
+import zelisline.ub.wholesale.repository.TradeAccountRepository;
+import zelisline.ub.wholesale.repository.SalesInvoiceRepository;
+import zelisline.ub.wholesale.repository.SalesReceiptRepository;
+import zelisline.ub.wholesale.repository.SalesCreditNoteRepository;
+import zelisline.ub.tenancy.application.FeatureFlagService;
 import zelisline.ub.storefront.domain.WebOrderLine;
 import zelisline.ub.storefront.repository.WebOrderLineRepository;
 import zelisline.ub.storefront.repository.WebOrderRepository;
@@ -132,6 +148,14 @@ public class DesktopSyncPullService {
     private final RestClient.Builder restClientBuilder;
     private final StockMovementRepository stockMovementRepository;
     private final DesktopStockCursor stockCursor;
+    private final SalesOrderRepository salesOrderRepository;
+    private final SalesOrderLineRepository salesOrderLineRepository;
+    private final DesktopTradeCursor tradeCursor;
+    private final FeatureFlagService featureFlagService;
+    private final TradeAccountRepository tradeAccountRepository;
+    private final SalesInvoiceRepository salesInvoiceRepository;
+    private final SalesReceiptRepository salesReceiptRepository;
+    private final SalesCreditNoteRepository salesCreditNoteRepository;
 
     @Value("${app.desktop.business-id:}")
     private String desktopBusinessId;
@@ -572,6 +596,405 @@ public class DesktopSyncPullService {
         stub.setDeletedAt(null);
         branchRepository.saveAndFlush(stub);
         log.info("[DesktopSync] stubbed missing branch {} until next master pull", branchId);
+    }
+
+    /** Pull buyer accounts cloud -> till (S3). Gated on desktop.trade_sync. Upsert by id. */
+    public int pullTradeAccounts() {
+        return pullTradeStream("trade-accounts", TradeAccountSyncSnapshot.class,
+            tradeCursor.loadTradeAccounts().orElse(java.time.Instant.EPOCH),
+            (client, mapping, since) -> getTrade(client, mapping, "trade-accounts", since, TradeAccountSyncSnapshot.class),
+            snapshot -> snapshot.accounts() == null ? List.of() : snapshot.accounts(),
+            (localId, accounts) -> upsertAccounts(localId, accounts),
+            accounts -> accounts.stream().map(TradeAccountSyncSnapshot.AccountData::updatedAt),
+            tradeCursor::saveTradeAccounts);
+    }
+
+    /** Pull invoices (+ receipts + credit notes) cloud -> till (S3). Gated on desktop.trade_sync. Upsert by id. */
+    public int pullTradeInvoices() {
+        return pullTradeStream("trade-invoices", SalesInvoiceSyncSnapshot.class,
+            tradeCursor.loadTradeInvoices().orElse(java.time.Instant.EPOCH),
+            (client, mapping, since) -> getTrade(client, mapping, "trade-invoices", since, SalesInvoiceSyncSnapshot.class),
+            snapshot -> snapshot.invoices() == null ? List.of() : snapshot.invoices(),
+            (localId, invoices) -> upsertInvoices(localId, invoices),
+            invoices -> invoices.stream().map(SalesInvoiceSyncSnapshot.InvoiceData::updatedAt),
+            tradeCursor::saveTradeInvoices);
+    }
+
+    /**
+     * Shared loop for a cursor-paged trade mirror: fetch a page, upsert it in a transaction, advance the
+     * cursor by the newest updated_at, repeat. Off unless desktop.trade_sync is on.
+     */
+    private <S, R> int pullTradeStream(
+            String label,
+            Class<S> snapshotType,
+            java.time.Instant start,
+            TradeFetch<S> fetch,
+            java.util.function.Function<S, List<R>> rows,
+            java.util.function.BiFunction<String, List<R>, Integer> upsert,
+            java.util.function.Function<List<R>, java.util.stream.Stream<java.time.Instant>> updatedAts,
+            java.util.function.Consumer<java.time.Instant> saveCursor) {
+        String localId = desktopBusinessId == null ? "" : desktopBusinessId.trim();
+        if (localId.isEmpty() || !featureFlagService.isEnabled(localId, FeatureFlagService.FLAG_DESKTOP_TRADE_SYNC)) {
+            return 0;
+        }
+        CloudSyncSession.Session mapping = cloudSyncSession.load().orElse(null);
+        if (mapping == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This PC is not connected to an online shop yet");
+        }
+        java.time.Instant cursor = start;
+        RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
+        int total = 0;
+        int pages = 0;
+        while (true) {
+            if (++pages > MAX_PULL_PAGES) {
+                log.warn("[DesktopSync] {} pull hit the {} page cap; the rest follows next flush", label, MAX_PULL_PAGES);
+                break;
+            }
+            List<R> page = rows.apply(fetch.fetch(client, mapping, cursor));
+            if (page.isEmpty()) {
+                break;
+            }
+            final java.time.Instant at = cursor;
+            Integer synced = transactionTemplate.execute(status -> upsert.apply(localId, page));
+            if (synced == null) {
+                throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, label + " pull failed -- nothing written");
+            }
+            total += synced;
+            java.time.Instant newest = updatedAts.apply(page)
+                .filter(java.util.Objects::nonNull).max(java.time.Instant::compareTo).orElse(null);
+            if (newest != null && newest.isAfter(at)) {
+                cursor = newest;
+                saveCursor.accept(cursor);
+            }
+            if (page.size() < SALES_PAGE_SIZE) {
+                break;
+            }
+        }
+        log.info("[DesktopSync] {} pull: {} row(s) mirrored from {}", label, total, mapping.origin());
+        return total;
+    }
+
+    @FunctionalInterface
+    private interface TradeFetch<S> {
+        S fetch(RestClient client, CloudSyncSession.Session mapping, java.time.Instant since);
+    }
+
+    private <S> S getTrade(RestClient client, CloudSyncSession.Session mapping, String path,
+                           java.time.Instant since, Class<S> type) {
+        try {
+            return doGetTrade(client, mapping, path, since, type);
+        } catch (Exception e) {
+            if (!isUnauthorized(e)) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "Could not download " + path + " (" + e.getMessage() + ")");
+            }
+            CloudSyncSession.Session refreshed = cloudSyncSession.refresh(client, mapping).orElse(null);
+            if (refreshed == null) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
+                    "Your online-shop session has expired -- open Settings -> Sync to reconnect");
+            }
+            try {
+                return doGetTrade(client, refreshed, path, since, type);
+            } catch (Exception e2) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "Could not download " + path + " (" + e2.getMessage() + ")");
+            }
+        }
+    }
+
+    private <S> S doGetTrade(RestClient client, CloudSyncSession.Session mapping, String path,
+                             java.time.Instant since, Class<S> type) {
+        S snapshot = client.get()
+            .uri(uriBuilder -> uriBuilder.path("/api/v1/desktop/sync/" + path)
+                .queryParam("since", since.toString()).build())
+            .header("Authorization", "Bearer " + mapping.accessToken())
+            .header("X-Tenant-Id", mapping.cloudBusinessId())
+            .accept(MediaType.APPLICATION_JSON)
+            .retrieve()
+            .body(type);
+        if (snapshot == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "The online shop returned an empty " + path + " snapshot");
+        }
+        return snapshot;
+    }
+
+    private Integer upsertAccounts(String localId, List<TradeAccountSyncSnapshot.AccountData> accounts) {
+        int n = 0;
+        for (TradeAccountSyncSnapshot.AccountData d : accounts) {
+            TradeAccount a = tradeAccountRepository.findByIdAndBusinessId(d.id(), localId).orElseGet(() -> {
+                TradeAccount created = new TradeAccount();
+                created.setId(d.id());
+                created.setBusinessId(localId);
+                created.setCreatedAt(d.createdAt() == null ? java.time.Instant.now() : d.createdAt());
+                return created;
+            });
+            a.setPhoneKey(d.phoneKey());
+            a.setBuyerPhone(d.buyerPhone());
+            a.setBuyerName(d.buyerName());
+            a.setBusinessName(d.businessName());
+            a.setNote(d.note());
+            a.setStatus(d.status());
+            a.setCreditLimit(d.creditLimit());
+            a.setTermsDays(d.termsDays());
+            a.setBuyerBusinessId(d.buyerBusinessId());
+            a.setDiscountPercent(d.discountPercent());
+            a.setUpdatedAt(d.updatedAt() == null ? java.time.Instant.now() : d.updatedAt());
+            a.setCloudSyncedAt(java.time.Instant.now().plusSeconds(2));
+            tradeAccountRepository.save(a);
+            n++;
+        }
+        return n;
+    }
+
+    private Integer upsertInvoices(String localId, List<SalesInvoiceSyncSnapshot.InvoiceData> invoices) {
+        int n = 0;
+        for (SalesInvoiceSyncSnapshot.InvoiceData d : invoices) {
+            SalesInvoice inv = salesInvoiceRepository.findByIdAndBusinessId(d.id(), localId).orElseGet(() -> {
+                SalesInvoice created = new SalesInvoice();
+                created.setId(d.id());
+                created.setBusinessId(localId);
+                created.setCreatedAt(d.createdAt() == null ? java.time.Instant.now() : d.createdAt());
+                return created;
+            });
+            inv.setSalesOrderId(d.salesOrderId());
+            inv.setInvoiceNo(d.invoiceNo());
+            inv.setStatus(d.status());
+            inv.setCurrency(d.currency());
+            inv.setTotal(d.total());
+            inv.setAmountPaid(d.amountPaid());
+            inv.setAmountCredited(d.amountCredited());
+            inv.setCostOfGoods(d.costOfGoods());
+            inv.setIssuedOn(d.issuedOn());
+            inv.setDueOn(d.dueOn());
+            inv.setBuyerName(d.buyerName());
+            inv.setBuyerBusinessName(d.buyerBusinessName());
+            inv.setBuyerPhone(d.buyerPhone());
+            inv.setUpdatedAt(d.updatedAt() == null ? java.time.Instant.now() : d.updatedAt());
+            inv.setCloudSyncedAt(java.time.Instant.now().plusSeconds(2));
+            salesInvoiceRepository.save(inv);
+
+            salesReceiptRepository.findByInvoiceIdAndBusinessIdOrderByCreatedAtAsc(d.id(), localId)
+                .forEach(salesReceiptRepository::delete);
+            if (d.receipts() != null) {
+                for (SalesInvoiceSyncSnapshot.ReceiptData r : d.receipts()) {
+                    SalesReceipt row = new SalesReceipt();
+                    row.setId(r.id());
+                    row.setBusinessId(localId);
+                    row.setInvoiceId(d.id());
+                    row.setAmount(r.amount());
+                    row.setMethod(r.method());
+                    row.setReference(r.reference());
+                    row.setReceivedOn(r.receivedOn());
+                    if (r.createdAt() != null) {
+                        row.setCreatedAt(r.createdAt());
+                    }
+                    salesReceiptRepository.save(row);
+                }
+            }
+            salesCreditNoteRepository.findByInvoiceIdAndBusinessIdOrderByCreatedAtAsc(d.id(), localId)
+                .forEach(salesCreditNoteRepository::delete);
+            if (d.creditNotes() != null) {
+                for (SalesInvoiceSyncSnapshot.CreditNoteData c : d.creditNotes()) {
+                    SalesCreditNote row = new SalesCreditNote();
+                    row.setId(c.id());
+                    row.setBusinessId(localId);
+                    row.setInvoiceId(d.id());
+                    row.setAmount(c.amount());
+                    row.setReason(c.reason());
+                    if (c.createdAt() != null) {
+                        row.setCreatedAt(c.createdAt());
+                    }
+                    salesCreditNoteRepository.save(row);
+                }
+            }
+            n++;
+        }
+        return n;
+    }
+
+        /**
+     * Pull supplier trade orders from the online shop into this till (S1). Off unless
+     * {@code desktop.trade_sync} is on for this business; a shop that is not a supplier
+     * never has it on, so this is a no-op for an ordinary mini mart.
+     *
+     * <p>Incremental by {@code updated_at}, upsert by id, lines replaced wholesale --
+     * exactly like {@link #pullWebOrders()}. A mirrored order is stamped
+     * {@code cloud_synced_at} so the action push (S2) never mistakes it for a local edit.
+     *
+     * @return number of trade orders mirrored (inserted or refreshed)
+     */
+    public int pullTradeOrders() {
+        String localId = desktopBusinessId == null ? "" : desktopBusinessId.trim();
+        if (localId.isEmpty() || !featureFlagService.isEnabled(localId, FeatureFlagService.FLAG_DESKTOP_TRADE_SYNC)) {
+            return 0;
+        }
+        CloudSyncSession.Session mapping = cloudSyncSession.load().orElse(null);
+        if (mapping == null) {
+            throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "This PC is not connected to an online shop yet"
+            );
+        }
+        java.time.Instant cursor = tradeCursor.loadTradeOrders().orElse(java.time.Instant.EPOCH);
+        RestClient client = restClientBuilder.baseUrl(mapping.origin()).build();
+
+        int total = 0;
+        int pages = 0;
+        while (true) {
+            if (++pages > MAX_PULL_PAGES) {
+                log.warn("[DesktopSync] trade-orders pull hit the {} page cap; the rest follows next flush",
+                    MAX_PULL_PAGES);
+                break;
+            }
+            SalesOrderSyncSnapshot snapshot = fetchTradeOrders(client, mapping, cursor);
+            List<SalesOrderSyncSnapshot.OrderData> orders = snapshot.orders();
+            if (orders == null || orders.isEmpty()) {
+                break;
+            }
+            Integer synced = transactionTemplate.execute(status -> upsertCloudTradeOrders(localId, orders));
+            if (synced == null) {
+                throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Trade-orders pull failed -- nothing was written"
+                );
+            }
+            total += synced;
+
+            java.time.Instant newest = orders.stream()
+                .map(SalesOrderSyncSnapshot.OrderData::updatedAt)
+                .filter(java.util.Objects::nonNull)
+                .max(java.time.Instant::compareTo)
+                .orElse(null);
+            if (newest != null && newest.isAfter(cursor)) {
+                cursor = newest;
+                tradeCursor.saveTradeOrders(cursor);
+            }
+            if (orders.size() < SALES_PAGE_SIZE) {
+                break;
+            }
+        }
+        log.info("[DesktopSync] trade-orders pull: {} order(s) mirrored from {} (cursor now {})",
+            total, mapping.origin(), cursor);
+        return total;
+    }
+
+    private SalesOrderSyncSnapshot fetchTradeOrders(
+            RestClient client,
+            CloudSyncSession.Session mapping,
+            java.time.Instant since) {
+        try {
+            return doFetchTradeOrders(client, mapping, since);
+        } catch (Exception e) {
+            if (!isUnauthorized(e)) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not download trade orders (" + e.getMessage() + ")"
+                );
+            }
+            CloudSyncSession.Session refreshed = cloudSyncSession.refresh(client, mapping).orElse(null);
+            if (refreshed == null) {
+                throw new ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED,
+                    "Your online-shop session has expired -- open Settings -> Sync to reconnect"
+                );
+            }
+            try {
+                return doFetchTradeOrders(client, refreshed, since);
+            } catch (Exception e2) {
+                throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Could not download trade orders (" + e2.getMessage() + ")"
+                );
+            }
+        }
+    }
+
+    private SalesOrderSyncSnapshot doFetchTradeOrders(
+            RestClient client,
+            CloudSyncSession.Session mapping,
+            java.time.Instant since) {
+        SalesOrderSyncSnapshot snapshot = client
+            .get()
+            .uri(uriBuilder -> uriBuilder
+                .path("/api/v1/desktop/sync/trade-orders")
+                .queryParam("since", since.toString())
+                .build())
+            .header("Authorization", "Bearer " + mapping.accessToken())
+            .header("X-Tenant-Id", mapping.cloudBusinessId())
+            .accept(MediaType.APPLICATION_JSON)
+            .retrieve()
+            .body(SalesOrderSyncSnapshot.class);
+        if (snapshot == null) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "The online shop returned an empty trade-orders snapshot"
+            );
+        }
+        return snapshot;
+    }
+
+    /** Upsert cloud trade orders (insert or refresh) in the caller's transaction. */
+    private Integer upsertCloudTradeOrders(String localId, List<SalesOrderSyncSnapshot.OrderData> orders) {
+        int synced = 0;
+        for (SalesOrderSyncSnapshot.OrderData data : orders) {
+            SalesOrder order = salesOrderRepository
+                .findByIdAndBusinessId(data.id(), localId)
+                .orElseGet(() -> {
+                    SalesOrder created = new SalesOrder();
+                    created.setId(data.id());
+                    created.setBusinessId(localId);
+                    created.setCreatedAt(data.createdAt() == null ? java.time.Instant.now() : data.createdAt());
+                    return created;
+                });
+            order.setBranchId(data.branchId());
+            order.setStatus(data.status());
+            order.setSource(data.source());
+            order.setCurrency(data.currency());
+            order.setTotal(data.total());
+            order.setBuyerName(data.buyerName());
+            order.setBuyerPhone(data.buyerPhone());
+            order.setBuyerEmail(data.buyerEmail());
+            order.setBuyerBusinessName(data.buyerBusinessName());
+            order.setBuyerBusinessId(data.buyerBusinessId());
+            order.setBuyerPhoneKey(data.buyerPhoneKey());
+            order.setPaymentTerms(data.paymentTerms());
+            order.setTradeAccountId(data.tradeAccountId());
+            order.setOverCreditLimit(data.overCreditLimit());
+            order.setNotes(data.notes());
+            order.setAnsweredAt(data.answeredAt());
+            order.setDispatchedAt(data.dispatchedAt());
+            order.setUpdatedAt(data.updatedAt() == null ? java.time.Instant.now() : data.updatedAt());
+            // Stamped so the mirror is never pushed back; a local action (S2) bumps updated_at past
+            // this. The +2s grace covers @PreUpdate re-stamping updated_at at flush time.
+            order.setCloudSyncedAt(java.time.Instant.now().plusSeconds(2));
+            salesOrderRepository.save(order);
+
+            // Lines are replaced wholesale, idempotent.
+            salesOrderLineRepository
+                .findByOrderIdAndBusinessIdOrderByLineIndexAsc(order.getId(), localId)
+                .forEach(salesOrderLineRepository::delete);
+            if (data.lines() != null) {
+                for (SalesOrderSyncSnapshot.LineData lineData : data.lines()) {
+                    SalesOrderLine line = new SalesOrderLine();
+                    line.setId(lineData.id());
+                    line.setOrderId(order.getId());
+                    line.setBusinessId(localId);
+                    line.setItemId(lineData.itemId());
+                    line.setItemName(lineData.itemName());
+                    line.setQuantity(lineData.quantity());
+                    line.setUnitPrice(lineData.unitPrice());
+                    line.setLineTotal(lineData.lineTotal());
+                    line.setLineIndex(lineData.lineIndex());
+                    if (lineData.status() != null) {
+                        line.setStatus(lineData.status());
+                    }
+                    line.setAcceptedQty(lineData.acceptedQty());
+                    salesOrderLineRepository.save(line);
+                }
+            }
+            synced++;
+        }
+        return synced;
     }
 
     /**

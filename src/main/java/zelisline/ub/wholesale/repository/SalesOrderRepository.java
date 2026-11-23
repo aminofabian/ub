@@ -14,6 +14,18 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
 
     Optional<SalesOrder> findByIdAndBusinessId(String id, String businessId);
 
+    /** Cloud -> till trade-order pull: orders touched at/after the cursor, oldest first. */
+    @org.springframework.data.jpa.repository.Query("""
+            select o from SalesOrder o
+             where o.businessId = :businessId
+               and o.updatedAt >= :since
+             order by o.updatedAt asc
+            """)
+    java.util.List<SalesOrder> findForDesktopSyncPull(
+            @org.springframework.data.repository.query.Param("businessId") String businessId,
+            @org.springframework.data.repository.query.Param("since") java.time.Instant since,
+            org.springframework.data.domain.Pageable pageable);
+
     Page<SalesOrder> findByBusinessIdOrderByCreatedAtDesc(String businessId, Pageable pageable);
 
     Page<SalesOrder> findByBusinessIdAndStatusOrderByCreatedAtDesc(String businessId, String status, Pageable pageable);

@@ -11,13 +11,12 @@ import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.domain.TenantStatus;
 
 /**
- * One place that decides whether a subscription problem blocks access.
- *
- * <p>Super Admin can switch automatic blocking off globally. When that happens
- * expiry still moves a shop through grace and raises warnings, but it must not
- * suspend the tenant, revoke sessions, or reject API calls. Manual tenant
- * deactivation ({@link TenantStatus#INACTIVE}) and user-level suspensions are
- * deliberately outside this policy and always remain enforced.
+ * One place that decides whether an unpaid subscription should lock the
+ * back office. Super Admin can switch that off globally. Expiry still moves
+ * a shop through grace and raises warnings. Manual deactivation
+ * ({@link TenantStatus#INACTIVE}) stays enforced on its own. The till is not
+ * rejected here — cashiers and clerks keep selling, and the app locks the
+ * back office with the payment drawer.
  */
 @Service
 @RequiredArgsConstructor
@@ -49,7 +48,7 @@ public class SubscriptionAccessPolicy {
         return tenantStatus == TenantStatus.SUSPENDED && isAccessBlockingEnabled();
     }
 
-    /** Full-entity decision used by billing status responses and the renewal wall. */
+    /** Full-entity decision used by billing status and the back-office payment drawer. */
     public boolean isAccessBlocked(Business business) {
         return isAccessBlocked(business, Instant.now());
     }

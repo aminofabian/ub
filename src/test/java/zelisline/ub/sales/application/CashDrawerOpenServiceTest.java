@@ -216,6 +216,28 @@ class CashDrawerOpenServiceTest {
     }
 
     @Test
+    void aKeyOpeningStaysOnTheLogWhenNothingWasSoldOrDrawn() {
+        String shiftId = "22222222-2222-2222-2222-222222222222";
+        String saleId = "33333333-3333-3333-3333-333333333333";
+        when(shifts.findByIdAndBusinessId(shiftId, BIZ_A)).thenReturn(Optional.of(new Shift()));
+        when(opens.findByBusinessIdAndShiftIdOrderByOpenedAtAsc(BIZ_A, shiftId))
+                .thenReturn(List.of(loggedOpening("open-key", NOW, null)));
+        when(sales.findByBusinessIdAndShiftId(BIZ_A, shiftId))
+                .thenReturn(List.of(cashSale(saleId, 8L, NOW.plusSeconds(20))));
+        when(salePayments.findBySaleIdInAndMethod(any(), eq(SalesConstants.PAYMENT_METHOD_CASH)))
+                .thenReturn(List.of(cashPayment(saleId, "50.00")));
+        when(cashDrawouts.findByShiftIdOrderByCreatedAtDesc(shiftId)).thenReturn(List.of());
+
+        var log = service.log(BIZ_A, shiftId);
+
+        assertThat(log.rows()).hasSize(1);
+        assertThat(log.rows().get(0).reason()).isEqualTo(CashDrawerOpenReason.KEY);
+        assertThat(log.rows().get(0).matched()).isFalse();
+        assertThat(log.unmatched()).isEqualTo(1);
+        assertThat(tender(log.tenders(), "Receipt 8").coincided()).isFalse();
+    }
+
+    @Test
     void aNoSaleOpeningIsListedAndNotClaimedByANearbyCashSale() {
         String shiftId = "22222222-2222-2222-2222-222222222222";
         String saleId = "33333333-3333-3333-3333-333333333333";

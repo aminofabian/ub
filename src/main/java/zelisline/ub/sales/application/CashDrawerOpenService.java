@@ -7,9 +7,11 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.data.domain.PageRequest;
@@ -135,11 +137,49 @@ public class CashDrawerOpenService {
         List<CashDrawerOpen> openings = recentOpenings(businessId, id);
         List<CashDrawerOpenMatcher.CashSale> sales = cashSales(businessId, id);
         List<CashDrawerOpenMatcher.Drawout> drawouts = openDrawouts(id);
-        Map<String, CashDrawerOpenMatcher.Hit> hits = CashDrawerOpenMatcher.match(
-                toMatchOpenings(explainableOpenings(openings)),
-                sales,
-                drawouts);
-        return toLog(openings, hits, sales, drawouts);
+        return toLog(openings, matchedOpenings(openings, sales, drawouts), sales, drawouts);
+    }
+
+    /**
+     * A key is the drawer opened on its own. A nearby cash sale must not claim it.
+     * A drawout still can: that is the cash the key was turned for.
+     */
+    private Map<String, CashDrawerOpenMatcher.Hit> matchedOpenings(
+            List<CashDrawerOpen> openings,
+            List<CashDrawerOpenMatcher.CashSale> sales,
+            List<CashDrawerOpenMatcher.Drawout> drawouts) {
+        List<CashDrawerOpen> pulses = new ArrayList<>();
+        List<CashDrawerOpen> keys = new ArrayList<>();
+        for (CashDrawerOpen row : explainableOpenings(openings)) {
+            if (row.getReason() == CashDrawerOpenReason.KEY) {
+                keys.add(row);
+            } else {
+                pulses.add(row);
+            }
+        }
+        Map<String, CashDrawerOpenMatcher.Hit> hits = new LinkedHashMap<>(CashDrawerOpenMatcher.match(
+                toMatchOpenings(pulses), sales, drawouts));
+        hits.putAll(CashDrawerOpenMatcher.match(
+                toMatchOpenings(keys), List.of(), drawoutsLeft(drawouts, hits)));
+        return hits;
+    }
+
+    private static List<CashDrawerOpenMatcher.Drawout> drawoutsLeft(
+            List<CashDrawerOpenMatcher.Drawout> drawouts,
+            Map<String, CashDrawerOpenMatcher.Hit> hits) {
+        Set<String> used = new HashSet<>();
+        for (CashDrawerOpenMatcher.Hit hit : hits.values()) {
+            if (CashDrawerOpenMatcher.KIND_DRAWOUT.equals(hit.kind()) && hit.refId() != null) {
+                used.add(hit.refId());
+            }
+        }
+        List<CashDrawerOpenMatcher.Drawout> left = new ArrayList<>();
+        for (CashDrawerOpenMatcher.Drawout drawout : drawouts) {
+            if (!used.contains(drawout.id())) {
+                left.add(drawout);
+            }
+        }
+        return left;
     }
 
     private CashDrawerOpen newOpening(

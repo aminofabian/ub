@@ -15,7 +15,6 @@ import zelisline.ub.audit.application.AuditEventBuilder;
 import zelisline.ub.audit.application.AuditEventPublisher;
 import zelisline.ub.billing.domain.SubscriptionBillingStatus;
 import zelisline.ub.billing.repository.SubscriptionRenewalOrderRepository;
-import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BusinessRepository;
 
@@ -28,7 +27,6 @@ class SubscriptionBillingServiceAutoBlockTest {
             mock(SubscriptionRenewalOrderRepository.class);
     private final SubscriptionBillingEligibilityService eligibilityService =
             mock(SubscriptionBillingEligibilityService.class);
-    private final UserSessionRepository sessionRepository = mock(UserSessionRepository.class);
     private final AuditEventPublisher auditPublisher = mock(AuditEventPublisher.class);
     private final AuditEventBuilder auditBuilder = mock(AuditEventBuilder.class);
     @SuppressWarnings("unchecked")
@@ -43,7 +41,6 @@ class SubscriptionBillingServiceAutoBlockTest {
             accessPolicy,
             orderRepository,
             eligibilityService,
-            sessionRepository,
             auditPublisher,
             auditBuilder,
             expiryCampaigns,

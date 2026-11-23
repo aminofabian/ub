@@ -89,6 +89,10 @@ public class SalesInvoice {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    /** Desktop till only: when this row was mirrored from the cloud, so a mirror is never pushed back. */
+    @Column(name = "cloud_synced_at")
+    private Instant cloudSyncedAt;
+
     @PrePersist
     void onCreate() {
         Instant now = Instant.now();

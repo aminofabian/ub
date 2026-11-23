@@ -123,7 +123,7 @@ public class Business {
      *   <li>{@code active=false} → {@link TenantStatus#INACTIVE} (blocks login;
      *       reason {@link SuspensionReason#MANUAL_SUPPORT})</li>
      *   <li>{@code active=true} + billing suspended → {@link TenantStatus#SUSPENDED}
-     *       (auth recovery paths still work)</li>
+     *       (the till keeps selling; the back office payment drawer is the lock)</li>
      *   <li>otherwise → {@link TenantStatus#ACTIVE}</li>
      * </ul>
      *

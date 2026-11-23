@@ -36,6 +36,7 @@ public class DesktopSyncScheduler {
     private final DesktopFullSyncService fullSyncService;
     private final DesktopSyncPushService syncPushService;
     private final DesktopSyncPullService syncPullService;
+    private final DesktopTradeActionPushService tradeActionPushService;
     private final DesktopMessagePushService messagePushService;
     private final DesktopMessagePullService messagePullService;
     private final DesktopAuditPushService auditPushService;
@@ -178,6 +179,27 @@ public class DesktopSyncScheduler {
         } catch (Exception e) {
             failures++;
             firstError = firstError == null ? "web orders: " + e.getMessage() : firstError;
+        }
+        try {
+            // Supplier trade: push what the supplier did, then mirror the authoritative orders.
+            tradeActionPushService.pushTradeActions();
+        } catch (Exception e) {
+            failures++;
+            firstError = firstError == null ? "trade actions: " + e.getMessage() : firstError;
+        }
+        try {
+            // Supplier trade orders (no-op unless desktop.trade_sync is on for this shop).
+            syncPullService.pullTradeOrders();
+        } catch (Exception e) {
+            failures++;
+            firstError = firstError == null ? "trade orders: " + e.getMessage() : firstError;
+        }
+        try {
+            syncPullService.pullTradeAccounts();
+            syncPullService.pullTradeInvoices();
+        } catch (Exception e) {
+            failures++;
+            firstError = firstError == null ? "trade money: " + e.getMessage() : firstError;
         }
         try {
             movementsApplied = syncPullService.pullInventoryMovements();

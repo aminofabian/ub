@@ -27,6 +27,7 @@ public class DesktopFullSyncService {
     private final CloudSyncSession cloudSyncSession;
     private final DesktopSyncPushService syncPushService;
     private final DesktopSyncPullService syncPullService;
+    private final DesktopTradeActionPushService tradeActionPushService;
     private final DesktopMessagePushService messagePushService;
     private final DesktopMessagePullService messagePullService;
     private final DesktopAuditPushService auditPushService;
@@ -124,6 +125,11 @@ public class DesktopFullSyncService {
             int pulled = streamCount("cloud sales", syncPullService::pullCloudSales);
             int suppliesPulled = streamCount("supplies", syncPullService::pullSupplies);
             int ordersPulled = streamCount("web orders", syncPullService::pullWebOrders);
+            // Supplier trade: push what the supplier did, then mirror the authoritative orders.
+            streamCount("trade actions", tradeActionPushService::pushTradeActions);
+            streamCount("trade orders", syncPullService::pullTradeOrders);
+            streamCount("trade accounts", syncPullService::pullTradeAccounts);
+            streamCount("trade invoices", syncPullService::pullTradeInvoices);
             int movementsApplied = streamCount("stock movements", syncPullService::pullInventoryMovements);
             int customersPulled = streamCount("customers", syncPullService::pullCustomers);
             DesktopMessagePullService.MessagePullResult messagePull = stream(

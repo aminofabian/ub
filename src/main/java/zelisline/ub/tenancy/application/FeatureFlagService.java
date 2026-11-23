@@ -229,6 +229,13 @@ public class FeatureFlagService {
     public static final String FLAG_SUPPLIER_COUNTER_ORDERS = "supplier.counter_orders";
 
     /**
+     * Desktop till: mirror a supplier's trade orders, buyer accounts and invoices onto the till and push what
+     * the supplier does there (answer, dispatch, …) back to the online shop. Off by default; needs a till build
+     * that carries the trade-sync streams. See DESKTOP_SUPPLIER_TRADE_SYNC_SCOPE.md.
+     */
+    public static final String FLAG_DESKTOP_TRADE_SYNC = "desktop.trade_sync";
+
+    /**
      * Read all feature flags for a business. Returns an empty map when the
      * business or its settings are absent.
      */

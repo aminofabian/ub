@@ -22,7 +22,6 @@ import zelisline.ub.billing.domain.SubscriptionBillingStatus;
 import zelisline.ub.billing.domain.SubscriptionRenewalOrder;
 import zelisline.ub.billing.domain.SuspensionReason;
 import zelisline.ub.billing.repository.SubscriptionRenewalOrderRepository;
-import zelisline.ub.identity.repository.UserSessionRepository;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.domain.TenantStatus;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -40,7 +39,6 @@ public class SubscriptionBillingService {
     private final SubscriptionAccessPolicy accessPolicy;
     private final SubscriptionRenewalOrderRepository renewalOrderRepository;
     private final SubscriptionBillingEligibilityService eligibilityService;
-    private final UserSessionRepository userSessionRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final AuditEventBuilder auditEventBuilder;
     private final org.springframework.beans.factory.ObjectProvider<SubscriptionExpiryCampaignService> expiryCampaignService;
@@ -107,7 +105,9 @@ public class SubscriptionBillingService {
     }
 
     /**
-     * Daily job: GRACE tenants past grace end are suspended and logged out.
+     * Daily job: GRACE tenants past grace end are marked unpaid.
+     * Sessions stay so the till and clerk can keep selling. The back office
+     * locks itself with the payment drawer until the shop pays.
      */
     @Transactional
     public boolean suspendIfGraceEnded(Business business, Instant now) {
@@ -155,7 +155,6 @@ public class SubscriptionBillingService {
         locked.setBillingSuspendedAt(now);
         locked.syncAccessGate();
         businessRepository.save(locked);
-        userSessionRepository.revokeAllActiveForBusiness(locked.getId(), now);
         publishAudit(locked.getId(), AuditEventTypes.SUBSCRIPTION_SUSPENDED, null);
         return true;
     }

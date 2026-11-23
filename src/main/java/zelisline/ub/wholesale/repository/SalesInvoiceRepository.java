@@ -14,6 +14,16 @@ public interface SalesInvoiceRepository extends JpaRepository<SalesInvoice, Stri
 
     Optional<SalesInvoice> findByIdAndBusinessId(String id, String businessId);
 
+    @org.springframework.data.jpa.repository.Query("""
+            select i from SalesInvoice i
+             where i.businessId = :businessId and i.updatedAt >= :since
+             order by i.updatedAt asc
+            """)
+    java.util.List<SalesInvoice> findForDesktopSyncPull(
+            @org.springframework.data.repository.query.Param("businessId") String businessId,
+            @org.springframework.data.repository.query.Param("since") java.time.Instant since,
+            org.springframework.data.domain.Pageable pageable);
+
     Optional<SalesInvoice> findBySalesOrderIdAndBusinessId(String salesOrderId, String businessId);
 
     List<SalesInvoice> findTop2000ByBusinessIdAndIssuedOnGreaterThanEqual(String businessId, java.time.LocalDate since);

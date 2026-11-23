@@ -115,6 +115,14 @@ public class SalesOrder {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    /**
+     * Desktop till only: the moment this row was mirrored down from the cloud, so a mirror is never pushed
+     * back up (a local edit bumps updated_at past this). Null on the cloud and on a locally created order.
+     * See DESKTOP_SUPPLIER_TRADE_SYNC_SCOPE.md.
+     */
+    @Column(name = "cloud_synced_at")
+    private Instant cloudSyncedAt;
+
     @PrePersist
     void onCreate() {
         Instant now = Instant.now();

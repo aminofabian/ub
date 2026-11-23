@@ -29,6 +29,14 @@ public class SupplierMilestone {
     @Column(name = "achieved_at", nullable = false)
     private Instant achievedAt;
 
+    /** When the supplier dismissed the note for this milestone. Null until then: the note is shown once. */
+    @Column(name = "seen_at")
+    private Instant seenAt;
+
+    public void setSeenAt(Instant seenAt) {
+        this.seenAt = seenAt;
+    }
+
     protected SupplierMilestone() {
     }
 

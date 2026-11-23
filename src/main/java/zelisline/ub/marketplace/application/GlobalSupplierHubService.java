@@ -98,7 +98,10 @@ public class GlobalSupplierHubService {
                     false);
         }
         List<BusinessSupplierConnection> links = connectionRepository.findByMarketplaceSupplierIdAndStatus(
-                marketplace.getId(), BusinessSupplierConnectionStatuses.ACTIVE);
+                        marketplace.getId(), BusinessSupplierConnectionStatuses.ACTIVE)
+                .stream()
+                .filter(BusinessSupplierConnection::isCanViewPurchaseHistory)
+                .toList();
 
         BigDecimal totalOwed = ZERO;
         BigDecimal totalPaid = ZERO;

@@ -17,7 +17,14 @@ final class KenyaPublicHolidays {
     private static final Map<Integer, Set<LocalDate>> GAZETTED = Map.of(
             2026, Set.of(LocalDate.of(2026, 3, 20), LocalDate.of(2026, 5, 27)));
 
+    /** Gazetted dates added in configuration ({@code supplier-engagement.extra-holidays}), any year. */
+    private static volatile Set<LocalDate> extra = Set.of();
+
     private KenyaPublicHolidays() {
+    }
+
+    static void setExtra(Set<LocalDate> dates) {
+        extra = dates == null ? Set.of() : Set.copyOf(dates);
     }
 
     /** Holidays between two dates, inclusive. */
@@ -36,6 +43,7 @@ final class KenyaPublicHolidays {
             out.add(easter.plusDays(1));
             out.addAll(GAZETTED.getOrDefault(year, Set.of()));
         }
+        out.addAll(extra);
         out.removeIf(d -> d.isBefore(from) || d.isAfter(to));
         // Only the days a working clock could fall on matter; keep the set small.
         out.removeIf(d -> d.getDayOfWeek() == DayOfWeek.SUNDAY);

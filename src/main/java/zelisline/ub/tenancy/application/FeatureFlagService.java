@@ -213,6 +213,15 @@ public class FeatureFlagService {
     /** Trust lines on a supplier's public page: true lines only, from verified buyers, sampled. Off by default. */
     public static final String FLAG_SUPPLIER_ENGAGEMENT_BUYER_LINES = "supplier_engagement.buyer_lines";
 
+    /** A person's own contribution, shown only to them. Needs {@link #FLAG_SUPPLIER_ENGAGEMENT}. Off by default. */
+    public static final String FLAG_SUPPLIER_ENGAGEMENT_CONTRIBUTION = "supplier_engagement.contribution";
+
+    /**
+     * The one note engagement sends: orders that waited more than a working day, at most once a day, to the
+     * owner. Needs {@link #FLAG_SUPPLIER_ENGAGEMENT}. Off by default.
+     */
+    public static final String FLAG_SUPPLIER_ENGAGEMENT_NOTIFICATIONS = "supplier_engagement.notifications";
+
     /**
      * A supplier shop that also sells over the counter: a clerk takes the order and prints the invoice, and the
      * cashier takes the payment. The supplier turns it on itself. Off by default.

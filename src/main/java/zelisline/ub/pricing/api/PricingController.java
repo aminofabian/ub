@@ -48,6 +48,13 @@ public class PricingController {
     private final PricingService pricingService;
     private final DiscountResolutionService discountResolutionService;
 
+    /**
+     * Supplier engagement: notes a person's own work after a save. Optional and never able to fail the save;
+     * absent in a controller slice test.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private zelisline.ub.wholesale.application.SupplierContributionService supplierContributionService;
+
     @PostMapping("/selling-prices")
     @PreAuthorize("hasPermission(null, 'pricing.sell_price.set')")
     @ResponseStatus(HttpStatus.CREATED)
@@ -56,11 +63,15 @@ public class PricingController {
             HttpServletRequest request
     ) {
         var user = CurrentTenantUser.requireHuman(request);
-        return pricingService.setSellingPrice(
-                TenantRequestIds.resolveBusinessId(request),
-                body,
-                user.userId()
-        );
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        java.util.Set<String> notOrderable = supplierContributionService == null
+                ? null
+                : supplierContributionService.notYetOrderable(businessId, java.util.List.of(body.itemId()));
+        SellingPriceResponse saved = pricingService.setSellingPrice(businessId, body, user.userId());
+        if (notOrderable != null) {
+            supplierContributionService.recordMadeOrderable(businessId, user.userId(), notOrderable);
+        }
+        return saved;
     }
 
     @PostMapping("/buying-prices")

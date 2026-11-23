@@ -94,13 +94,13 @@ public class SupplierStandingService {
         int leadDays = passport.map(MarketplaceSupplier::getDispatchLeadWorkingDays).orElse(DEFAULT_LEAD_WORKING_DAYS);
         Set<LocalDate> closed = passport.map(p -> parseClosedDays(p.getClosedDatesJson())).orElse(Set.of());
         List<String> closedList = closed.stream().map(LocalDate::toString).sorted().toList();
-        String ownerPhoneKey = ownerPhoneKey(businessId);
+        Set<String> ownerPhoneKeys = ownerPhoneKeys(businessId);
 
         List<SalesOrder> answered = salesOrderRepository
                 .findByBusinessIdAndAnsweredAtGreaterThanEqual(businessId, since).stream()
                 .filter(o -> !businessId.equals(o.getBuyerBusinessId()))
                 .filter(o -> !o.isStandingExcluded())
-                .filter(o -> ownerPhoneKey == null || !ownerPhoneKey.equals(o.getBuyerPhoneKey()))
+                .filter(o -> o.getBuyerPhoneKey() == null || !ownerPhoneKeys.contains(o.getBuyerPhoneKey()))
                 .toList();
         Set<String> buyers = answered.stream()
                 .map(SalesOrder::getBuyerPhoneKey)
@@ -286,6 +286,29 @@ public class SupplierStandingService {
     }
 
     /** The owner's phone, in the one spelling orders are matched on. Null when the shop has none. */
+    /** Set by Spring; absent in a unit test, where only the onboarding phone is used. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private zelisline.ub.identity.repository.UserRepository userRepository;
+
+    /** The owner's phone numbers: the one given at sign-up and the ones on the owners' user accounts. */
+    private Set<String> ownerPhoneKeys(String businessId) {
+        Set<String> keys = new java.util.HashSet<>();
+        String fromOnboarding = ownerPhoneKey(businessId);
+        if (fromOnboarding != null) {
+            keys.add(fromOnboarding);
+        }
+        if (userRepository != null) {
+            for (var owner : userRepository.findOwnersByBusinessIdIn(List.of(businessId))) {
+                String phone = owner.getPhone();
+                String key = phone == null || phone.isBlank() ? null : StkPhoneNormalizer.normalize(phone);
+                if (key != null) {
+                    keys.add(key);
+                }
+            }
+        }
+        return keys;
+    }
+
     private String ownerPhoneKey(String businessId) {
         var business = businessRepository.findByIdAndDeletedAtIsNull(businessId);
         if (business.isEmpty()) {

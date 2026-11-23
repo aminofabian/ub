@@ -39,6 +39,8 @@ import zelisline.ub.identity.repository.PermissionRepository;
 import zelisline.ub.identity.repository.RolePermissionRepository;
 import zelisline.ub.identity.repository.RoleRepository;
 import zelisline.ub.identity.repository.UserRepository;
+import zelisline.ub.marketplace.repository.BusinessSupplierConnectionRepository;
+import zelisline.ub.marketplace.repository.MarketplaceSupplierRepository;
 import zelisline.ub.platform.security.TestAuthenticationFilter;
 import zelisline.ub.suppliers.SupplierCodes;
 import zelisline.ub.suppliers.repository.SupplierContactRepository;
@@ -101,6 +103,12 @@ class SuppliersApiIT {
     private SupplierProductRepository supplierProductRepository;
 
     @Autowired
+    private BusinessSupplierConnectionRepository connectionRepository;
+
+    @Autowired
+    private MarketplaceSupplierRepository marketplaceSupplierRepository;
+
+    @Autowired
     private CatalogBootstrapService catalogBootstrapService;
 
     @Autowired
@@ -115,6 +123,8 @@ class SuppliersApiIT {
 
     @BeforeEach
     void seed() {
+        connectionRepository.deleteAll();
+        marketplaceSupplierRepository.deleteAll();
         supplierProductRepository.deleteAll();
         supplierContactRepository.deleteAll();
         supplierRepository.deleteAll();
@@ -203,6 +213,85 @@ class SuppliersApiIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content.length()").value(1))
                 .andExpect(jsonPath("$.content[0].name").value("Obscure Vendor Ltd"));
+    }
+
+    @Test
+    void portalVisibility_defaultsThenUpdate() throws Exception {
+        // Creating a supplier auto-promotes a draft passport and an ACTIVE connection when the
+        // platform setting is on (the default), so the connection is already here.
+        String supplierA = createSupplier(TENANT_A, "Portal Vendor");
+
+        mockMvc.perform(get("/api/v1/suppliers/" + supplierA + "/portal-visibility")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.connected").value(true))
+                .andExpect(jsonPath("$.status").value("active"))
+                .andExpect(jsonPath("$.canViewPurchaseHistory").value(true))
+                .andExpect(jsonPath("$.canViewStockLevels").value(false))
+                .andExpect(jsonPath("$.canViewSalesVelocity").value(false));
+
+        mockMvc.perform(patch("/api/v1/suppliers/" + supplierA + "/portal-visibility")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"canViewStockLevels\":true,\"canViewSalesVelocity\":true,"
+                                + "\"canViewPurchaseHistory\":false}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canViewStockLevels").value(true))
+                .andExpect(jsonPath("$.canViewSalesVelocity").value(true))
+                .andExpect(jsonPath("$.canViewPurchaseHistory").value(false));
+
+        mockMvc.perform(get("/api/v1/suppliers/" + supplierA + "/portal-visibility")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canViewStockLevels").value(true))
+                .andExpect(jsonPath("$.canViewPurchaseHistory").value(false));
+    }
+
+    @Test
+    void portalVisibility_unconnectedSupplierReportsNotConnected() throws Exception {
+        String supplierA = createSupplier(TENANT_A, "Private Vendor");
+        // Remove the connection auto-promotion made, leaving a supplier nobody is connected to.
+        connectionRepository.deleteAll();
+        mockMvc.perform(get("/api/v1/suppliers/" + supplierA + "/portal-visibility")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.connected").value(false))
+                .andExpect(jsonPath("$.canViewPurchaseHistory").value(false));
+
+        mockMvc.perform(patch("/api/v1/suppliers/" + supplierA + "/portal-visibility")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"canViewStockLevels\":true}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void portalVisibility_secondTenantIsDenied() throws Exception {
+        String supplierB = createSupplier(TENANT_B, "B Portal Vendor");
+
+        mockMvc.perform(get("/api/v1/suppliers/" + supplierB + "/portal-visibility")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNotFound());
+
+        mockMvc.perform(patch("/api/v1/suppliers/" + supplierB + "/portal-visibility")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"canViewPurchaseHistory\":false}")
+                        .header("X-Tenant-Id", TENANT_A)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, ownerA.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_OWNER))
+                .andExpect(status().isNotFound());
     }
 
     @Test

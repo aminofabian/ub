@@ -48,6 +48,13 @@ import zelisline.ub.tenancy.application.BranchResolutionService;
 public class PathAPurchasingController {
 
     private final PathAPurchaseService pathAPurchaseService;
+
+    /**
+     * Supplier engagement: notes a person's own work after a save. Optional and never able to fail the save;
+     * absent in a controller slice test.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private zelisline.ub.wholesale.application.SupplierContributionService supplierContributionService;
     private final PurchaseOrderNotifyService purchaseOrderNotifyService;
     private final MarketplacePurchaseOrderService marketplacePurchaseOrderService;
     private final BranchResolutionService branchResolutionService;
@@ -228,11 +235,16 @@ public class PathAPurchasingController {
         PostGoodsReceiptRequest safe = new PostGoodsReceiptRequest(
                 body.purchaseOrderId(), validatedBranch, body.receivedAt(), body.notes(), body.lines(),
                 body.overrideArrival());
-        return pathAPurchaseService.postGoodsReceipt(
-                TenantRequestIds.resolveBusinessId(request),
-                safe,
-                idempotencyKey
-        );
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        java.util.Set<String> notOrderable = supplierContributionService == null
+                ? null
+                : supplierContributionService.notYetOrderableForPurchaseOrderLines(
+                        businessId, body.lines().stream().map(line -> line.purchaseOrderLineId()).toList());
+        PostGoodsReceiptResponse saved = pathAPurchaseService.postGoodsReceipt(businessId, safe, idempotencyKey);
+        if (notOrderable != null) {
+            supplierContributionService.recordMadeOrderable(businessId, principal.userId(), notOrderable);
+        }
+        return saved;
     }
 
     @PostMapping("/goods-receipts/{goodsReceiptId}/supplier-invoice")

@@ -82,6 +82,13 @@ import java.util.Set;
 public class ItemsController {
 
     private final ItemCatalogService itemCatalogService;
+
+    /**
+     * Supplier engagement: notes a person's own work after a save. Optional and never able to fail the save;
+     * absent in a controller slice test.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private zelisline.ub.wholesale.application.SupplierContributionService supplierContributionService;
     private final ItemTimelineService itemTimelineService;
     private final ItemEconomicsService itemEconomicsService;
     private final CategoryPricingResolutionService categoryPricingResolutionService;
@@ -236,11 +243,18 @@ public class ItemsController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        return bulkPriceService.apply(
-                TenantRequestIds.resolveBusinessId(request),
-                CurrentTenantUser.auditActorId(request),
-                resolveCallerAllowedItemTypes(request, body.itemTypeId()),
-                body);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        String actorUserId = CurrentTenantUser.auditActorId(request);
+        // Only a named list of products is checked; "everything matching" can be the whole catalogue.
+        java.util.Set<String> notOrderable = supplierContributionService == null
+                ? null
+                : supplierContributionService.notYetOrderable(businessId, body.itemIds());
+        BulkPriceApplyResponse applied = bulkPriceService.apply(
+                businessId, actorUserId, resolveCallerAllowedItemTypes(request, body.itemTypeId()), body);
+        if (notOrderable != null) {
+            supplierContributionService.recordMadeOrderable(businessId, actorUserId, notOrderable);
+        }
+        return applied;
     }
 
     @GetMapping("/row-type-counts")
@@ -438,8 +452,15 @@ public class ItemsController {
             HttpServletRequest request
     ) {
         String actorUserId = CurrentTenantUser.auditActorId(request);
-        return itemCatalogService.patchItem(
-                TenantRequestIds.resolveBusinessId(request), id, body, actorUserId);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        java.util.Set<String> notOrderable = supplierContributionService == null
+                ? null
+                : supplierContributionService.notYetOrderable(businessId, java.util.List.of(id));
+        ItemResponse saved = itemCatalogService.patchItem(businessId, id, body, actorUserId);
+        if (notOrderable != null) {
+            supplierContributionService.recordMadeOrderable(businessId, actorUserId, notOrderable);
+        }
+        return saved;
     }
 
     @DeleteMapping("/{id}")

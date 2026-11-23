@@ -13,6 +13,10 @@ public interface SupplierUserRepository extends JpaRepository<SupplierUser, Stri
 
     Optional<SupplierUser> findByEmail(String email);
 
+    /** The portal user that stands for one shop user of the supplier's own shop. */
+    Optional<SupplierUser> findFirstByMarketplaceSupplierIdAndBusinessUserId(
+            String marketplaceSupplierId, String businessUserId);
+
     Optional<SupplierUser> findByPhone(String phone);
 
     @Query("""

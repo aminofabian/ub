@@ -218,7 +218,8 @@ public class SupplierPortalStatementsService {
         BusinessSupplierConnection link = connectionRepository
                 .findByMarketplaceSupplierIdAndLocalSupplierId(marketplaceSupplierId, localSupplierId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Shop link not found"));
-        if (!BusinessSupplierConnectionStatuses.ACTIVE.equals(link.getStatus())) {
+        if (!BusinessSupplierConnectionStatuses.ACTIVE.equals(link.getStatus())
+                || !link.isCanViewPurchaseHistory()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Shop link not found");
         }
         return link;

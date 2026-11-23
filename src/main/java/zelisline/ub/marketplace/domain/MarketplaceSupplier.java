@@ -108,6 +108,10 @@ public class MarketplaceSupplier {
     @Column(name = "listed", nullable = false)
     private boolean listed;
 
+    /** Decision D2: switches the readiness checklist on in the portal for a supplier with no shop. Off by default. */
+    @Column(name = "engagement_enabled", nullable = false)
+    private boolean engagementEnabled;
+
     /** The supplier keeps its prices off public pages. */
     @Column(name = "hide_prices", nullable = false)
     private boolean hidePrices;

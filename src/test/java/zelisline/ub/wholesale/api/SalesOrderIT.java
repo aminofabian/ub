@@ -1583,4 +1583,101 @@ class SalesOrderIT {
         assertThat(nobody.orders()).isZero();
         assertThat(nobody.invoiced()).isEqualByComparingTo("0");
     }
+
+    // ── Supplier engagement must cost the order path nothing (SUPPLIER_ENGAGEMENT_DESIGN.md §7) ──────────
+
+    @Autowired
+    private jakarta.persistence.EntityManagerFactory entityManagerFactory;
+
+    @Autowired
+    private zelisline.ub.wholesale.application.SupplierOverviewService supplierOverviewService;
+
+    @Autowired
+    private zelisline.ub.wholesale.application.SupplierStandingService supplierStandingService;
+
+    @Autowired
+    private zelisline.ub.wholesale.application.SupplierReadinessService supplierReadinessService;
+
+    private static final List<String> ENGAGEMENT_FLAGS = List.of(
+            "supplier_engagement",
+            "supplier_engagement.readiness",
+            "supplier_engagement.milestones",
+            "supplier_engagement.standing",
+            "supplier_engagement.buyer_lines",
+            "supplier_engagement.contribution",
+            "supplier_engagement.notifications");
+
+    /** Writes the flags where the shop keeps them: {@code featureFlags} in its settings. */
+    private void setEngagementFlags(boolean on) throws Exception {
+        var business = businessRepository.findById(TENANT).orElseThrow();
+        String settings = business.getSettings() == null || business.getSettings().isBlank()
+                ? "{}"
+                : business.getSettings();
+        var root = (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(settings);
+        var flags = root.has("featureFlags") && root.get("featureFlags").isObject()
+                ? (com.fasterxml.jackson.databind.node.ObjectNode) root.get("featureFlags")
+                : root.putObject("featureFlags");
+        for (String flag : ENGAGEMENT_FLAGS) {
+            flags.put(flag, on);
+        }
+        business.setSettings(objectMapper.writeValueAsString(root));
+        businessRepository.save(business);
+    }
+
+    /** How many SQL statements a piece of work prepares. */
+    private long statements(Runnable work) {
+        var statistics = entityManagerFactory.unwrap(org.hibernate.SessionFactory.class).getStatistics();
+        statistics.setStatisticsEnabled(true);
+        statistics.clear();
+        work.run();
+        return statistics.getPrepareStatementCount();
+    }
+
+    @Test
+    void engagementAddsNoQueryToAnsweringOrDispatchingAnOrder() throws Exception {
+        makeThisASuppliersShop();
+        // One whole order first, so one-off work (first invoice, first stock pick) is not what gets measured.
+        String warmUp = placedOrder(12, "0700000070");
+        salesOrderService.answer(TENANT, warmUp, supplying(warmUp, "12"));
+        salesOrderService.dispatch(TENANT, warmUp);
+
+        String without = placedOrder(12, "0700000071");
+        String with = placedOrder(12, "0700000072");
+        AnswerSalesOrderRequest answerWithout = supplying(without, "12");
+        AnswerSalesOrderRequest answerWith = supplying(with, "12");
+
+        setEngagementFlags(false);
+        long answerOff = statements(() -> salesOrderService.answer(TENANT, without, answerWithout));
+        long dispatchOff = statements(() -> salesOrderService.dispatch(TENANT, without));
+
+        setEngagementFlags(true);
+        long answerOn = statements(() -> salesOrderService.answer(TENANT, with, answerWith));
+        long dispatchOn = statements(() -> salesOrderService.dispatch(TENANT, with));
+
+        // Every engagement flag on, and the order path runs exactly the statements it ran with them all off.
+        assertThat(answerOn).isEqualTo(answerOff);
+        assertThat(dispatchOn).isEqualTo(dispatchOff);
+    }
+
+    @Test
+    void withTheFlagsOffEveryEngagementAnswerIsTheOffAnswer() throws Exception {
+        makeThisASuppliersShop();
+        String orderId = placedOrder(12, "0700000073");
+        salesOrderService.answer(TENANT, orderId, supplying(orderId, "12"));
+        salesOrderService.dispatch(TENANT, orderId);
+        setEngagementFlags(false);
+
+        assertThat(supplierOverviewService.overview(TENANT, "anyone"))
+                .isEqualTo(zelisline.ub.wholesale.api.dto.SupplierOverviewResponse.off());
+        assertThat(supplierStandingService.standing(TENANT, 90))
+                .isEqualTo(zelisline.ub.wholesale.api.dto.SupplierStandingResponse.off());
+        assertThat(supplierStandingService.buyerLines(TENANT))
+                .isEqualTo(zelisline.ub.wholesale.api.dto.BuyerLinesResponse.off());
+        assertThat(supplierReadinessService.readiness(TENANT))
+                .isEqualTo(zelisline.ub.wholesale.api.dto.SupplierReadinessResponse.off());
+
+        // The figures page carries no answer-time fields at all, so what it sends is what it sent before.
+        String figures = objectMapper.writeValueAsString(salesFiguresService.figures(TENANT, 30));
+        assertThat(figures).doesNotContain("answeredSample").doesNotContain("medianAnswerWorkingHours");
+    }
 }

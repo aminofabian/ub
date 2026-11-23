@@ -56,6 +56,8 @@ public class SupplierPortalHubService {
             String localSupplierId
     ) {
         BusinessSupplierConnection link = requireActiveLink(marketplaceSupplierId, localSupplierId);
+        boolean stockVisible = link.isCanViewStockLevels();
+        boolean historyVisible = link.isCanViewPurchaseHistory();
         String branchId = branchResolutionService.resolveDefaultBranch(link.getBusinessId());
         List<SupplierItemLinkResponse> links = itemSupplierLinkService.listLinksForSupplier(
                 link.getBusinessId(), localSupplierId, branchId);
@@ -67,9 +69,9 @@ public class SupplierPortalHubService {
                         row.sku(),
                         row.barcode(),
                         row.thumbnailUrl(),
-                        row.currentStock(),
-                        row.defaultCostPrice(),
-                        row.lastCostPrice(),
+                        stockVisible ? row.currentStock() : null,
+                        historyVisible ? row.defaultCostPrice() : null,
+                        historyVisible ? row.lastCostPrice() : null,
                         row.packSize(),
                         row.packUnit(),
                         row.variantName(),
@@ -83,6 +85,9 @@ public class SupplierPortalHubService {
             String localSupplierId
     ) {
         BusinessSupplierConnection link = requireActiveLink(marketplaceSupplierId, localSupplierId);
+        if (!link.isCanViewPurchaseHistory()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Shop link not found");
+        }
         Supplier local = supplierRepository.findByIdAndDeletedAtIsNull(localSupplierId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
         Business business = businessRepository.findById(link.getBusinessId()).orElse(null);

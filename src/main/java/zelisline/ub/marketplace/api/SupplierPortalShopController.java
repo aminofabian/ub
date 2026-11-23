@@ -27,12 +27,30 @@ public class SupplierPortalShopController {
 
     private final SupplierShopService supplierShopService;
     private final SupplierShopCatalogService supplierShopCatalogService;
+    private final zelisline.ub.wholesale.application.SupplierReadinessService supplierReadinessService;
+    private final zelisline.ub.wholesale.application.SupplierPortalOverviewService supplierPortalOverviewService;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'supplier.catalog.read')")
     public SupplierShopResponse current() {
         SupplierPrincipal principal = CurrentSupplierUser.require();
         return supplierShopService.current(principal.marketplaceSupplierId());
+    }
+
+    /** The readiness checklist in the portal. Off unless platform staff switched it on for this supplier. */
+    @GetMapping("/readiness")
+    @PreAuthorize("hasPermission(null, 'supplier.catalog.read')")
+    public zelisline.ub.wholesale.api.dto.PortalReadinessResponse readiness() {
+        SupplierPrincipal principal = CurrentSupplierUser.require();
+        return supplierReadinessService.portalReadiness(principal.marketplaceSupplierId());
+    }
+
+    /** How quickly this supplier answers the orders shops send it, what is waiting, and its milestones. */
+    @GetMapping("/overview")
+    @PreAuthorize("hasPermission(null, 'supplier.orders.read')")
+    public zelisline.ub.wholesale.api.dto.PortalOverviewResponse overview() {
+        SupplierPrincipal principal = CurrentSupplierUser.require();
+        return supplierPortalOverviewService.overview(principal.marketplaceSupplierId());
     }
 
     /** Copies the supplier's price list into its shop. Safe to repeat: nothing is created twice. */

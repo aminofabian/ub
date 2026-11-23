@@ -341,10 +341,8 @@ public class SalesOrderService {
         salesOrderRepository.save(order);
         // A signed-in marketplace buyer ordered this for their shop: if that shop is connected,
         // the order crosses to it now, already confirmed, with nobody having to vouch for it.
-        // A sale over the counter is not a trade order supplied, so it earns no milestone.
-        if (supplied > 0 && !SalesOrderStatuses.SOURCE_COUNTER.equals(order.getSource())) {
-            supplierMilestoneService.recordFirstOrderSupplied(businessId);
-        }
+        // No engagement call here: milestones are recorded when the supplier's overview is read
+        // (SupplierMilestoneService.recordDue), so answering an order costs nothing extra.
         if (supplied > 0 && order.getBuyerBusinessId() != null) {
             tradeOrderService.openForVerifiedBuyer(businessId, order.getId(), order.getBuyerBusinessId());
         }

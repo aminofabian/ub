@@ -28,6 +28,7 @@ public class ShopSupplierPageController {
 
     private final ShopSupplierPageService service;
     private final zelisline.ub.marketplace.application.ShopSupplierTeamService teamService;
+    private final zelisline.ub.marketplace.application.SupplierShopPortalSessionService portalSessionService;
 
     @GetMapping
     @PreAuthorize(MANAGE_SETTINGS)
@@ -84,5 +85,17 @@ public class ShopSupplierPageController {
     @PreAuthorize(MANAGE_SETTINGS)
     public zelisline.ub.marketplace.api.dto.ShopTeamInviteResponse invitePortalTeam(HttpServletRequest request) {
         return teamService.invitePortalTeam(request, TenantRequestIds.resolveBusinessId(request));
+    }
+
+    /**
+     * Opens the supplier portal for the signed-in shop user, already signed in: returns a portal session the
+     * browser keeps for the portal's pages. For anyone who works the trade desk.
+     */
+    @PostMapping("/portal-session")
+    @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
+    public zelisline.ub.marketplace.api.dto.SupplierPortalLoginResponse portalSession(HttpServletRequest request) {
+        zelisline.ub.platform.security.TenantPrincipal principal =
+                zelisline.ub.platform.security.CurrentTenantUser.requireHuman(request);
+        return portalSessionService.open(request, TenantRequestIds.resolveBusinessId(request), principal.userId());
     }
 }

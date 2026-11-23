@@ -2,6 +2,7 @@ package zelisline.ub.marketplace.api.dto;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 
 public record SupplierPortalInvoiceRow(
         String invoiceId,
@@ -16,6 +17,22 @@ public record SupplierPortalInvoiceRow(
         BigDecimal amountPaid,
         BigDecimal balanceOpen,
         String paymentStatus,
-        String status
+        String status,
+        List<Line> lines
 ) {
+
+    /** What the shop's invoice says was supplied. Quantities are base stock units. */
+    public record Line(
+            String id,
+            String description,
+            BigDecimal qty,
+            BigDecimal unitCost,
+            BigDecimal lineTotal,
+            String purchaseUnit,
+            BigDecimal purchaseQty,
+            BigDecimal unitsPerPurchaseUnit,
+            BigDecimal packPrice
+    ) {
+    }
 }
+

@@ -36,6 +36,9 @@ public class SalesOrdersController {
     private final zelisline.ub.wholesale.application.SupplierStandingService supplierStandingService;
     private final zelisline.ub.wholesale.application.SupplierAppealService supplierAppealService;
     private final zelisline.ub.wholesale.application.CounterOrderService counterOrderService;
+    private final zelisline.ub.wholesale.application.SupplierOverviewService supplierOverviewService;
+    private final zelisline.ub.wholesale.application.SupplierContributionService supplierContributionService;
+    private final zelisline.ub.wholesale.application.SupplierMilestoneService supplierMilestoneService;
 
     @GetMapping
     @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
@@ -131,7 +134,16 @@ public class SalesOrdersController {
             HttpServletRequest request
     ) {
         CurrentTenantUser.require(request);
-        return salesOrderService.answer(TenantRequestIds.resolveBusinessId(request), orderId, body);
+        String businessId = TenantRequestIds.resolveBusinessId(request);
+        SalesOrderResponse answered = salesOrderService.answer(businessId, orderId, body);
+        // The order is saved. The person's own contribution is noted afterwards and can never fail the answer.
+        try {
+            supplierContributionService.recordAnswered(
+                    businessId, CurrentTenantUser.requireHuman(request).userId(), orderId);
+        } catch (RuntimeException ignored) {
+            // Not a person (an API key), or the note could not be written: the answer stands either way.
+        }
+        return answered;
     }
 
     /** Opens or updates the account of the shop a signed-in marketplace buyer ordered for. */
@@ -212,5 +224,26 @@ public class SalesOrdersController {
     public zelisline.ub.wholesale.api.dto.CounterInvoiceAccountResponse counterAccount(
             @PathVariable String invoiceId, HttpServletRequest request) {
         return counterOrderService.invoiceAccount(TenantRequestIds.resolveBusinessId(request), invoiceId);
+    }
+
+    /** The supplier's overview: the next thing, what is waiting, readiness, products, milestones, own work. */
+    @GetMapping("/overview")
+    @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
+    public zelisline.ub.wholesale.api.dto.SupplierOverviewResponse overview(HttpServletRequest request) {
+        String userId;
+        try {
+            userId = CurrentTenantUser.requireHuman(request).userId();
+        } catch (RuntimeException notAPerson) {
+            userId = null;
+        }
+        return supplierOverviewService.overview(TenantRequestIds.resolveBusinessId(request), userId);
+    }
+
+    /** The supplier dismissed the milestone notes on the overview; each is shown once. */
+    @PostMapping("/milestones/seen")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("hasPermission(null, 'storefront.orders.read')")
+    public void milestonesSeen(HttpServletRequest request) {
+        supplierMilestoneService.markAllSeen(TenantRequestIds.resolveBusinessId(request));
     }
 }

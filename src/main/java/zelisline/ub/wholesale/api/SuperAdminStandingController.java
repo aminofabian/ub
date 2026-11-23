@@ -27,6 +27,7 @@ public class SuperAdminStandingController {
 
     private final SupplierAppealService supplierAppealService;
     private final SuperAdminRepository superAdminRepository;
+    private final zelisline.ub.marketplace.repository.MarketplaceSupplierRepository marketplaceSupplierRepository;
 
     @GetMapping("/orders/{orderId}")
     public StandingExclusionResponse exclusion(@PathVariable String orderId) {
@@ -42,6 +43,33 @@ public class SuperAdminStandingController {
         SuperAdmin admin = requireSuperAdmin();
         return supplierAppealService.setStandingExcluded(
                 orderId, body.excluded(), body.note(), admin.getId(), admin.getName());
+    }
+
+    /**
+     * Decision D2: switches the readiness checklist on or off in the portal for one supplier, with or without a
+     * shop. Body: {@code {"enabled": true}}.
+     */
+    @GetMapping("/suppliers/{marketplaceSupplierId}/engagement")
+    public java.util.Map<String, Object> supplierEngagement(@PathVariable String marketplaceSupplierId) {
+        requireSuperAdmin();
+        var supplier = marketplaceSupplierRepository.findById(marketplaceSupplierId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
+        return java.util.Map.of(
+                "marketplaceSupplierId", supplier.getId(), "enabled", supplier.isEngagementEnabled());
+    }
+
+    @PutMapping("/suppliers/{marketplaceSupplierId}/engagement")
+    public java.util.Map<String, Object> setSupplierEngagement(
+            @PathVariable String marketplaceSupplierId,
+            @RequestBody java.util.Map<String, Boolean> body
+    ) {
+        requireSuperAdmin();
+        var supplier = marketplaceSupplierRepository.findById(marketplaceSupplierId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Supplier not found"));
+        supplier.setEngagementEnabled(body != null && Boolean.TRUE.equals(body.get("enabled")));
+        marketplaceSupplierRepository.save(supplier);
+        return java.util.Map.of(
+                "marketplaceSupplierId", supplier.getId(), "enabled", supplier.isEngagementEnabled());
     }
 
     private SuperAdmin requireSuperAdmin() {

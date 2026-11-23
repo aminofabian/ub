@@ -22,16 +22,19 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import zelisline.ub.marketplace.api.dto.CreateSupplierPortalInviteResponse;
+import zelisline.ub.marketplace.application.SupplierConnectionVisibilityService;
 import zelisline.ub.marketplace.application.SupplierDuplicateCheckService;
 import zelisline.ub.platform.security.CurrentTenantUser;
 import zelisline.ub.suppliers.api.dto.CreateSupplierContactRequest;
 import zelisline.ub.suppliers.api.dto.CreateSupplierRequest;
 import zelisline.ub.suppliers.api.dto.PatchSupplierContactRequest;
+import zelisline.ub.suppliers.api.dto.PatchSupplierPortalVisibilityRequest;
 import zelisline.ub.suppliers.api.dto.PatchSupplierRequest;
 import zelisline.ub.suppliers.api.dto.SendSupplierPayoutPhoneVerificationResponse;
 import zelisline.ub.suppliers.api.dto.SupplierContactResponse;
 import zelisline.ub.suppliers.api.dto.SupplierDuplicateCheckRequest;
 import zelisline.ub.suppliers.api.dto.SupplierDuplicateCheckResponse;
+import zelisline.ub.suppliers.api.dto.SupplierPortalVisibilityResponse;
 import zelisline.ub.suppliers.api.dto.SupplierPurchaseHistoryResponse;
 import zelisline.ub.suppliers.api.dto.SupplierResponse;
 import zelisline.ub.suppliers.api.dto.SupplierItemLinkResponse;
@@ -56,6 +59,7 @@ public class SuppliersController {
     private final SupplierDuplicateCheckService supplierDuplicateCheckService;
     private final TenantSupplierPortalInviteService tenantSupplierPortalInviteService;
     private final SupplierPayoutPhoneVerificationService payoutPhoneVerificationService;
+    private final SupplierConnectionVisibilityService supplierConnectionVisibilityService;
 
     @PostMapping("/duplicate-check")
     @PreAuthorize("hasPermission(null, 'suppliers.write')")
@@ -152,6 +156,35 @@ public class SuppliersController {
                 supplierId,
                 CurrentTenantUser.auditActorId(request),
                 sendSms);
+    }
+
+    /**
+     * What this connected supplier may see of the shop's records (Phase 2 visibility flags). A supplier with no
+     * marketplace connection answers 200 with {@code connected = false}, so the screen can simply hide the panel.
+     */
+    @GetMapping("/{supplierId}/portal-visibility")
+    @PreAuthorize("hasPermission(null, 'suppliers.read')")
+    public SupplierPortalVisibilityResponse portalVisibility(
+            @PathVariable String supplierId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return supplierConnectionVisibilityService.get(
+                TenantRequestIds.resolveBusinessId(request), supplierId);
+    }
+
+    @PatchMapping("/{supplierId}/portal-visibility")
+    @PreAuthorize("hasPermission(null, 'suppliers.write')")
+    public SupplierPortalVisibilityResponse updatePortalVisibility(
+            @PathVariable String supplierId,
+            @Valid @RequestBody PatchSupplierPortalVisibilityRequest body,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return supplierConnectionVisibilityService.update(
+                TenantRequestIds.resolveBusinessId(request),
+                supplierId,
+                body);
     }
 
     @PostMapping("/{supplierId}/payout-phone-verifications")

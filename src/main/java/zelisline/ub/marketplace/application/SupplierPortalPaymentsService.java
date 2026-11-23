@@ -40,6 +40,7 @@ public class SupplierPortalPaymentsService {
         List<BusinessSupplierConnection> links = connectionRepository
                 .findByMarketplaceSupplierIdAndStatus(marketplaceSupplierId, BusinessSupplierConnectionStatuses.ACTIVE)
                 .stream()
+                .filter(BusinessSupplierConnection::isCanViewPurchaseHistory)
                 .filter(link -> localSupplierIdFilter == null
                         || localSupplierIdFilter.isBlank()
                         || localSupplierIdFilter.equals(link.getLocalSupplierId()))

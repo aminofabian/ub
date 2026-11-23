@@ -60,6 +60,13 @@ import zelisline.ub.tenancy.application.BranchResolutionService;
 public class InventoryController {
 
     private final InventoryLedgerService inventoryLedgerService;
+
+    /**
+     * Supplier engagement: notes a person's own work after a save. Optional and never able to fail the save;
+     * absent in a controller slice test.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private zelisline.ub.wholesale.application.SupplierContributionService supplierContributionService;
     private final InventoryBatchPickerService inventoryBatchPickerService;
     private final InventoryTransferService inventoryTransferService;
     private final InventoryValuationService inventoryValuationService;
@@ -98,11 +105,14 @@ public class InventoryController {
         var user = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         medicineInboundCheck.requireLotAndExpiry(businessId, body.itemId(), body.lotNumber(), body.expiryDate());
-        return inventoryLedgerService.recordOpeningBalance(
-                businessId,
-                body,
-                user.userId()
-        );
+        java.util.Set<String> notOrderable = supplierContributionService == null
+                ? null
+                : supplierContributionService.notYetOrderable(businessId, java.util.List.of(body.itemId()));
+        InventoryMutationResponse saved = inventoryLedgerService.recordOpeningBalance(businessId, body, user.userId());
+        if (notOrderable != null) {
+            supplierContributionService.recordMadeOrderable(businessId, user.userId(), notOrderable);
+        }
+        return saved;
     }
 
     @PostMapping("/stock-increase")
@@ -115,11 +125,14 @@ public class InventoryController {
         var user = CurrentTenantUser.requireHuman(request);
         String businessId = TenantRequestIds.resolveBusinessId(request);
         medicineInboundCheck.requireLotAndExpiry(businessId, body.itemId(), body.lotNumber(), body.expiryDate());
-        return inventoryLedgerService.recordStockIncrease(
-                businessId,
-                body,
-                user.userId()
-        );
+        java.util.Set<String> notOrderable = supplierContributionService == null
+                ? null
+                : supplierContributionService.notYetOrderable(businessId, java.util.List.of(body.itemId()));
+        InventoryMutationResponse saved = inventoryLedgerService.recordStockIncrease(businessId, body, user.userId());
+        if (notOrderable != null) {
+            supplierContributionService.recordMadeOrderable(businessId, user.userId(), notOrderable);
+        }
+        return saved;
     }
 
     /**

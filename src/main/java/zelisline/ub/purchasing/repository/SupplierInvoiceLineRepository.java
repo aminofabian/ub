@@ -16,6 +16,9 @@ public interface SupplierInvoiceLineRepository extends JpaRepository<SupplierInv
 
     List<SupplierInvoiceLine> findByInvoiceIdOrderBySortOrderAsc(String invoiceId);
 
+    /** All lines for a page of invoices, in one query, ordered so the caller can group them. */
+    List<SupplierInvoiceLine> findByInvoiceIdInOrderBySortOrderAscIdAsc(Collection<String> invoiceIds);
+
     /**
      * Posted invoice-line totals for a set of SKUs.
      * Row: {@code [qty, spend]}.

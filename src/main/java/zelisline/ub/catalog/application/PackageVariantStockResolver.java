@@ -243,8 +243,17 @@ public class PackageVariantStockResolver {
 
     /**
      * Base units deducted per one catalog unit sold (e.g. 30 eggs per tray, 1 egg per single).
+     * Null when the SKU keeps its own stock.
+     * <p>
+     * A base product that sells a pack is one shelf (ADR 0054): every other option under it
+     * takes one base unit per sale from that same pool, however the option was created.
      */
     public BigDecimal unitsPerSale(Item item) {
+        return unitsPerSale(item, null);
+    }
+
+    /** {@code packFamily}: the answer for this item's parent when the caller already knows it. */
+    private BigDecimal unitsPerSale(Item item, Boolean packFamily) {
         if (item.isPackageVariant()) {
             return positiveUnits(item.getPackagingUnitQty());
         }
@@ -253,16 +262,22 @@ public class PackageVariantStockResolver {
             return null;
         }
         BigDecimal packaged = positiveUnits(item.getPackagingUnitQty());
-        if (packaged == null) {
+        if (packaged != null && (!item.isStocked() || packaged.compareTo(BigDecimal.ONE) > 0)) {
+            return packaged;
+        }
+        // Weighed options are never shared-stock SKUs (see ItemWeightValidation).
+        if (item.isWeighed()) {
             return null;
         }
-        if (!item.isStocked()) {
-            return packaged;
+        boolean shelf = packFamily != null ? packFamily : isPackFamily(item.getBusinessId(), parentId);
+        return shelf ? BigDecimal.ONE : null;
+    }
+
+    private boolean isPackFamily(String businessId, String parentId) {
+        if (businessId == null || parentId == null) {
+            return false;
         }
-        if (packaged.compareTo(BigDecimal.ONE) > 0) {
-            return packaged;
-        }
-        return null;
+        return itemRepository.existsPackOnStockedParent(businessId, parentId);
     }
 
     /** True when this SKU sells from the parent's shared batch pool (package / bundle variants only). */
@@ -334,8 +349,9 @@ public class PackageVariantStockResolver {
                 pool.add(catalogItem.getId());
                 List<Item> children = itemRepository.findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
                         businessId, catalogItem.getId());
+                boolean packFamily = !children.isEmpty() && isPackFamily(businessId, catalogItem.getId());
                 for (Item child : children) {
-                    if (usesSharedStockPool(child)) {
+                    if (unitsPerSale(child, packFamily) != null) {
                         pool.add(child.getId());
                     }
                 }
@@ -349,8 +365,9 @@ public class PackageVariantStockResolver {
         pool.add(catalogItem.getId());
         List<Item> siblings = itemRepository.findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
                 businessId, parentId);
+        boolean packFamily = isPackFamily(businessId, parentId);
         for (Item sibling : siblings) {
-            if (usesSharedStockPool(sibling)) {
+            if (unitsPerSale(sibling, packFamily) != null) {
                 pool.add(sibling.getId());
             }
         }

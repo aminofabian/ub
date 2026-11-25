@@ -202,6 +202,26 @@ public interface ItemRepository extends JpaRepository<Item, String> {
 
     boolean existsByBusinessIdAndVariantOfItemIdAndDeletedAtIsNull(String businessId, String variantOfItemId);
 
+    /**
+     * True when {@code parentId} is a stocked base product that sells at least one pack
+     * (tray, crate, …). Such a family is one shelf: every option under it draws from the base pool.
+     */
+    @Query("""
+            select count(c) > 0 from Item c, Item p
+             where p.id = :parentId
+               and p.businessId = :businessId
+               and p.deletedAt is null
+               and p.stocked = true
+               and c.businessId = :businessId
+               and c.variantOfItemId = :parentId
+               and c.deletedAt is null
+               and c.packageVariant = true
+               and c.packagingUnitQty > 0
+            """)
+    boolean existsPackOnStockedParent(
+            @Param("businessId") String businessId,
+            @Param("parentId") String parentId);
+
     List<Item> findByBusinessIdAndVariantOfItemIdAndDeletedAtIsNullOrderBySkuAsc(
             String businessId,
             String variantOfItemId

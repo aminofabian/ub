@@ -51,6 +51,7 @@ import zelisline.ub.credits.repository.WalletTransactionRepository;
 import zelisline.ub.catalog.api.dto.CreateItemRequest;
 import zelisline.ub.catalog.api.dto.CreateVariantRequest;
 import zelisline.ub.catalog.domain.Category;
+import zelisline.ub.catalog.domain.Item;
 import zelisline.ub.catalog.application.CatalogBootstrapService;
 import zelisline.ub.catalog.application.ItemCatalogService;
 import zelisline.ub.catalog.repository.CategoryRepository;
@@ -124,6 +125,8 @@ class SaleSlice2IT {
 
     @Autowired
     private MockMvc mockMvc;
+    @Autowired
+    private zelisline.ub.catalog.application.PackageVariantStockResolver packageVariantStockResolver;
     @Autowired
     private ObjectMapper objectMapper;
     @Autowired
@@ -1905,6 +1908,86 @@ class SaleSlice2IT {
                         .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
                 .andExpect(status().isBadRequest())
                 .andExpect(content().string(containsString("sells as a pack")));
+    }
+
+    @Test
+    void postSale_plainOptionInPackFamily_sellsFromTheBasePool() throws Exception {
+        openShift(new BigDecimal("100.00"));
+        String parentId = createPackParent("168");
+        String trayId = createPackVariant(parentId, false, null);
+        // "single" saved as an ordinary option: stocked, no pack fields, with its own stray batch.
+        String singleId = itemCatalogService.createVariant(
+                TENANT,
+                parentId,
+                new CreateVariantRequest(
+                        "SKU-EGGS-SINGLE", "single",
+                        null, null, null, null, null, "each",
+                        false, true, true,
+                        false, null, null, null, null, new BigDecimal("14.33"), null,
+                        null, null, null, null, null, null),
+                null
+        ).id();
+        var stray = batch("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee2", singleId,
+                Instant.parse("2026-02-11T12:00:00Z"), LocalDate.of(2030, 4, 1), "20");
+        stray.setUnitCost(new BigDecimal("430.00"));
+        inventoryBatchRepository.save(stray);
+
+        Item single = itemRepository.findById(singleId).orElseThrow();
+        Item tray = itemRepository.findById(trayId).orElseThrow();
+        assertThat(packageVariantStockResolver.unitsPerSale(single)).isEqualByComparingTo(BigDecimal.ONE);
+        assertThat(packageVariantStockResolver.stockHolderItemId(single)).isEqualTo(parentId);
+        assertThat(packageVariantStockResolver.branchStockPoolItemIds(TENANT, tray))
+                .containsExactlyInAnyOrder(parentId, trayId, singleId);
+        assertThat(packageVariantStockResolver.branchStockPoolItemIds(TENANT, single))
+                .containsExactlyInAnyOrder(parentId, trayId, singleId);
+
+        String body = """
+                {"branchId":"%s","lines":[{"itemId":"%s","quantity":10,"unitPrice":15}],"payments":[{"method":"cash","amount":150}]}
+                """.formatted(branchId, singleId);
+        MvcResult res = mockMvc.perform(post("/api/v1/sales")
+                        .contentType(APPLICATION_JSON)
+                        .content(body)
+                        .header("Idempotency-Key", "single-in-pack-family-" + UUID.randomUUID())
+                        .header("X-Tenant-Id", TENANT)
+                        .header(TestAuthenticationFilter.HEADER_USER_ID, cashier.getId())
+                        .header(TestAuthenticationFilter.HEADER_ROLE_ID, ROLE_POS))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        // One shelf: 168 + 20 - 10 base units remain, whichever batches they came from.
+        BigDecimal remaining = inventoryBatchRepository.findAll().stream()
+                .filter(b -> parentId.equals(b.getItemId()) || singleId.equals(b.getItemId()))
+                .map(InventoryBatch::getQuantityRemaining)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(remaining).isEqualByComparingTo(new BigDecimal("178"));
+        assertThat(packageVariantStockResolver.displayStockQty(tray, remaining))
+                .isEqualByComparingTo(new BigDecimal("5"));
+
+        // Costed at the single's own buying price, not a stray batch cost.
+        String saleId = objectMapper.readTree(res.getResponse().getContentAsString()).get("id").asText();
+        BigDecimal cost = saleItemRepository.findBySaleIdOrderByLineIndexAsc(saleId).stream()
+                .map(SaleItem::getCostTotal)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(cost).isEqualByComparingTo(new BigDecimal("143.30"));
+    }
+
+    @Test
+    void plainOptionWithoutAPackSibling_keepsItsOwnStock() {
+        String parentId = createPackParent("60");
+        String flavourId = itemCatalogService.createVariant(
+                TENANT,
+                parentId,
+                new CreateVariantRequest(
+                        "SKU-EGGS-BROWN", "Brown",
+                        null, null, null, null, null, "each",
+                        false, true, true,
+                        false, null, null, null, null, null, null,
+                        null, null, null, null, null, null),
+                null
+        ).id();
+        Item flavour = itemRepository.findById(flavourId).orElseThrow();
+        assertThat(packageVariantStockResolver.unitsPerSale(flavour)).isNull();
+        assertThat(packageVariantStockResolver.stockHolderItemId(flavour)).isEqualTo(flavourId);
     }
 
     /**

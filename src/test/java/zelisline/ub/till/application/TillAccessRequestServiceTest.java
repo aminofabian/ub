@@ -2,11 +2,13 @@ package zelisline.ub.till.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
@@ -78,6 +80,52 @@ class TillAccessRequestServiceTest {
                 .isEqualTo("MURIKI's till");
         assertThat(TillAccessRequestService.suggestedLabel("  ", DEVICE_KEY))
                 .startsWith("Till ");
+    }
+
+    @Test
+    void aSignedInCashierCanAsk_forTheSamePhone_theSameRow_isCreatedOnce() {
+        // The case the till had no route for: signed in fine, but this branch does not treat the phone as a till.
+        when(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull("cashier-1", "biz"))
+                .thenReturn(Optional.of(cashier()));
+        when(tillAccessRequestRepository.findByBusinessIdAndBranchIdAndDeviceKey("biz", "br", DEVICE_KEY))
+                .thenReturn(Optional.empty());
+        when(tillAccessRequestRepository.save(any())).thenAnswer(inv -> {
+            TillAccessRequest row = inv.getArgument(0);
+            if (row.getId() == null || row.getId().isBlank()) {
+                row.setId("req-1");
+            }
+            return row;
+        });
+        stubNotifyLookups();
+
+        service.requestAccess("biz", "cashier-1", "br", DEVICE_KEY, "Safari/18");
+
+        ArgumentCaptor<TillAccessRequest> saved = ArgumentCaptor.forClass(TillAccessRequest.class);
+        verify(tillAccessRequestRepository, times(2)).save(saved.capture());
+        TillAccessRequest row = saved.getAllValues().get(0);
+        assertThat(row.getStatus()).isEqualTo(TillAccessRequest.STATUS_PENDING);
+        assertThat(row.getRequestedByUserId()).isEqualTo("cashier-1");
+        assertThat(row.getBranchId()).isEqualTo("br");
+        // The owner is told, exactly as when a PIN is denied — that is the whole point of the route.
+        verify(notificationService).tryInsertDedupeForUser(
+                eq("biz"),
+                eq("owner-1"),
+                eq(NotificationTypes.TILL_ACCESS_REQUESTED),
+                eq(NotificationTypes.TILL_ACCESS_REQUESTED + ":req-1:owner-1:1"),
+                eq("cash_drawer"),
+                eq("HIGH"),
+                anyString());
+    }
+
+    @Test
+    void askingForAPhone_theBusinessDoesNotKnow_createsNothing() {
+        when(userRepository.findByIdAndBusinessIdAndDeletedAtIsNull("stranger", "biz"))
+                .thenReturn(Optional.empty());
+
+        service.requestAccess("biz", "stranger", "br", DEVICE_KEY, "Safari/18");
+
+        verify(tillAccessRequestRepository, never()).save(any());
+        verifyNoInteractions(notificationService);
     }
 
     @Test

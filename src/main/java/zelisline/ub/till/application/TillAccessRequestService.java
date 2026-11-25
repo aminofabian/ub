@@ -69,6 +69,28 @@ public class TillAccessRequestService {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordPinDenied(User user, String branchId, String deviceKey, String userAgent) {
+        recordRequest(user, branchId, deviceKey, userAgent);
+    }
+
+    /**
+     * A person who is already signed in asking for this phone to be made a till at their branch.
+     *
+     * Same row, same notification, same quiet period as a denied PIN — the only difference is who asked and why. This
+     * is the case the till had no route for: the cashier signs in fine, then finds the branch does not treat this
+     * phone as a till, and nothing ever reached the owner.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void requestAccess(String businessId, String userId, String branchId, String deviceKey, String userAgent) {
+        if (businessId == null || businessId.isBlank() || userId == null || userId.isBlank()) {
+            return;
+        }
+        userRepository.findByIdAndBusinessIdAndDeletedAtIsNull(userId, businessId).ifPresentOrElse(
+                user -> recordRequest(user, branchId, deviceKey, userAgent),
+                () -> log.warn("Till access asked for by unknown user {} at business {}", userId, businessId)
+        );
+    }
+
+    private void recordRequest(User user, String branchId, String deviceKey, String userAgent) {
         if (user == null) {
             return;
         }

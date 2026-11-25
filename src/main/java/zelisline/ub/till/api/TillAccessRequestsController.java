@@ -18,6 +18,7 @@ import zelisline.ub.platform.security.TenantPrincipal;
 import zelisline.ub.tenancy.api.TenantRequestIds;
 import zelisline.ub.tenancy.application.BranchResolutionService;
 import zelisline.ub.till.api.dto.ApproveTillAccessRequestBody;
+import zelisline.ub.till.api.dto.TillAccessRequestCreateBody;
 import zelisline.ub.till.api.dto.TillAccessRequestListResponse;
 import zelisline.ub.till.api.dto.TillAccessRequestResponse;
 import zelisline.ub.till.application.TillAccessRequestService;
@@ -46,6 +47,32 @@ public class TillAccessRequestsController {
                     principal.roleId(), principal.branchId(), branchId);
         }
         return tillAccessRequestService.listForBusiness(businessId, validatedBranch, status);
+    }
+
+    /**
+     * "This phone is at this branch and cannot sell — please make it a till."
+     *
+     * Any signed-in person may ask: the point of the endpoint is that a cashier who cannot reach the owner in person
+     * still gets a message to them, with a link that approves or dismisses the request. The answer is empty on purpose
+     * — the caller only needs to know the ask was accepted; the row itself is the owner's to see.
+     */
+    @PostMapping
+    @PreAuthorize("isAuthenticated()")
+    public TillAccessRequestResponse request(
+            @Valid @RequestBody TillAccessRequestCreateBody body,
+            HttpServletRequest request
+    ) {
+        TenantPrincipal principal = CurrentTenantUser.requireHuman(request);
+        String businessId = TenantRequestIds.requireMatchingTenant(request, principal.businessId());
+        String validatedBranch = branchResolutionService.requireBranchForLockedRole(
+                principal.roleId(), principal.branchId(), body.branchId());
+        tillAccessRequestService.requestAccess(
+                businessId,
+                principal.userId(),
+                validatedBranch,
+                body.deviceKey(),
+                body.deviceName());
+        return null;
     }
 
     @PostMapping("/{id}/approve")

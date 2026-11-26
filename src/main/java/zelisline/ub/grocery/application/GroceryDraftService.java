@@ -39,7 +39,6 @@ import zelisline.ub.grocery.repository.GroceryDraftAuditLogRepository;
 import zelisline.ub.grocery.repository.GroceryDraftLineRepository;
 import zelisline.ub.grocery.repository.GroceryDraftRepository;
 import zelisline.ub.sales.application.SaleActorNameService;
-import zelisline.ub.tenancy.application.FeatureFlagService;
 import zelisline.ub.tenancy.domain.Business;
 import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.tenancy.repository.BusinessRepository;
@@ -57,12 +56,9 @@ public class GroceryDraftService {
     private final BusinessRepository businessRepository;
     private final GroceryInvoiceService invoiceService;
     private final SaleActorNameService saleActorNameService;
-    private final FeatureFlagService featureFlagService;
 
     @Transactional
     public GroceryDraftResponse createDraft(String businessId, CreateGroceryDraftRequest request, String userId) {
-        requireFeatureEnabled(businessId);
-
         String clientDraftId = normalizeClientDraftId(request.clientDraftId());
         var existing = draftRepository.findByBusinessIdAndClientDraftId(businessId, clientDraftId);
         if (existing.isPresent()) {
@@ -76,25 +72,8 @@ public class GroceryDraftService {
         branchRepository.findByIdAndBusinessIdAndDeletedAtIsNull(request.branchId(), businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Branch not found"));
 
-        var activeBuilding = draftRepository.findByBusinessIdAndBranchIdAndCreatedByAndStatus(
-                businessId,
-                request.branchId().trim(),
-                userId,
-                GroceryDraftConstants.STATUS_BUILDING
-        );
-        if (activeBuilding.isPresent()) {
-            GroceryDraft draft = activeBuilding.get();
-            List<GroceryDraftLine> existingLines = new ArrayList<>(
-                    lineRepository.findByDraftIdOrderByLineIndexAsc(draft.getId())
-            );
-            for (GroceryDraftLineInput input : request.lines()) {
-                upsertLineInput(draft, existingLines, input, businessId, userId);
-            }
-            lineRepository.saveAll(existingLines);
-            recomputeTotals(draft, existingLines);
-            draft = draftRepository.save(draft);
-            return toResponse(draft, activeLines(existingLines));
-        }
+        // GS2: a new clientDraftId always opens its own draft. Do not fold phone/web
+        // sales into whichever building draft this person already has open.
 
         String currency = resolveCurrency(businessId);
         long counterNumber = sequenceAllocator.allocateCounterNumber(request.branchId().trim());
@@ -126,7 +105,6 @@ public class GroceryDraftService {
 
     @Transactional(readOnly = true)
     public GroceryDraftResponse getDraft(String businessId, String draftId, boolean includeDeleted) {
-        requireFeatureEnabled(businessId);
         GroceryDraft draft = loadDraftOrThrow(businessId, draftId);
         List<GroceryDraftLine> lines = includeDeleted
                 ? lineRepository.findByDraftIdOrderByLineIndexAsc(draftId)
@@ -143,7 +121,6 @@ public class GroceryDraftService {
             Integer hoursBack,
             Integer staleMinutes
     ) {
-        requireFeatureEnabled(businessId);
         String resolvedStatus = status == null || status.isBlank()
                 ? GroceryDraftConstants.STATUS_BUILDING
                 : status.trim();
@@ -181,7 +158,6 @@ public class GroceryDraftService {
             PatchGroceryDraftLinesRequest request,
             String userId
     ) {
-        requireFeatureEnabled(businessId);
         GroceryDraft draft = loadBuildingDraftForUpdate(businessId, draftId, request.expectedVersion());
         List<GroceryDraftLine> existing = new ArrayList<>(lineRepository.findByDraftIdOrderByLineIndexAsc(draftId));
 
@@ -203,7 +179,6 @@ public class GroceryDraftService {
             PutGroceryDraftLineRequest request,
             String userId
     ) {
-        requireFeatureEnabled(businessId);
         GroceryDraft draft = loadBuildingDraftForUpdate(businessId, draftId, request.expectedVersion());
         List<GroceryDraftLine> existing = new ArrayList<>(lineRepository.findByDraftIdOrderByLineIndexAsc(draftId));
 
@@ -235,7 +210,6 @@ public class GroceryDraftService {
             Long expectedVersion,
             String userId
     ) {
-        requireFeatureEnabled(businessId);
         GroceryDraft draft = loadBuildingDraftForUpdate(businessId, draftId, expectedVersion);
         List<GroceryDraftLine> existing = new ArrayList<>(lineRepository.findByDraftIdOrderByLineIndexAsc(draftId));
 
@@ -262,7 +236,6 @@ public class GroceryDraftService {
             String idempotencyKey,
             String userId
     ) {
-        requireFeatureEnabled(businessId);
         GroceryDraft draft = loadDraftOrThrow(businessId, draftId);
 
         if (idempotencyKey != null
@@ -370,7 +343,6 @@ public class GroceryDraftService {
             CancelGroceryDraftRequest request,
             String userId
     ) {
-        requireFeatureEnabled(businessId);
         GroceryDraft draft = loadDraftOrThrow(businessId, draftId);
         if (!draft.isBuilding()) {
             throw new ResponseStatusException(HttpStatus.LOCKED, "Draft is not building");
@@ -555,12 +527,6 @@ public class GroceryDraftService {
                 .filter(c -> c != null && !c.isBlank())
                 .map(String::trim)
                 .orElse("KES");
-    }
-
-    private void requireFeatureEnabled(String businessId) {
-        if (!featureFlagService.isEnabled(businessId, FeatureFlagService.FLAG_GROCERY_DRAFTS_ENABLED)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
-        }
     }
 
     private void writeAudit(

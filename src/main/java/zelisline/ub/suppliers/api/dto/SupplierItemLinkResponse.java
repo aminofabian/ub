@@ -31,6 +31,8 @@ public record SupplierItemLinkResponse(
         /** Variant option label (e.g. Medium, Pink) when this row is a variant. */
         String variantName,
         boolean packageVariant,
+        /** Catalog department (item type) of the linked item — used to scope clerks. */
+        String itemTypeId,
         long version,
         Instant createdAt,
         Instant updatedAt,

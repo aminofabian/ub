@@ -462,6 +462,7 @@ public class ItemSupplierLinkService {
                 variantName = item.getVariantName().trim();
             }
         }
+        String itemTypeId = item != null ? blankToNull(item.getItemTypeId()) : null;
         return new SupplierItemLinkResponse(
                 sp.getId(),
                 sp.getItemId(),
@@ -483,6 +484,7 @@ public class ItemSupplierLinkService {
                 parentItemName,
                 variantName,
                 packageVariant,
+                itemTypeId,
                 sp.getVersion(),
                 sp.getCreatedAt(),
                 sp.getUpdatedAt(),

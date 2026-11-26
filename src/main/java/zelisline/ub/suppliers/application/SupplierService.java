@@ -64,9 +64,29 @@ public class SupplierService {
 
     @Transactional(readOnly = true)
     public Page<SupplierResponse> listSuppliers(String businessId, String searchRaw, String statusRaw, Pageable pageable) {
+        return listSuppliers(businessId, searchRaw, statusRaw, null, pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<SupplierResponse> listSuppliers(
+            String businessId,
+            String searchRaw,
+            String statusRaw,
+            List<String> itemTypeIds,
+            Pageable pageable
+    ) {
         String q = blankToNull(searchRaw);
         String st = blankToNull(statusRaw);
         Pageable pg = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize());
+        SupplierItemTypeFilter.Decision filter = SupplierItemTypeFilter.of(itemTypeIds);
+        if (filter.mode() == SupplierItemTypeFilter.Mode.EMPTY) {
+            return Page.empty(pg);
+        }
+        if (filter.mode() == SupplierItemTypeFilter.Mode.IDS) {
+            return supplierRepository
+                    .searchSuppliersForItemTypes(businessId, q, st, filter.itemTypeIds(), pg)
+                    .map(this::toResponse);
+        }
         return supplierRepository.searchSuppliers(businessId, q, st, pg).map(this::toResponse);
     }
 

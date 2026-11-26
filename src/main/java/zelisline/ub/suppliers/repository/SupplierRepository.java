@@ -49,6 +49,55 @@ public interface SupplierRepository extends JpaRepository<Supplier, String> {
             Pageable pageable
     );
 
+    /**
+     * Same as {@link #searchSuppliers} but only suppliers that have at least one active
+     * product link to a catalog item in the given departments (item types).
+     */
+    @Query("""
+            select s from Supplier s
+             where s.businessId = :businessId
+               and s.deletedAt is null
+               and (:q is null or :q = ''
+                    or lower(s.name) like lower(concat('%', :q, '%'))
+                    or lower(coalesce(s.code, '')) like lower(concat('%', :q, '%'))
+                    or exists (
+                      select 1 from SupplierProduct sp
+                       join Item i on i.id = sp.itemId
+                       where sp.supplierId = s.id
+                         and sp.deletedAt is null
+                         and sp.active = true
+                         and i.businessId = s.businessId
+                         and i.deletedAt is null
+                         and i.active = true
+                         and i.itemTypeId in :itemTypeIds
+                         and (lower(i.name) like lower(concat('%', :q, '%'))
+                           or lower(coalesce(i.variantName, '')) like lower(concat('%', :q, '%'))
+                           or lower(i.sku) like lower(concat('%', :q, '%'))
+                           or lower(coalesce(i.barcode, '')) like lower(concat('%', :q, '%'))
+                           or lower(coalesce(sp.supplierSku, '')) like lower(concat('%', :q, '%')))
+                    ))
+               and (:status is null or :status = '' or s.status = :status)
+               and exists (
+                 select 1 from SupplierProduct sp2
+                  join Item i2 on i2.id = sp2.itemId
+                  where sp2.supplierId = s.id
+                    and sp2.deletedAt is null
+                    and sp2.active = true
+                    and i2.businessId = s.businessId
+                    and i2.deletedAt is null
+                    and i2.active = true
+                    and i2.itemTypeId in :itemTypeIds
+               )
+             order by s.name asc
+            """)
+    Page<Supplier> searchSuppliersForItemTypes(
+            @Param("businessId") String businessId,
+            @Param("q") String q,
+            @Param("status") String status,
+            @Param("itemTypeIds") java.util.Collection<String> itemTypeIds,
+            Pageable pageable
+    );
+
     Optional<Supplier> findByIdAndBusinessIdAndDeletedAtIsNull(String id, String businessId);
 
     Optional<Supplier> findByIdAndBusinessId(String id, String businessId);

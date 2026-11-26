@@ -77,6 +77,7 @@ public class SuppliersController {
     public Page<SupplierResponse> list(
             @RequestParam(required = false) String search,
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) List<String> itemTypeIds,
             Pageable pageable,
             HttpServletRequest request) {
         CurrentTenantUser.require(request);
@@ -84,6 +85,7 @@ public class SuppliersController {
                 TenantRequestIds.resolveBusinessId(request),
                 search,
                 status,
+                itemTypeIds,
                 pageable);
     }
 

@@ -233,17 +233,26 @@ public class PaymentGatewayStkService {
             return storefrontDarajaRejected();
         }
 
-        // A shop with an ACTIVE till/paybill-only method expects Kiosk settlement. Never
-        // silently route it to the no-settle platform Daraja fallback.
+        // A shop with an ACTIVE till/paybill-only method expects Kiosk settlement when
+        // the custody rail is ready. When custody is Off / not ready, the till cannot
+        // collect — fall through to platform Daraja for the cashier (same as the rails
+        // list), instead of greying M-Pesa forever. Storefront never uses that fallback.
         PlatformCustodySettlementService custodyService = custodySettlementService.getIfAvailable();
         PaymentGatewayConfig activeCustody = custodyService != null
                 ? custodyService.findActiveCustodyConfig(businessId)
                 : null;
-        if (activeCustody != null) {
-            log.warn("Custody config {} active but platform rail not ready — refusing STK for business={}",
+        boolean custodyReady = custodyService != null && custodyService.platformRailsReady();
+        if (activeCustody != null && custodyReady) {
+            log.warn("Custody config {} active but push unavailable — refusing STK for business={}",
                     activeCustody.getId(), businessId);
             return StkPushOutcome.rejected(
                     GatewayType.CUSTODY_MPESA.name(), "CUSTODY_UNAVAILABLE", custodyUnavailableMessage());
+        }
+        if (activeCustody != null && !custodyReady) {
+            log.warn(
+                    "Custody config {} active but platform rail not ready — trying platform Daraja for cashier business={}",
+                    activeCustody.getId(),
+                    businessId);
         }
 
         if (channel == StkAudience.STOREFRONT) {
@@ -255,6 +264,11 @@ public class PaymentGatewayStkService {
                 businessId, phoneNumber, amount, reference, description);
         if (platformDaraja != null) {
             return platformDaraja;
+        }
+
+        if (activeCustody != null && !custodyReady) {
+            return StkPushOutcome.rejected(
+                    GatewayType.CUSTODY_MPESA.name(), "CUSTODY_UNAVAILABLE", custodyUnavailableMessage());
         }
 
         log.warn("No ACTIVE online STK gateway for business={} (check tenant id, platform enable, Activate)", businessId);

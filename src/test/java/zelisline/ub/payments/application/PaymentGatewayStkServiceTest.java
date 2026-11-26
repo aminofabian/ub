@@ -158,18 +158,45 @@ class PaymentGatewayStkServiceTest {
     }
 
     @Test
-    void initiate_activeCustodyButRailNotReady_doesNotUseDarajaFallback() {
+    void initiate_activeCustodyButRailNotReady_fallsBackToPlatformDarajaForCashier() {
+        when(platformPaymentGatewayService.listEnabled()).thenReturn(List.of());
+        when(custodyService.platformRailsReady()).thenReturn(false);
+        when(custodyService.findActiveCustodyConfig(BUSINESS)).thenReturn(custodyConfig());
+        PlatformDarajaSettingsService daraja = liveDaraja();
+        when(darajaProvider.getIfAvailable()).thenReturn(daraja);
+        when(daraja.credentials()).thenReturn(Optional.of(Map.of(
+                "consumerKey", "ck",
+                "consumerSecret", "cs",
+                "passkey", "pk",
+                "shortcode", "4094529")));
+        PaymentGateway darajaGateway = mock(PaymentGateway.class);
+        when(gatewayRegistry.has("DARAJA")).thenReturn(true);
+        when(gatewayRegistry.get("DARAJA")).thenReturn(darajaGateway);
+        when(darajaGateway.initiateStkPush(any())).thenReturn(
+                StkPushResponse.accepted("checkout-d", "mr-d", "0", "Success"));
+
+        PaymentGatewayStkService.StkPushOutcome outcome = service.initiate(
+                BUSINESS, null, "254712345678", new BigDecimal("500.00"), "REF-1", "Test");
+
+        assertThat(outcome.accepted()).isTrue();
+        assertThat(outcome.gatewayType()).isEqualTo(GatewayType.DARAJA.name());
+        verify(kopokopoGateway, never()).initiateStkPush(any());
+        verify(darajaGateway).initiateStkPush(any());
+    }
+
+    @Test
+    void initiate_activeCustodyButRailNotReady_andNoPlatformDaraja_stillUnavailable() {
         when(platformPaymentGatewayService.listEnabled()).thenReturn(List.of());
         when(custodyService.platformRailsReady()).thenReturn(false);
         when(custodyService.findActiveCustodyConfig(BUSINESS)).thenReturn(custodyConfig());
         when(custodyService.railsNotReadyMessage()).thenReturn("Platform KopoKopo credentials are missing.");
+        when(darajaProvider.getIfAvailable()).thenReturn(null);
 
         PaymentGatewayStkService.StkPushOutcome outcome = service.initiate(
                 BUSINESS, null, "254712345678", new BigDecimal("500.00"), "REF-1", "Test");
 
         assertThat(outcome.accepted()).isFalse();
         assertThat(outcome.responseCode()).isEqualTo("CUSTODY_UNAVAILABLE");
-        verify(darajaProvider, never()).getIfAvailable();
     }
 
     @Test

@@ -113,6 +113,21 @@ class DesktopSyncPullServiceTest {
     private final zelisline.ub.purchasing.repository.StockMovementRepository stockMovementRepository =
         mock(zelisline.ub.purchasing.repository.StockMovementRepository.class);
     private final DesktopStockCursor stockCursor = mock(DesktopStockCursor.class);
+    private final zelisline.ub.wholesale.repository.SalesOrderRepository salesOrderRepository =
+        mock(zelisline.ub.wholesale.repository.SalesOrderRepository.class);
+    private final zelisline.ub.wholesale.repository.SalesOrderLineRepository salesOrderLineRepository =
+        mock(zelisline.ub.wholesale.repository.SalesOrderLineRepository.class);
+    private final DesktopTradeCursor tradeCursor = mock(DesktopTradeCursor.class);
+    private final zelisline.ub.tenancy.application.FeatureFlagService featureFlagService =
+        mock(zelisline.ub.tenancy.application.FeatureFlagService.class);
+    private final zelisline.ub.wholesale.repository.TradeAccountRepository tradeAccountRepository =
+        mock(zelisline.ub.wholesale.repository.TradeAccountRepository.class);
+    private final zelisline.ub.wholesale.repository.SalesInvoiceRepository salesInvoiceRepository =
+        mock(zelisline.ub.wholesale.repository.SalesInvoiceRepository.class);
+    private final zelisline.ub.wholesale.repository.SalesReceiptRepository salesReceiptRepository =
+        mock(zelisline.ub.wholesale.repository.SalesReceiptRepository.class);
+    private final zelisline.ub.wholesale.repository.SalesCreditNoteRepository salesCreditNoteRepository =
+        mock(zelisline.ub.wholesale.repository.SalesCreditNoteRepository.class);
 
     private final RestClient.Builder restClientBuilder = RestClient.builder();
     private final ObjectMapper objectMapper = new ObjectMapper()
@@ -155,7 +170,9 @@ class DesktopSyncPullServiceTest {
             customerPhoneRepository, creditAccountRepository, rawPurchaseSessionRepository,
             rawPurchaseLineRepository, supplierInvoiceRepository, supplierInvoiceLineRepository,
             webOrderRepository, webOrderLineRepository, restClientBuilder,
-            stockMovementRepository, stockCursor);
+            stockMovementRepository, stockCursor, salesOrderRepository, salesOrderLineRepository,
+            tradeCursor, featureFlagService, tradeAccountRepository, salesInvoiceRepository,
+            salesReceiptRepository, salesCreditNoteRepository);
         ReflectionTestUtils.setField(service, "desktopBusinessId", LOCAL_BUSINESS);
 
         server = MockRestServiceServer.bindTo(restClientBuilder).build();

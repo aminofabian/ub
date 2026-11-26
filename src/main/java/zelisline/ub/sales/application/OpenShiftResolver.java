@@ -13,6 +13,7 @@ import zelisline.ub.platform.web.SetupRequirement;
 import zelisline.ub.sales.SalesConstants;
 import zelisline.ub.sales.domain.Shift;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.tenancy.application.FeatureFlagService;
 import zelisline.ub.till.application.TillDeviceService;
 import zelisline.ub.till.repository.TillDeviceRepository;
 
@@ -33,6 +34,7 @@ public class OpenShiftResolver {
 
     private final ShiftRepository shiftRepository;
     private final TillDeviceRepository tillDeviceRepository;
+    private final FeatureFlagService featureFlagService;
 
     /**
      * Normalizes a header/body till key. Returns {@code null} when blank.
@@ -53,11 +55,16 @@ public class OpenShiftResolver {
     }
 
     /**
-     * Till key to store on a newly opened shift. When the branch has registered
-     * trusted tills, the device must be among them.
+     * Till key to store on a newly opened shift. When the shop opts into trusted tills
+     * ({@code till.require_trusted}) and the branch already has registered devices, the
+     * device must be among them. Otherwise any signed-in till may open a shift; the key
+     * is still stored so sales stay attributed.
      */
     public String resolveTillKeyForOpen(String businessId, String branchId, String headerKey) {
         String key = normalizeTillDeviceKey(headerKey);
+        if (!featureFlagService.isTillRequireTrusted(businessId)) {
+            return key;
+        }
         if (tillDeviceRepository.existsByBusinessIdAndBranchIdAndRevokedAtIsNull(businessId, branchId)) {
             if (key == null
                     || !tillDeviceRepository.existsByBusinessIdAndBranchIdAndDeviceKeyAndRevokedAtIsNull(

@@ -186,6 +186,13 @@ public class FeatureFlagService {
      */
     public static final String FLAG_SHIFTS_EMAIL_CLOSE_REPORTS = "shifts.email_close_reports";
 
+    /**
+     * Only registered (trusted) tills may PIN-login, open a shift, or sell when the branch
+     * already has at least one active till. Absent / false keeps selling open for any
+     * signed-in till worker (owners still get access-request notifications).
+     */
+    public static final String FLAG_TILL_REQUIRE_TRUSTED = "till.require_trusted";
+
     /** Grocery counter draft cart persistence (master kill-switch). */
     public static final String FLAG_GROCERY_DRAFTS_ENABLED = "grocery_drafts.enabled";
 
@@ -303,6 +310,14 @@ public class FeatureFlagService {
     /** True when the shop turned shifts off; sales then ride on a hidden system-managed shift. */
     public boolean isShiftsDisabled(String businessId) {
         return isEnabled(businessId, FLAG_SHIFTS_DISABLED);
+    }
+
+    /**
+     * True when the shop opted into trusted-till enforcement. Absent defaults to off so
+     * signed-in cashiers can sell until an owner or super admin turns the lock on.
+     */
+    public boolean isTillRequireTrusted(String businessId) {
+        return isEnabled(businessId, FLAG_TILL_REQUIRE_TRUSTED);
     }
 
     /**

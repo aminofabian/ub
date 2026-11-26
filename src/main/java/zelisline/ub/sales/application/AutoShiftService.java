@@ -39,8 +39,8 @@ import zelisline.ub.tenancy.repository.BranchRepository;
  *   <li>It opens with a zero float and is never counted, so it carries no variance.</li>
  *   <li>It is silent on the realtime and ops-alert bus: nobody opened it, so nobody should
  *       be told a shift opened.</li>
- *   <li>The trusted-till rule still applies: a branch with registered tills only sells from
- *       them, shifts or no shifts.</li>
+ *   <li>When {@code till.require_trusted} is on, a branch with registered tills only sells
+ *       from them, shifts or no shifts.</li>
  * </ul>
  */
 @Service

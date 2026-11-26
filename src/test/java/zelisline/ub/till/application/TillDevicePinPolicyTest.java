@@ -11,18 +11,33 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
+import zelisline.ub.tenancy.application.FeatureFlagService;
 import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.till.repository.TillDeviceRepository;
 
 class TillDevicePinPolicyTest {
 
     private TillDeviceRepository tillDeviceRepository;
+    private FeatureFlagService featureFlagService;
     private TillDeviceService service;
 
     @BeforeEach
     void setUp() {
         tillDeviceRepository = mock(TillDeviceRepository.class);
-        service = new TillDeviceService(tillDeviceRepository, mock(BranchRepository.class));
+        featureFlagService = mock(FeatureFlagService.class);
+        service = new TillDeviceService(
+                tillDeviceRepository, mock(BranchRepository.class), featureFlagService);
+        when(featureFlagService.isTillRequireTrusted("biz")).thenReturn(true);
+    }
+
+    @Test
+    void allowsWhenRequirementFlagIsOffEvenWithRegisteredTills() {
+        when(featureFlagService.isTillRequireTrusted("biz")).thenReturn(false);
+        when(tillDeviceRepository.existsByBusinessIdAndBranchIdAndRevokedAtIsNull("biz", "br"))
+                .thenReturn(true);
+
+        assertDoesNotThrow(() -> service.assertPinLoginAllowed("biz", "br", null));
+        assertDoesNotThrow(() -> service.assertPinLoginAllowed("biz", "br", "unknown-device-key1"));
     }
 
     @Test
@@ -44,7 +59,7 @@ class TillDevicePinPolicyTest {
     }
 
     @Test
-    void rejectsMissingOrUnknownDeviceWhenBranchHasTills() {
+    void rejectsMissingOrUnknownDeviceWhenRequirementIsOnAndBranchHasTills() {
         when(tillDeviceRepository.existsByBusinessIdAndBranchIdAndRevokedAtIsNull("biz", "br"))
                 .thenReturn(true);
         when(tillDeviceRepository.existsByBusinessIdAndBranchIdAndDeviceKeyAndRevokedAtIsNull(

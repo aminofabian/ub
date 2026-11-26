@@ -764,7 +764,8 @@ public class StorefrontSettingsService {
                         && patch.uiOpeningLoader() == null
                         && patch.shiftsDisabled() == null
                         && patch.shiftsEmailCloseReports() == null
-                        && patch.supplierCounterOrders() == null)) {
+                        && patch.supplierCounterOrders() == null
+                        && patch.tillRequireTrusted() == null)) {
             return currentSettings;
         }
         ObjectNode root = parseRoot(currentSettings);
@@ -852,6 +853,11 @@ public class StorefrontSettingsService {
                 flags,
                 FeatureFlagService.FLAG_SUPPLIER_COUNTER_ORDERS,
                 patch.supplierCounterOrders()
+        );
+        putFlagIfPresent(
+                flags,
+                FeatureFlagService.FLAG_TILL_REQUIRE_TRUSTED,
+                patch.tillRequireTrusted()
         );
         if (patch.tillListen() != null) {
             applyTillListenFlags(flags, patch.tillListen());

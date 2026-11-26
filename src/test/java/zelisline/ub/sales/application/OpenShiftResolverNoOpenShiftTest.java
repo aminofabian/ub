@@ -4,17 +4,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 
 import zelisline.ub.platform.web.SetupRequiredException;
 import zelisline.ub.platform.web.SetupRequirement;
 import zelisline.ub.sales.repository.ShiftRepository;
+import zelisline.ub.tenancy.application.FeatureFlagService;
 import zelisline.ub.till.repository.TillDeviceRepository;
 
 /**
- * A sale with no open shift has to tell the cashier the right next step. When the device is not
- * one the branch trusts, opening a shift would fail too, so registering the till comes first.
+ * A sale with no open shift has to tell the cashier the right next step. When trusted tills
+ * are required and the device is not one the branch trusts, opening a shift would fail too,
+ * so registering the till comes first.
  */
 class OpenShiftResolverNoOpenShiftTest {
 
@@ -23,7 +26,14 @@ class OpenShiftResolverNoOpenShiftTest {
     private static final String DEVICE = "device-key-0001";
 
     private final TillDeviceRepository tills = mock(TillDeviceRepository.class);
-    private final OpenShiftResolver resolver = new OpenShiftResolver(mock(ShiftRepository.class), tills);
+    private final FeatureFlagService flags = mock(FeatureFlagService.class);
+    private OpenShiftResolver resolver;
+
+    @BeforeEach
+    void setUp() {
+        resolver = new OpenShiftResolver(mock(ShiftRepository.class), tills, flags);
+        when(flags.isTillRequireTrusted(BUSINESS)).thenReturn(true);
+    }
 
     @Test
     void branchWithoutRegisteredTillsAsksForAShift() {
@@ -66,5 +76,18 @@ class OpenShiftResolverNoOpenShiftTest {
         SetupRequiredException ex = resolver.noOpenShift(BUSINESS, BRANCH, null, "No open shift");
 
         assertThat(ex.getRequirement()).isEqualTo(SetupRequirement.TILL);
+    }
+
+    @Test
+    void untrustedDeviceMayOpenWhenRequirementFlagIsOff() {
+        when(flags.isTillRequireTrusted(BUSINESS)).thenReturn(false);
+        when(tills.existsByBusinessIdAndBranchIdAndRevokedAtIsNull(BUSINESS, BRANCH)).thenReturn(true);
+        when(tills.existsByBusinessIdAndBranchIdAndDeviceKeyAndRevokedAtIsNull(BUSINESS, BRANCH, DEVICE))
+                .thenReturn(false);
+
+        SetupRequiredException ex = resolver.noOpenShift(BUSINESS, BRANCH, DEVICE, "No open shift");
+
+        assertThat(ex.getRequirement()).isEqualTo(SetupRequirement.SHIFT);
+        assertThat(resolver.resolveTillKeyForOpen(BUSINESS, BRANCH, DEVICE)).isEqualTo(DEVICE);
     }
 }

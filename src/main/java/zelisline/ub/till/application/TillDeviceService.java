@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.tenancy.application.FeatureFlagService;
 import zelisline.ub.tenancy.repository.BranchRepository;
 import zelisline.ub.till.api.dto.PatchTillDeviceRequest;
 import zelisline.ub.till.api.dto.RegisterTillDeviceRequest;
@@ -39,6 +40,7 @@ public class TillDeviceService {
 
     private final TillDeviceRepository tillDeviceRepository;
     private final BranchRepository branchRepository;
+    private final FeatureFlagService featureFlagService;
 
     @Transactional
     public TillDeviceResponse register(
@@ -202,14 +204,18 @@ public class TillDeviceService {
     }
 
     /**
-     * Hybrid trusted-till policy for PIN login:
+     * Opt-in trusted-till policy for PIN login:
      * <ul>
-     *   <li>If the branch has <em>no</em> active registered tills → allow (gradual rollout).</li>
+     *   <li>If {@code till.require_trusted} is off → allow (default).</li>
+     *   <li>If the branch has <em>no</em> active registered tills → allow.</li>
      *   <li>If it has one or more → require {@code deviceKey} to match an active row.</li>
      * </ul>
      */
     @Transactional(readOnly = true)
     public void assertPinLoginAllowed(String businessId, String branchId, String deviceKey) {
+        if (!featureFlagService.isTillRequireTrusted(businessId)) {
+            return;
+        }
         if (!tillDeviceRepository.existsByBusinessIdAndBranchIdAndRevokedAtIsNull(businessId, branchId)) {
             return;
         }

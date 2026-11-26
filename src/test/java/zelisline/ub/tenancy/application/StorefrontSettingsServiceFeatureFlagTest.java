@@ -75,6 +75,19 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 null);
     }
 
+    /** Patch that sets only {@code tillRequireTrusted}. */
+    private static FeatureFlagsPatchRequest tillRequireTrusted(Boolean required) {
+        return new FeatureFlagsPatchRequest(
+                null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                required);
+    }
+
     @Test
     void mergeFeatureFlags_enablesButcherPos() throws Exception {
         String merged = service.mergeFeatureFlags(
@@ -318,6 +331,38 @@ class StorefrontSettingsServiceFeatureFlagTest {
                 flags(true, null, null, null, null, null, null, null, null, null, null, null));
 
         assertThat(objectMapper.readTree(merged).path("featureFlags").has("shifts.disabled")).isFalse();
+    }
+
+    @Test
+    void mergeFeatureFlags_turnsTillRequireTrustedOn() throws Exception {
+        String merged = service.mergeFeatureFlags("{}", tillRequireTrusted(true));
+
+        var flags = objectMapper.readTree(merged).path("featureFlags");
+        assertThat(flags.has("till.require_trusted")).isTrue();
+        assertThat(flags.path("till.require_trusted").asBoolean()).isTrue();
+    }
+
+    @Test
+    void mergeFeatureFlags_turnsTillRequireTrustedOff() throws Exception {
+        String merged = service.mergeFeatureFlags(
+                "{\"featureFlags\":{\"till.require_trusted\":true}}",
+                tillRequireTrusted(false));
+
+        assertThat(objectMapper.readTree(merged)
+                        .path("featureFlags")
+                        .path("till.require_trusted")
+                        .asBoolean(true))
+                .isFalse();
+    }
+
+    @Test
+    void mergeFeatureFlags_otherPatchesDoNotWriteTillRequireTrusted() throws Exception {
+        String merged = service.mergeFeatureFlags(
+                "{}",
+                flags(true, null, null, null, null, null, null, null, null, null, null, null));
+
+        assertThat(objectMapper.readTree(merged).path("featureFlags").has("till.require_trusted"))
+                .isFalse();
     }
 
     @Test

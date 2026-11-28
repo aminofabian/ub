@@ -7,6 +7,10 @@ public record OutstandingTabRowResponse(
         String name,
         String primaryPhone,
         BigDecimal balanceOwed,
-        boolean creditSuspended
+        boolean creditSuspended,
+        /** A number on this customer is verified — by a person, or by their own code. */
+        boolean verified,
+        /** The number a manual verification would mark, when the customer has one. */
+        String primaryPhoneId
 ) {
 }

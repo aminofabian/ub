@@ -39,6 +39,16 @@ public final class NotificationTypes {
     public static final String TILL_ACCESS_REQUESTED = "till.access_requested";
     /** Purchase order or goods receipt aimed at one cashier till. */
     public static final String TILL_SLIP = "till.slip";
+    /** A cashier opened the drawer. */
+    public static final String SHIFT_OPENED = "shift.opened";
+    /** A cashier counted out and closed the drawer. */
+    public static final String SHIFT_CLOSED = "shift.closed";
+    /** A supplier bill was posted and the goods are on the shelf. */
+    public static final String SUPPLY_POSTED = "supply.posted";
+    /** Today's completed sales crossed another KES 5,000. */
+    public static final String SALES_MILESTONE = "sales.milestone";
+    /** Money landed on a customer's tab. */
+    public static final String CREDIT_PAYMENT = "credit.payment";
 
     private NotificationTypes() {
     }

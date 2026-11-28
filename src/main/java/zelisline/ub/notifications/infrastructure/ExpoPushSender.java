@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import kong.unirest.HttpResponse;
 import kong.unirest.Unirest;
 import lombok.RequiredArgsConstructor;
+import zelisline.ub.notifications.ExpoPushStyle;
 import zelisline.ub.notifications.domain.DeviceToken;
 
 @Component
@@ -34,7 +35,12 @@ public class ExpoPushSender {
     }
 
     public int sendToTokens(List<DeviceToken> tokens, String title, String body) {
+        return sendToTokens(tokens, title, body, null);
+    }
+
+    public int sendToTokens(List<DeviceToken> tokens, String title, String body, String type) {
         int sent = 0;
+        ExpoPushStyle style = ExpoPushStyle.of(type);
         for (DeviceToken token : tokens) {
             if (!isExpoPushToken(token.getToken())) {
                 continue;
@@ -42,7 +48,7 @@ public class ExpoPushSender {
             if (!FcmSender.isMobilePlatform(token.getPlatform())) {
                 continue;
             }
-            if (send(token.getToken(), title, body).sent()) {
+            if (send(token.getToken(), title, body, style).sent()) {
                 sent++;
             }
         }
@@ -50,16 +56,27 @@ public class ExpoPushSender {
     }
 
     public FcmSender.SendResult send(String expoToken, String title, String body) {
+        return send(expoToken, title, body, ExpoPushStyle.of(null));
+    }
+
+    public FcmSender.SendResult send(String expoToken, String title, String body, ExpoPushStyle style) {
         if (!isExpoPushToken(expoToken)) {
             return FcmSender.SendResult.skipped("not_expo_token");
         }
+        ExpoPushStyle dressed = style != null ? style : ExpoPushStyle.of(null);
         try {
+            Map<String, Object> data = new HashMap<>();
+            data.put("kind", dressed.kind());
+            data.put("type", dressed.kind());
             Map<String, Object> payload = new HashMap<>();
             payload.put("to", expoToken.trim());
             payload.put("title", title != null && !title.isBlank() ? title : "Kiosk");
             payload.put("body", body != null ? body : "");
             payload.put("sound", "default");
-            payload.put("channelId", "default");
+            payload.put("priority", "high");
+            payload.put("channelId", dressed.channelId());
+            payload.put("color", dressed.color());
+            payload.put("data", data);
             String json = objectMapper.writeValueAsString(payload);
             HttpResponse<String> response = Unirest.post(EXPO_PUSH_URL)
                     .header("Content-Type", "application/json")

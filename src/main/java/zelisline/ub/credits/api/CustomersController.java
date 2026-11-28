@@ -207,6 +207,46 @@ public class CustomersController {
                 CurrentTenantUser.auditActorId(request));
     }
 
+    /**
+     * Marks a customer's number as verified by a person (Option A), or takes the mark away.
+     *
+     * <p>Same status as the self-service code, same badge; the difference is only who vouched for it. Needs the write
+     * permission, because verifying a customer is what lets them take credit where the shop asks for it.
+     */
+    @PostMapping("/{customerId}/phones/{phoneId}/verify")
+    @PreAuthorize("hasPermission(null, 'credits.customers.write')")
+    public CustomerResponse verifyPhone(
+            @PathVariable String customerId,
+            @PathVariable String phoneId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return customerDirectoryService.setPhoneVerified(
+                TenantRequestIds.resolveBusinessId(request),
+                customerId,
+                phoneId,
+                true,
+                CurrentTenantUser.auditActorId(request)
+        );
+    }
+
+    @DeleteMapping("/{customerId}/phones/{phoneId}/verify")
+    @PreAuthorize("hasPermission(null, 'credits.customers.write')")
+    public CustomerResponse revokePhoneVerification(
+            @PathVariable String customerId,
+            @PathVariable String phoneId,
+            HttpServletRequest request
+    ) {
+        CurrentTenantUser.require(request);
+        return customerDirectoryService.setPhoneVerified(
+                TenantRequestIds.resolveBusinessId(request),
+                customerId,
+                phoneId,
+                false,
+                CurrentTenantUser.auditActorId(request)
+        );
+    }
+
     @PatchMapping("/{customerId}")
     @PreAuthorize("hasPermission(null, 'credits.customers.write')")
     public CustomerResponse patch(

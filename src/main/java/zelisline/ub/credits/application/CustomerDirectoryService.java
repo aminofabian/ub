@@ -107,9 +107,15 @@ public class CustomerDirectoryService {
             }
         }
         Map<String, String> primaryPhone = new HashMap<>();
+        Map<String, String> primaryPhoneId = new HashMap<>();
+        Set<String> verifiedCustomers = new HashSet<>();
         for (CustomerPhone p : customerPhoneRepository.findByCustomerIdIn(customerIds)) {
             if (p.isPrimary() || !primaryPhone.containsKey(p.getCustomerId())) {
                 primaryPhone.put(p.getCustomerId(), p.getPhone());
+                primaryPhoneId.put(p.getCustomerId(), p.getId());
+            }
+            if (p.getVerifiedAt() != null) {
+                verifiedCustomers.add(p.getCustomerId());
             }
         }
         String q = query == null ? "" : query.trim().toLowerCase();
@@ -133,7 +139,9 @@ public class CustomerDirectoryService {
                     c.getName(),
                     phone,
                     acc.getBalanceOwed(),
-                    acc.isCreditSuspended()
+                    acc.isCreditSuspended(),
+                    verifiedCustomers.contains(c.getId()),
+                    primaryPhoneId.get(c.getId())
             ));
         }
         return out;
@@ -480,6 +488,39 @@ public class CustomerDirectoryService {
     private Customer loadActive(String businessId, String customerId) {
         return customerRepository.findByIdAndBusinessIdAndDeletedAtIsNull(customerId, businessId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Customer not found"));
+    }
+
+    /**
+     * Marks one of a customer's numbers as verified by a person, or takes that mark away.
+     *
+     * <p>The same status a customer earns by entering their own code, given by someone trusted instead: the phone row gets
+     * its `verifiedAt`, the shop can see who did it in the customer's audit trail, and the badge that follows is the one
+     * the profile, the credit screens and the counter all read.
+     */
+    @Transactional
+    public CustomerResponse setPhoneVerified(
+            String businessId,
+            String customerId,
+            String phoneId,
+            boolean verified,
+            String actorUserId
+    ) {
+        Customer customer = loadActive(businessId, customerId);
+        CustomerPhone phone = customerPhoneRepository.findById(phoneId)
+                .filter((row) -> customerId.equals(row.getCustomerId()) && businessId.equals(row.getBusinessId()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "That number is not on this customer"));
+        Instant now = Instant.now();
+        if (verified && phone.getVerifiedAt() == null) {
+            phone.setVerifiedAt(now);
+        } else if (!verified) {
+            phone.setVerifiedAt(null);
+        } else {
+            // Already verified: say so without moving the date, so the record keeps the first time it happened.
+            return toResponseSingle(businessId, customer);
+        }
+        customerPhoneRepository.save(phone);
+        publishCustomerEvent(businessId, customer, actorUserId, AuditEventTypes.CUSTOMER_UPDATED, null);
+        return toResponseSingle(businessId, customer);
     }
 
     private CustomerResponse toResponseSingle(String businessId, Customer customer) {

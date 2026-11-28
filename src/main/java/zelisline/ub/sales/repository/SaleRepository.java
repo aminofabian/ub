@@ -163,6 +163,20 @@ public interface SaleRepository extends JpaRepository<Sale, String> {
     )
     Optional<Long> findLatestReceiptNo(@Param("businessId") String businessId);
 
+    @Query("""
+            select coalesce(sum(s.grandTotal), 0)
+              from Sale s
+             where s.businessId = :businessId
+               and s.status = 'completed'
+               and s.voidedAt is null
+               and s.soldAt >= :from
+               and s.soldAt < :to
+            """)
+    java.math.BigDecimal sumCompletedBetween(
+            @Param("businessId") String businessId,
+            @Param("from") java.time.Instant from,
+            @Param("to") java.time.Instant to);
+
     boolean existsByBusinessId(String businessId);
 
     boolean existsByBusinessIdAndStatusAndVoidedAtIsNull(String businessId, String status);

@@ -61,7 +61,10 @@ public class NotificationPresenter {
                  "onboarding.fill_shelf", "onboarding.sizes_right", "onboarding.money_loop",
                  "onboarding.first_sale", "onboarding.go_live", "onboarding.team_rhythm",
                  "onboarding.week_checkin", "onboarding.reengage", "onboarding.lookalike",
-                 "onboarding.close_shift", "onboarding.web_order", "till.slip" -> true;
+                 "onboarding.close_shift", "onboarding.web_order", "till.slip",
+                 "shift.opened", "shift.closed", "supply.posted", "sales.milestone",
+                 "credit.payment", "sale.voided", "drawout.recorded",
+                 "drawout.approval_requested" -> true;
             default -> false;
         };
     }
@@ -88,6 +91,14 @@ public class NotificationPresenter {
             case "inventory.restock_digest" -> "Tonight's list";
             case "account.welcome" -> "Welcome to Kiosk!";
             case "till.slip" -> "Print on this till";
+            case "shift.opened" -> "Shift opened";
+            case "shift.closed" -> "Shift closed";
+            case "supply.posted" -> "Supplies in";
+            case "sales.milestone" -> "Sales today";
+            case "credit.payment" -> "Credit payment";
+            case "sale.voided" -> "Sale voided";
+            case "drawout.recorded" -> "Cash taken from the till";
+            case "drawout.approval_requested" -> "Cash drawout needs approval";
             default -> type;
         };
     }

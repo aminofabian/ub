@@ -56,7 +56,7 @@ public class StaffWebPushFanoutService {
                 payload.body(),
                 payload.actionUrl());
         int fcmSent = fcmSender.sendToTokens(tokens, payload.title(), payload.body());
-        int expoSent = expoPushSender.sendToTokens(tokens, payload.title(), payload.body());
+        int expoSent = expoPushSender.sendToTokens(tokens, payload.title(), payload.body(), notification.getType());
         log.debug(
                 "Staff push fan-out: type={} business={} users={} tokens={} webSent={} fcmSent={} expoSent={}",
                 notification.getType(),

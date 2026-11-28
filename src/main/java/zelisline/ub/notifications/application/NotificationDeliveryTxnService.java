@@ -109,7 +109,7 @@ public class NotificationDeliveryTxnService {
         }
         int webSent = webPushSender.sendToTokens(tokens, payload.title(), payload.body(), payload.actionUrl());
         int fcmSent = fcmSender.sendToTokens(tokens, payload.title(), payload.body());
-        int expoSent = expoPushSender.sendToTokens(tokens, payload.title(), payload.body());
+        int expoSent = expoPushSender.sendToTokens(tokens, payload.title(), payload.body(), notification.getType());
         if (webSent > 0 || fcmSent > 0 || expoSent > 0) {
             String provider = webSent > 0 ? "vapid" : expoSent > 0 ? "expo" : "fcm";
             markSent(delivery, provider);
